@@ -34,6 +34,11 @@ fun rememberUnlocker(pcId: String, send: (Msg) -> Boolean, incoming: Flow<Msg>?)
     val activity = ctx as? Activity
     val scope = rememberCoroutineScope()
     var asking by remember { mutableStateOf(false) }
+    // the connection behind `send` is replaced on reconnect; the trigger below must use the current one
+    val sendNow by rememberUpdatedState(send)
+    val unlock: (String) -> Unit = { pin ->
+        if (!sendNow(Msg.Unlock(pin))) Toast.makeText(ctx, R.string.pcr_unlock_offline, Toast.LENGTH_LONG).show()
+    }
     val title = stringResource(R.string.pcr_unlock_prompt)
     LaunchedEffect(incoming) {
         incoming?.collect { m ->
@@ -47,7 +52,7 @@ fun rememberUnlocker(pcId: String, send: (Msg) -> Boolean, incoming: Flow<Msg>?)
             asking = false
             scope.launch {
                 if (activity != null && PinVault.available(ctx)) PinVault.save(activity, pcId, pin, title)
-                send(Msg.Unlock(pin))
+                unlock(pin)
             }
         },
     )
@@ -56,7 +61,7 @@ fun rememberUnlocker(pcId: String, send: (Msg) -> Boolean, incoming: Flow<Msg>?)
             if (activity != null && PinVault.has(ctx, pcId) && PinVault.available(ctx)) {
                 scope.launch {
                     val pin = PinVault.reveal(activity, pcId, title)
-                    if (pin != null) send(Msg.Unlock(pin)) else if (!PinVault.has(ctx, pcId)) asking = true
+                    if (pin != null) unlock(pin) else if (!PinVault.has(ctx, pcId)) asking = true
                 }
             } else asking = true
         }

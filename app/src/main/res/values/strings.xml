@@ -180,6 +180,7 @@
     <string name="pcr_unlock_prompt">Unlock your PC</string>
     <string name="pcr_unlock_done">PC unlocked</string>
     <string name="pcr_unlock_failed">The PC is still locked. Check the PIN in Settings › Fingerprint unlock.</string>
+    <string name="pcr_unlock_offline">Not connected to the PC right now. Try again in a moment.</string>
     <string name="pcr_unlock_setup_title">Your Windows PIN</string>
     <string name="pcr_unlock_setup_body">Enter the PIN or password you use to sign in to this PC. It stays on this phone, locked behind your fingerprint.</string>
     <string name="pcr_unlock_setup_body_nofp">Enter the PIN or password you use to sign in to this PC. This phone has no fingerprint set up, so it isn\'t saved.</string>

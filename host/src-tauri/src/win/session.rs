@@ -102,6 +102,12 @@ impl Child {
         // SAFETY: a live process handle.
         let _ = unsafe { TerminateProcess(*self.0, 0) };
     }
+
+    /// Puts the process in `job` (see the service's kill-on-close job).
+    pub fn join(&self, job: &HANDLE) {
+        // SAFETY: live job and process handles.
+        let _ = unsafe { windows::Win32::System::JobObjects::AssignProcessToJobObject(*job, *self.0) };
+    }
 }
 
 /// Starts `args` (after this exe) with `token`, on the interactive desktop of the token's session.

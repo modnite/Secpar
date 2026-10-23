@@ -64,8 +64,11 @@ pub fn run() {
 
 fn supervise() {
     use crate::win::session;
+    // reqwest is built without a rustls provider: without this the update check panics (and aborts)
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
     lock_down(&crate::data_dir());
     crate::log::line("service: started");
+    let job = kill_on_close_job();
     let mut server: Option<(session::Child, u32)> = None;
     let mut next_update = Instant::now() + FIRST_UPDATE_AFTER;
     while !STOP.load(Ordering::SeqCst) {
@@ -76,6 +79,9 @@ fn supervise() {
                     c.kill();
                 }
                 server = session::system_token_for(s).and_then(|t| session::spawn(*t, "--server", false)).map(|c| (c, s));
+                if let (Some(j), Some((c, _))) = (&job, &server) {
+                    c.join(j);
+                }
                 crate::log::line(&format!("service: server in session {s}: {}", if server.is_some() { "started" } else { "FAILED" }));
             }
         }
@@ -96,6 +102,21 @@ fn supervise() {
         c.kill();
     }
     crate::log::line("service: stopped");
+}
+
+/// A job that ends the server when this process ends, crash included: an orphaned server keeps the
+/// port, and every server started after it fails. Its own children (the tray) are left out of it.
+fn kill_on_close_job() -> Option<windows::core::Owned<windows::Win32::Foundation::HANDLE>> {
+    use windows::Win32::System::JobObjects::*;
+    // SAFETY: a fresh job handle and a correctly sized limits struct.
+    unsafe {
+        let job = windows::core::Owned::new(CreateJobObjectW(None, None).ok()?);
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+        let size = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        SetInformationJobObject(*job, JobObjectExtendedLimitInformation, (&raw const info).cast(), size).ok()?;
+        Some(job)
+    }
 }
 
 /// The data folder holds device tokens and keys: SYSTEM and Administrators only, nothing inherited.
