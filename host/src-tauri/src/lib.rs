@@ -49,18 +49,15 @@ pub fn show_window(app: &AppHandle) {
         let _ = w.set_focus();
         return;
     }
-    let built = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+    let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
         .title("Secpar")
         .inner_size(440.0, 680.0)
         .resizable(false)
         .maximizable(false)
         .decorations(false)
-        .transparent(true)
+        .transparent(false)
         .center()
         .build();
-    if let Ok(w) = built {
-        let _ = window_vibrancy::apply_mica(&w, Some(true));
-    }
 }
 
 fn send_arg(argv: &[String]) -> Option<String> {

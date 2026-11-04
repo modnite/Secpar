@@ -47,4 +47,9 @@ class PairUriTest {
         }
         assertNull(PairUri.parse("pcremote://pair?h=1.2.3.4&p=47999&fp=$fp&t=%ZZ"))
     }
+
+    @Test fun `Secpar scheme supports current host and legacy preview codes`() {
+        val code = "n=Secpar&h=192.168.0.9&p=48999&fp=$fp&t=otp"
+        assertEquals(PairUri.parse("pcremote://pair?$code"), PairUri.parse("secpar://pair?$code"))
+    }
 }

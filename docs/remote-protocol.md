@@ -181,3 +181,18 @@ Keep PC Remote installed and use its existing connection while testing Secpar.
 Use a fresh code from the Secpar Host window; this is a separate pairing, not
 an import of the old PC Remote device. The preview-2 replacement installer is
 superseded; use the side-by-side installer from preview 3 or newer.
+
+## Preview 4 pairing and presentation
+
+New host QR codes use `secpar://pair` so external camera apps can route them to
+Secpar instead of PC Remote. Android still accepts older `pcremote://pair` links.
+The host shows a larger, crisp black/white code with the standard quiet border;
+Android requests a higher-resolution analysis stream and supports camera pixel
+stride and missing final-row padding. Setup downloads point to Secpar releases.
+If the camera still cannot read a screen, use Copy pairing link on Secpar Host
+and Paste a pairing link in Android. These are the same one-time credentials.
+
+The host UI now uses flat opaque surfaces, plain tabs and controls, a static QR,
+and a text expiry timer. Ambient backgrounds, glass blur, Mica transparency,
+QR-ring animation, glow, spring motion and redundant descriptions were removed.
+Side-by-side service and installer isolation from preview 3 is retained.

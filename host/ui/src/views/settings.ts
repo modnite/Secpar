@@ -47,17 +47,16 @@ export async function settings(): Promise<HTMLElement> {
     h(
       "div.group",
       {},
-      h("div.row.info", {}, h("span.grow", {}, h("span.label", {}, "Always on"), h("span.hint", {}, "Secpar runs as a service from startup, so your phone can reach the sign-in screen, lock screen and admin prompts."))),
-      toggle("Show in the tray", "Adds the Secpar icon when you sign in", config.autostart, (v) => save({ autostart: v })),
-      select("Display to stream", config.display, [["", "Primary display"], ...displays.map((d): [string, string] => [d.id, d.primary ? `${d.name} (primary)` : d.name])], (v) => save({ display: v })),
-      select("Max quality", config.max_quality, [["auto", "Auto"], ["smooth", "Smooth"], ["sharp", "Sharp"], ["battery", "Battery saver"]], (v) => save({ max_quality: v })),
+      toggle("Show in the tray", "Start the tray app at sign-in", config.autostart, (v) => save({ autostart: v })),
+      select("Display", config.display, [["", "Primary display"], ...displays.map((d): [string, string] => [d.id, d.primary ? `${d.name} (primary)` : d.name])], (v) => save({ display: v })),
+      select("Maximum quality", config.max_quality, [["auto", "Auto"], ["smooth", "Smooth"], ["sharp", "Sharp"], ["battery", "Battery saver"]], (v) => save({ max_quality: v })),
     ),
     h(
       "div.group",
       {},
       toggle("Receive files", "Phones can send files to this PC", config.allow_files, (v) => save({ allow_files: v })),
-      toggle("Share clipboard", "Copy on one device, paste on the other", config.allow_clip, (v) => save({ allow_clip: v })),
-      toggle("Direct connection from anywhere", "Asks your router to open a port (UPnP) for a faster remote stream", config.anywhere, async (v) => {
+      toggle("Share clipboard", "Sync with connected devices", config.allow_clip, (v) => save({ allow_clip: v })),
+      toggle("Direct connection from anywhere", "Allow automatic port mapping (UPnP)", config.anywhere, async (v) => {
         netNote.textContent = v ? "Asking your router…" : "";
         await save({ anywhere: v });
         showNet();

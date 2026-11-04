@@ -42,10 +42,10 @@ class PairingModelTest {
         assertEquals(PairingState.Error(R.string.pcr_qr_expired), m.state.value)
     }
 
-    @Test fun `unreachable gives same wifi message`() = runTest {
+    @Test fun `unreachable legacy code explains remote pairing limitation`() = runTest {
         val m = PairingModel(Fakes(fail(FailReason.UNREACHABLE)).deps)
         m.onScanned(qr)
-        assertEquals(PairingState.Error(R.string.pcr_same_wifi), m.state.value)
+        assertEquals(PairingState.Error(R.string.pcr_legacy_remote_pair), m.state.value)
     }
 
     @Test fun `cert mismatch is a security error and stores nothing`() = runTest {

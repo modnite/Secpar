@@ -10,20 +10,18 @@ const tabs: Tab[] = ["Home", "Phones", "Settings", "About"];
 let current: Tab = "Home";
 
 const main = h("main");
-const indicator = h("span.indicator");
-const nav = h("nav.tabs", { role: "tablist" }, indicator, ...tabs.map((t) =>
+const nav = h("nav.tabs", { role: "tablist" }, ...tabs.map((t) =>
   h("button.tab", { role: "tab", onclick: () => show(t) }, t)));
 
 /** Shown instead of a view while the background service can't be reached. */
 const down = () => h("section.view.down", {},
   h("div.down-mark", { "aria-hidden": "true" }),
   h("h2", {}, "The Secpar service isn't running"),
-  h("p.lead", {}, "It starts with Windows and keeps your phone connected. It should be back in a few seconds. If it isn't, reinstall Secpar."));
+  h("p.lead", {}, "Restart the Secpar service or reopen Secpar Host."));
 
 async function show(t: Tab) {
   current = t;
   const i = tabs.indexOf(t);
-  indicator.style.transform = `translateX(${i * 100}%)`;
   nav.querySelectorAll(".tab").forEach((b, j) => b.setAttribute("aria-selected", String(i === j)));
   let view: HTMLElement;
   try {

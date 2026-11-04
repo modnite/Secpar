@@ -33,7 +33,7 @@ fun ManualPairDialog(onPair: (String) -> Unit, onDismiss: () -> Unit) {
                 Text(stringResource(R.string.pcr_manual_desc), color = c.textDim)
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth(), singleLine = true,
-                    placeholder = { Text("pcremote://pair?…") }, isError = text.isNotBlank() && !valid)
+                    placeholder = { Text("secpar://pair?…") }, isError = text.isNotBlank() && !valid)
             }
         },
         confirmButton = { TextButton(onClick = { onPair(text.trim()) }, enabled = valid) { Text(stringResource(R.string.pcr_pair)) } },

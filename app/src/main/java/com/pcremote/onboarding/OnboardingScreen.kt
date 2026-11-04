@@ -60,7 +60,9 @@ fun OnboardingScreen(model: PairingModel, onDone: (String) -> Unit, onManual: ()
                     0 -> Step(Icons.Rounded.Devices, R.string.pcr_ob_welcome_title, R.string.pcr_ob_welcome_body)
                     1 -> Step(Icons.Rounded.Download, R.string.pcr_ob_get_title, R.string.pcr_ob_get_body) {
                         Spacer(Modifier.height(20.dp))
-                        Text(stringResource(R.string.pcr_ob_get_link), color = c.accent, style = MaterialTheme.typography.titleMedium)
+                        GhostButton(stringResource(R.string.pcr_ob_download), icon = Icons.Rounded.Download, onClick = {
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://" + ctx.getString(R.string.pcr_ob_get_link))))
+                        })
                         Spacer(Modifier.height(16.dp))
                         GhostButton(stringResource(R.string.pcr_ob_share), icon = Icons.Rounded.Share, onClick = {
                             ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {

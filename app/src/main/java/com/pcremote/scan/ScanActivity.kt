@@ -103,6 +103,7 @@ class ScanActivity : ComponentActivity() {
                         val provider = providerFuture.get()
                         val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
                         val analysis = ImageAnalysis.Builder()
+                            .setTargetResolution(android.util.Size(1920, 1080))
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             .build()
                         analysis.setAnalyzer(analyzer) { img ->
@@ -110,7 +111,7 @@ class ScanActivity : ComponentActivity() {
                                 val plane = it.planes[0]
                                 val buf = plane.buffer
                                 val bytes = ByteArray(buf.remaining()).also { b -> buf.get(b) }
-                                val text = QrDecoder.decode(bytes, it.width, it.height, plane.rowStride)
+                                val text = QrDecoder.decode(bytes, it.width, it.height, plane.rowStride, plane.pixelStride)
                                 if (text != null && done.compareAndSet(false, true)) runOnUiThread {
                                     haptics.click()
                                     QrScan.deliver(text)

@@ -5,12 +5,12 @@ import java.net.URLDecoder
 /** The pairing QR payload: `pcremote://pair?n=&h=&p=&fp=&t=` (docs/protocol.md). */
 data class PairUri(val name: String, val hosts: List<String>, val port: Int, val fingerprint: String, val otp: String, val relayUrl: String? = null, val pcId: String? = null) {
     companion object {
-        private const val PREFIX = "pcremote://pair?"
+        private val PREFIXES = listOf("secpar://pair?", "pcremote://pair?")
         private val HEX64 = Regex("^[0-9a-f]{64}$")
 
         fun parse(s: String): PairUri? {
-            if (!s.startsWith(PREFIX)) return null
-            val q = s.removePrefix(PREFIX).split('&').mapNotNull {
+            val prefix = PREFIXES.firstOrNull { s.startsWith(it) } ?: return null
+            val q = s.removePrefix(prefix).split('&').mapNotNull {
                 val i = it.indexOf('=')
                 if (i <= 0) null else it.substring(0, i) to runCatching { URLDecoder.decode(it.substring(i + 1), "UTF-8") }.getOrElse { return null }
             }.toMap()

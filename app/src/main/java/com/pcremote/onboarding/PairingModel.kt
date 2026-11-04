@@ -46,13 +46,13 @@ class PairingModel(private val deps: PairingDeps) {
                 deps.save(PairedPc(r.pc.id, r.pc.name, uri.hosts, uri.port, uri.fingerprint, r.token, r.pc.macs, relay = r.relay))
                 _state.value = PairingState.Done(r.pc.id)
             },
-            onFailure = { e -> _state.value = PairingState.Error(messageFor((e as? AgentPairException)?.reason)) },
+            onFailure = { e -> _state.value = PairingState.Error(messageFor((e as? AgentPairException)?.reason, uri)) },
         )
     }
 
-    private fun messageFor(r: FailReason?) = when (r) {
+    private fun messageFor(r: FailReason?, uri: PairUri) = when (r) {
         FailReason.BAD_OTP -> R.string.pcr_qr_expired
-        FailReason.UNREACHABLE -> R.string.pcr_same_wifi
+        FailReason.UNREACHABLE -> if (uri.port == 47999 && uri.relayUrl == null) R.string.pcr_legacy_remote_pair else R.string.pcr_same_wifi
         FailReason.CERT_MISMATCH -> R.string.pcr_cert_mismatch
         else -> R.string.pcr_pair_failed
     }

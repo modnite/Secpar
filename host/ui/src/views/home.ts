@@ -14,19 +14,11 @@ export function home(state: State): HTMLElement {
   const [tone, text] = status(state);
   const qr = h("div.qr", { "aria-label": "Pairing code" });
   const left = h("span.countdown");
-  // The ring drains over the code's 120 s life, then a fresh code replaces it.
-  const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  ring.setAttribute("class", "ring");
-  ring.setAttribute("viewBox", "0 0 260 260");
-  ring.innerHTML =
-    '<rect class="track" x="3" y="3" width="254" height="254" rx="34" pathLength="1"/>' +
-    '<rect class="bar" x="3" y="3" width="254" height="254" rx="34" pathLength="1"/>';
-
   let link = "";
   const copy = h("button.ghost", {
     onclick: async () => {
       await navigator.clipboard.writeText(link);
-      copy.textContent = "Copied. Send it to your phone";
+      copy.textContent = "Copied";
       setTimeout(() => (copy.textContent = "Copy pairing link"), 2500);
     },
   }, "Copy pairing link");
@@ -42,10 +34,6 @@ export function home(state: State): HTMLElement {
     qr.innerHTML = code.svg;
     link = code.link;
     expires = Date.now() + TTL * 1000;
-    const bar = ring.querySelector<SVGElement>(".bar")!;
-    bar.style.animation = "none";
-    void bar.getBoundingClientRect();
-    bar.style.animation = "";
     tick();
   };
   clearInterval(timer);
@@ -60,8 +48,8 @@ export function home(state: State): HTMLElement {
     h("div.hero", {},
       h(`span.pill.${tone}`, {}, h("i.dot"), text),
       h("h1.pc", {}, state.name)),
-    h("div.code", {}, ring, qr),
-    h("p.lead", {}, "Scan with Secpar on your phone, or with its camera."),
+    h("div.code", {}, qr),
+    h("p.lead", {}, "Scan in Secpar, or copy the pairing link."),
     h("div.under", {}, left, copy),
     connected.length
       ? h("ul.list.compact", {}, ...connected.map((d) => h("li.row", {}, h("i.dot.live"), h("span.grow.label", {}, d.name),

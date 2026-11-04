@@ -13,7 +13,7 @@ pub const PORT: u16 = 48999;
 
 pub fn qr_payload(name: &str, ips: &[String], port: u16, fp: &str, otp: &str) -> String {
     format!(
-        "pcremote://pair?n={}&h={}&p={port}&fp={fp}&t={otp}",
+        "secpar://pair?n={}&h={}&p={port}&fp={fp}&t={otp}",
         utf8_percent_encode(name, NAME_SET),
         ips.join(",")
     )
@@ -73,8 +73,8 @@ fn new_qr(app: &App) -> PairCode {
     let svg = qrcode::QrCode::with_error_correction_level(&link, qrcode::EcLevel::M)
         .map(|q| {
             q.render::<qrcode::render::svg::Color>()
-                .quiet_zone(false)
-                .dark_color(qrcode::render::svg::Color("#07080C"))
+                .quiet_zone(true)
+                .dark_color(qrcode::render::svg::Color("#000000"))
                 .light_color(qrcode::render::svg::Color("#FFFFFF"))
                 .build()
         })
@@ -258,13 +258,13 @@ mod tests {
     fn qr_payload_matches_protocol() {
         let fp = "ab".repeat(32);
         let uri = qr_payload("DESKTOP-ABC", &["192.168.0.126".into(), "10.0.0.5".into()], 48999, &fp, "otp_-x");
-        assert_eq!(uri, format!("pcremote://pair?n=DESKTOP-ABC&h=192.168.0.126,10.0.0.5&p=48999&fp={fp}&t=otp_-x"));
+        assert_eq!(uri, format!("secpar://pair?n=DESKTOP-ABC&h=192.168.0.126,10.0.0.5&p=48999&fp={fp}&t=otp_-x"));
     }
 
     #[test]
     fn qr_payload_url_encodes_name() {
         let uri = qr_payload("Sadik's PC & Co é", &[], 48999, "f", "t");
-        assert!(uri.starts_with("pcremote://pair?n=Sadik%27s%20PC%20%26%20Co%20%C3%A9&h=&p=48999"), "{uri}");
+        assert!(uri.starts_with("secpar://pair?n=Sadik%27s%20PC%20%26%20Co%20%C3%A9&h=&p=48999"), "{uri}");
     }
 
     #[test]

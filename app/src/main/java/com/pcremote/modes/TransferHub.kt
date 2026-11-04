@@ -75,7 +75,7 @@ class Rate(private val now: () -> Long = System::nanoTime) {
 /**
  * Every transfer with one PC, on its own agent connection, alive while anything is moving
  * (kept running in the background by [TransferService]). Uploads go one at a time and resume
- * with the same id; downloads land in Downloads/PC Remote keeping their folders.
+ * with the same id; downloads land in Downloads/Secpar keeping their folders.
  */
 class TransferHub private constructor(private val ctx: Context, val pcId: String) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -327,7 +327,7 @@ class TransferHub private constructor(private val ctx: Context, val pcId: String
         ctx.contentResolver.query(u, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
     }.getOrNull()
 
-    /** Downloads/PC Remote/<relative path>; app-specific Downloads before Android 10 (no permission needed). */
+    /** Downloads/Secpar/<relative path>; app-specific Downloads before Android 10 (no permission needed). */
     private fun openDownload(name: String): Triple<OutputStream, () -> Unit, () -> Unit>? = runCatching {
         val parts = safeParts(name)
         val file = parts.last()
@@ -335,7 +335,7 @@ class TransferHub private constructor(private val ctx: Context, val pcId: String
         if (Build.VERSION.SDK_INT >= 29) {
             val cv = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, file)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/PC Remote" + (if (sub.isEmpty()) "" else "/$sub"))
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Secpar" + (if (sub.isEmpty()) "" else "/$sub"))
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)!!
@@ -343,7 +343,7 @@ class TransferHub private constructor(private val ctx: Context, val pcId: String
                 { ctx.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null); Unit },
                 { ctx.contentResolver.delete(uri, null, null); Unit })
         } else {
-            val dir = File(File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "PC Remote"), sub).apply { mkdirs() }
+            val dir = File(File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Secpar"), sub).apply { mkdirs() }
             var f = File(dir, file); var n = 1
             while (f.exists()) f = File(dir, "${file.substringBeforeLast('.')} (${n++})" + (if ('.' in file) "." + file.substringAfterLast('.') else ""))
             val out = f

@@ -67,7 +67,7 @@ class MainActivity : ComponentActivity() {
 
     /** pcremote://pair… links (camera-app scans) start pairing straight away. */
     private fun handlePairLink(intent: Intent?) {
-        val link = intent?.dataString?.takeIf { it.startsWith("pcremote://pair") } ?: return
+        val link = intent?.dataString?.takeIf { it.startsWith("secpar://pair?") || it.startsWith("pcremote://pair?") } ?: return
         intent.data = null
         lifecycleScope.launch { pairing.onScanned(link) }
     }
