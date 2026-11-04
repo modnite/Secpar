@@ -2,7 +2,7 @@
 
 ## Download Preview 10
 
-[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-preview10.apk) · [Windows host installer](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-Host-preview10-setup.exe) · [Release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.10)
+[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-preview10.apk) · [Windows host installer](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-Host-preview10-triangle-setup.exe) · [Release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.10)
 
 Both apps use the rounded mint-and-orange triangle as their app icon. These direct links work without expanding GitHub’s Assets panel. Update in place to preserve pairings; do not uninstall first. The Windows host installs alongside PC Remote. This is a debug-signed Android preview and unsigned Windows installer.
 
