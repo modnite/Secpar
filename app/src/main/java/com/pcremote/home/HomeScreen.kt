@@ -131,18 +131,16 @@ private fun Monitor(thumb: ImageBitmap?, online: Boolean, modifier: Modifier, ba
     val shape = RoundedCornerShape(22.dp)
     Box(
         modifier.aspectRatio(16f / 9f).clip(shape).background(Color.Black)
-            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.White.copy(alpha = 0.04f))), shape),
+            .border(1.dp, c.border, shape),
     ) {
         AnimatedContent(thumb, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "thumb") { t ->
             if (t != null) Image(t, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            else Box(Modifier.fillMaxSize().background(Brush.radialGradient(listOf(c.accent.copy(alpha = 0.16f), Color.Black))), contentAlignment = Alignment.Center) {
+            else Box(Modifier.fillMaxSize().background(c.surfaceHigh), contentAlignment = Alignment.Center) {
                 Icon(Icons.Rounded.DesktopWindows, null, tint = c.textDim.copy(alpha = 0.5f), modifier = Modifier.size(52.dp))
             }
         }
         val dim by animateFloatAsState(if (online) 0f else 0.6f, label = "dim")
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dim)))
-        // glass reflection along the top edge
-        Box(Modifier.fillMaxWidth().fillMaxHeight(0.45f).background(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.07f), Color.Transparent))))
         badge()
     }
 }
@@ -229,7 +227,6 @@ private fun ModeTile(m: Mode, modifier: Modifier, onClick: () -> Unit) {
         }
         Spacer(Modifier.height(14.dp))
         Text(stringResource(m.label()), color = c.text, style = MaterialTheme.typography.titleMedium)
-        Text(stringResource(m.hint()), color = c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

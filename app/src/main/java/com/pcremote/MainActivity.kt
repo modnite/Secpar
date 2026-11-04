@@ -44,6 +44,22 @@ const val SETUP_GUIDE_URL = "https://github.com/SadikTD/pc-remote#readme"
 val IMPLEMENTED_MODES = setOf(Mode.SCREEN, Mode.REMOTE, Mode.MEDIA, Mode.SLIDES, Mode.PAD, Mode.FILES)
 
 class MainActivity : ComponentActivity() {
+    var desktopMotion: ((android.view.MotionEvent) -> Boolean)? = null
+    override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
+        desktopMotion?.invoke(event) == true || super.dispatchGenericMotionEvent(event)
+
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && desktopMotion?.invoke(event) == true) return true
+        return super.dispatchTouchEvent(event)
+    }
+
+    var desktopInput: com.pcremote.stream2.DesktopInput? = null
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) desktopInput?.release()
+    }
+
     private lateinit var home: HomeController
     /** The paste-a-link dialog (phones without a usable camera). */
     private var manualOpen by mutableStateOf(false)
@@ -195,6 +211,15 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (desktopInput != null && event.keyCode == android.view.KeyEvent.KEYCODE_Z &&
+            event.isCtrlPressed && event.isAltPressed && event.isShiftPressed) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                desktopInput?.release()
+                window.decorView.findFocus()?.releasePointerCapture()
+            }
+            return true
+        }
+        if (desktopInput?.key(event) == true) return true
         val up = when (event.keyCode) {
             android.view.KeyEvent.KEYCODE_VOLUME_UP -> true
             android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> false

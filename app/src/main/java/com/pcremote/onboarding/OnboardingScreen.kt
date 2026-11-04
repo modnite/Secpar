@@ -97,7 +97,7 @@ private fun Step(icon: ImageVector, title: Int, body: Int, extra: @Composable Co
     Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.size(112.dp).clip(CircleShape)
-                .background(Brush.linearGradient(listOf(c.accent.copy(alpha = 0.25f), c.accent2.copy(alpha = 0.15f)))),
+                .background(c.surfaceHigh),
             contentAlignment = Alignment.Center,
         ) { Icon(icon, null, tint = c.text, modifier = Modifier.size(52.dp)) }
         Spacer(Modifier.height(36.dp))

@@ -42,45 +42,15 @@ import com.pcremote.ui.theme.MidnightShapes
 import com.pcremote.ui.theme.Springs
 import com.pcremote.ui.theme.rememberHaptics
 
-/**
- * The room the app lives in: deep base, a slow accent glow, and — when a PC's screen is known —
- * that screen blurred into ambient light behind everything (Android 12+ blurs; older versions dim).
- */
+/** Plain backgrounds and tonal surfaces shared by app screens. */
 @Composable
 fun Aurora(modifier: Modifier = Modifier, intensity: Float = 1f, screen: ImageBitmap? = null) {
-    val c = LocalMidnight.current
-    Box(modifier.fillMaxSize()) {
-        AnimatedContent(screen, transitionSpec = { fadeIn(tween(900)) togetherWith fadeOut(tween(900)) }, label = "ambient") { s ->
-            if (s != null) {
-                val blurred = if (Build.VERSION.SDK_INT >= 31) Modifier.blur(80.dp) else Modifier.alpha(0.35f)
-                Image(s, null, Modifier.fillMaxSize().then(blurred).alpha(0.55f * intensity), contentScale = ContentScale.Crop)
-            } else {
-                val t by rememberInfiniteTransition(label = "aurora").animateFloat(
-                    0f, 1f, infiniteRepeatable(tween(16_000, easing = LinearEasing), RepeatMode.Reverse), label = "t",
-                )
-                Canvas(Modifier.fillMaxSize()) {
-                    val w = size.width; val h = size.height
-                    fun glow(color: Color, x: Float, y: Float, r: Float, a: Float) = drawCircle(
-                        Brush.radialGradient(listOf(color.copy(alpha = a * intensity), Color.Transparent), Offset(x, y), r), r, Offset(x, y),
-                    )
-                    glow(c.accent, w * (0.25f + 0.25f * t), h * (0.12f + 0.06f * t), w * 1.0f, 0.30f)
-                    glow(c.accent2, w * (0.95f - 0.3f * t), h * (0.42f - 0.1f * t), w * 0.8f, 0.18f)
-                }
-            }
-        }
-        // the floor of the room: content always sits on deep, readable dark
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to c.bg.copy(alpha = 0.15f), 0.45f to c.bg.copy(alpha = 0.75f), 1f to c.bg)))
-    }
+    Box(modifier.fillMaxSize().background(LocalMidnight.current.bg))
 }
 
-/** Frosted glass: a faint fill, a lit top edge and a hairline border. */
 fun Modifier.glass(shape: Shape = MidnightShapes.card, strong: Boolean = false): Modifier = composed {
     val c = LocalMidnight.current
-    val fill = if (c.isDark) Color.White.copy(alpha = if (strong) 0.09f else 0.055f) else Color.White.copy(alpha = 0.85f)
-    clip(shape)
-        .background(c.surface.copy(alpha = if (c.isDark) 0.55f else 0.9f))
-        .background(Brush.verticalGradient(listOf(fill.copy(alpha = fill.alpha * 1.6f), fill)))
-        .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = if (c.isDark) 0.16f else 0.6f), c.border)), shape)
+    clip(shape).background(if (strong) c.surfaceHigh else c.surface)
 }
 
 /** The one solid accent button per screen: the thing to do next. */
@@ -97,7 +67,6 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
             .scale(scale)
             .clip(MidnightShapes.pill)
             .background(bg)
-            .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = if (enabled) 0.18f else 0f), Color.Transparent)))
             .clickable(src, null, enabled, role = Role.Button) { haptics.click(); onClick() }
             .padding(horizontal = 24.dp, vertical = 15.dp),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,

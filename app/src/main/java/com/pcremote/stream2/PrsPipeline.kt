@@ -75,6 +75,7 @@ class PrsPipeline(
     }
 
     override val stats: StateFlow<Stats> get() = receiver.stats
+    val route get() = sock.route
     val cursor: StateFlow<Cursor> get() = receiver.cursor
 
     override fun sendInput(m: Msg) = receiver.sendInput(m)

@@ -139,14 +139,21 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     toolbar.connecting = if (streaming == null && ui is StreamUi.Connecting) session.pc.name else null
     toolbar.offerLowerQuality = false
     toolbar.link = if (stats.lossPct > 5f || stats.rttMs > 80) LinkState.POOR else LinkState.GOOD
+    val route by remember(pipe) { pipe?.route ?: MutableStateFlow("Connecting") }.collectAsState()
     toolbar.perfText = streaming?.let {
         stringResource(R.string.pcr_s2_perf, it.codec.uppercase(), it.w, it.h, stats.fps, stats.kbps / 1000f,
             stats.rttMs / 2 + stats.decodeMs, stats.rttMs, stats.lossPct) // network one-way + decode/render
-    }.orEmpty()
+    }?.let { "$route · $it" }.orEmpty()
 
     // latest controller: a retry builds a new one, and handlers created earlier must reach it
     val currentController by rememberUpdatedState(controller)
     val send: (Msg) -> Unit = { currentController.sendInput(it) }
+    val desktop = remember { DesktopInput(send) }
+    val activity = ctx as? com.pcremote.MainActivity
+    DisposableEffect(activity, streaming != null) {
+        if (streaming != null) activity?.desktopInput = desktop
+        onDispose { desktop.release(); if (activity?.desktopInput === desktop) activity.desktopInput = null }
+    }
     val trackpad = remember { TrackpadModel(settings.pointerSpeed, settings.naturalScroll) }
     val direct = remember { DirectTouchModel(settings.naturalScroll) }
     val actions = remember {
@@ -166,6 +173,20 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
 
     val c = LocalMidnight.current
     var box by remember { mutableStateOf(IntSize.Zero) }
+    val motionHandler by rememberUpdatedState<(android.view.MotionEvent) -> Boolean>({ event ->
+        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && streaming != null) {
+            fit(box, streaming.w, streaming.h)?.let { bounds ->
+                send(Msg.MousePos(
+                    ((zoom.toStreamX(event.x) - bounds.left) / bounds.w).coerceIn(0f, 1f),
+                    ((zoom.toStreamY(event.y) - bounds.top) / bounds.h).coerceIn(0f, 1f)))
+            }
+            desktop.mouse(event)
+        } else false
+    })
+    DisposableEffect(activity, streaming != null) {
+        if (streaming != null) activity?.desktopMotion = { motionHandler(it) }
+        onDispose { activity?.desktopMotion = null }
+    }
     LaunchedEffect(box) { zoom.setContentSize(box.width.toFloat(), box.height.toFloat()) }
     Box(Modifier.fillMaxSize().background(Color.Black).onSizeChanged { box = it }) {
         val pic = streaming?.let { fit(box, it.w, it.h) }
@@ -173,6 +194,18 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
         AndroidView(
             factory = { context ->
                 SurfaceView(context).apply {
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    setOnCapturedPointerListener { _, event -> desktop.mouse(event) }
+                    setOnGenericMotionListener { view, event ->
+                        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+                            view.requestFocus(); view.requestPointerCapture(); true
+                        } else false
+                    }
+                    setOnFocusChangeListener { view, focused ->
+                        if (focused) view.requestPointerCapture() else desktop.release()
+                    }
+                    post { requestFocus(); requestPointerCapture() }
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(h: SurfaceHolder) { surface = h }
                         override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
@@ -224,6 +257,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                         awaitPointerEventScope {
                             while (true) {
                                 val e = awaitPointerEvent()
+                                if (e.changes.any { it.type == androidx.compose.ui.input.pointer.PointerType.Mouse }) continue
                                 val t = e.changes.firstOrNull()?.uptimeMillis ?: 0L
                                 val down = e.changes.filter { it.pressed }
                                 if (down.size < 2) span0 = 0f
@@ -335,13 +369,16 @@ private fun fit(box: IntSize, w: Int, h: Int): Pic? {
  * bitrate to the network and fits the PC's aspect inside). A chosen preset caps all three.
  */
 private fun request(ctx: Context): StreamRequest {
-    val dm = ctx.resources.displayMetrics
-    val w = maxOf(dm.widthPixels, dm.heightPixels); val h = minOf(dm.widthPixels, dm.heightPixels)
+    val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+    val size = android.graphics.Point()
+    @Suppress("DEPRECATION")
+    wm.defaultDisplay.getRealSize(size)
+    val w = maxOf(size.x, size.y); val h = minOf(size.x, size.y)
     @Suppress("DEPRECATION")
     val hz = (ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.refreshRate
     if (!com.pcremote.quality.QualityPrefs.isAuto(ctx)) {
         val p = com.pcremote.quality.QualityPrefs.current(ctx)
-        return StreamRequest(minOf(w, p.width), minOf(h, p.height), p.fps, p.bitrateKbps)
+        return StreamRequest(p.width, p.height, p.fps, p.bitrateKbps)
     }
     // On mobile data, cap the stream: it keeps a relayed 4G path inside its capacity and the data
     // plan sane (8 Mbps ≈ 3.6 GB an hour). Wi-Fi gets up to 50 Mbps; the host adapts below that.

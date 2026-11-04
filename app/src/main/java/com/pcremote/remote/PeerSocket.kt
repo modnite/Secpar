@@ -29,6 +29,9 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
     @Volatile var turn: TurnClient? = null; private set
     @Volatile private var closed = false
 
+    private val _route = kotlinx.coroutines.flow.MutableStateFlow("Connecting")
+    val route: kotlinx.coroutines.flow.StateFlow<String> = _route
+
     val localPort get() = sock.localPort
 
     private val reader = Thread({ readLoop() }, "pcr-sock").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
@@ -127,6 +130,7 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
     /** The last packet authenticated: talk only to where it came from (follows address changes too). */
     override fun confirm() {
         val f = lastFrom ?: return
+        _route.value = if (turn?.isRelayed(f) == true) "Relay" else "Direct"
         if (f != peer) { Log.i(TAG, "peer ${if (peer == null) "found" else "moved"}: $f${if (turn?.isRelayed(f) == true) " (relay)" else ""}"); peer = f }
     }
 

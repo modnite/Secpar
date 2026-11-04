@@ -124,7 +124,7 @@ private fun LaserButton(modifier: Modifier, gyro: Sensor, send: (List<Msg>) -> U
     }
     Row(
         modifier.height(56.dp).clip(MidnightShapes.control)
-            .background(if (held) Brush.linearGradient(listOf(c.accent, c.accent2)) else Brush.linearGradient(listOf(c.surfaceHigh, c.surfaceHigh)))
+            .background(if (held) c.accent else c.surfaceHigh)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
@@ -147,7 +147,7 @@ private fun Zone(modifier: Modifier, icon: ImageVector, label: Int, primary: Boo
     val c = LocalMidnight.current
     Column(
         modifier.fillMaxHeight().clip(MidnightShapes.card)
-            .background(if (primary) Brush.verticalGradient(listOf(c.accent.copy(alpha = 0.35f), c.surface)) else Brush.verticalGradient(listOf(c.surface, c.surface)))
+            .background(if (primary) c.surfaceHigh else c.surface)
             .border(1.dp, c.border, MidnightShapes.card).clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
     ) {

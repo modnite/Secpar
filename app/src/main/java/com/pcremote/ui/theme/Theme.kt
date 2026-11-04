@@ -31,25 +31,13 @@ val LocalMidnight = staticCompositionLocalOf { Midnight.dark.toColors(true) }
 
 object MidnightShapes {
     /** Panels: big and soft, like a monitor bezel. */
-    val card = RoundedCornerShape(28.dp)
-    val control = RoundedCornerShape(18.dp)
+    val card = RoundedCornerShape(16.dp)
+    val control = RoundedCornerShape(12.dp)
     val small = RoundedCornerShape(12.dp)
     val pill = RoundedCornerShape(50)
 }
 
-private val type = Typography().run {
-    copy(
-        displayLarge = displayLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-2).sp),
-        displayMedium = displayMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = (-1.5).sp),
-        displaySmall = displaySmall.copy(fontWeight = FontWeight.Bold, fontSize = 34.sp, letterSpacing = (-1.2).sp),
-        headlineMedium = headlineMedium.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-0.6).sp),
-        headlineSmall = headlineSmall.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp),
-        titleLarge = titleLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-0.3).sp),
-        titleMedium = titleMedium.copy(fontWeight = FontWeight.SemiBold),
-        labelLarge = labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.1.sp),
-        labelSmall = labelSmall.copy(fontWeight = FontWeight.Medium, letterSpacing = 0.2.sp),
-    )
-}
+private val type = Typography()
 
 /** Big tabular numbers for latency, PIN, timers. */
 val NumberStyle = TextStyle(fontSize = 44.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-1).sp,

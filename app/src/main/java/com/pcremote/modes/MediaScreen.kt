@@ -103,7 +103,7 @@ private fun RoundButton(icon: ImageVector, size: Int, primary: Boolean = false, 
     val haptics = rememberHaptics()
     Box(
         Modifier.size(size.dp).clip(CircleShape)
-            .background(if (primary) Brush.linearGradient(listOf(c.accent, c.accent2)) else Brush.linearGradient(listOf(c.surfaceHigh, c.surfaceHigh)))
+            .background(if (primary) c.accent else c.surfaceHigh)
             .clickable { haptics.click(); onClick() },
         contentAlignment = Alignment.Center,
     ) { Icon(icon, null, tint = if (primary) c.onAccent else c.text, modifier = Modifier.size((size * 0.45f).dp)) }
@@ -138,7 +138,7 @@ private fun VolumeDialView(volume: Int, muted: Boolean, onSet: (Int) -> Unit) {
             val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
             val start = 90f + 45f // canvas 0° is 3 o'clock; dial starts at -135° from top
             drawArc(c.surfaceHigh, start, VolumeDial.SWEEP, false, Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
-            drawArc(Brush.sweepGradient(listOf(c.accent, c.accent2, c.accent)), start, VolumeDial.SWEEP * local / 100f, false,
+            drawArc(c.accent, start, VolumeDial.SWEEP * local / 100f, false,
                 Offset(inset, inset), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
             val a = Math.toRadians((VolumeDial.volumeToAngle(local) - 90f).toDouble())
             val r = arcSize.width / 2
