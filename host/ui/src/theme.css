@@ -74,3 +74,7 @@ select { max-width: 190px; padding: 6px 10px; border-radius: 4px; background: va
 .logo { border-radius: 8px; }
 .down { display: flex; flex-direction: column; gap: 10px; padding-top: 32px; }
 .down-mark { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); }
+
+.brand { display: flex; align-items: center; }
+.brand-wordmark { width: 104px; height: 25px; object-fit: contain; }
+.about-wordmark { width: 260px; max-width: 100%; height: auto; margin-bottom: 12px; }

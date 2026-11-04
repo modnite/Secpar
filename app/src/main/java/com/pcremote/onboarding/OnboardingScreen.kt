@@ -103,7 +103,8 @@ private fun Step(icon: ImageVector, title: Int, body: Int, extra: @Composable Co
             contentAlignment = Alignment.Center,
         ) { Icon(icon, null, tint = c.text, modifier = Modifier.size(52.dp)) }
         Spacer(Modifier.height(36.dp))
-        Text(stringResource(title), style = MaterialTheme.typography.displaySmall, color = c.text, textAlign = TextAlign.Center)
+        if (title == R.string.pcr_ob_welcome_title) SecparWordmark(Modifier.width(280.dp).height(67.dp))
+        else Text(stringResource(title), style = MaterialTheme.typography.displaySmall, color = c.text, textAlign = TextAlign.Center)
         Spacer(Modifier.height(14.dp))
         Text(stringResource(body), style = MaterialTheme.typography.bodyLarge, color = c.textDim, textAlign = TextAlign.Center,
             modifier = Modifier.widthIn(max = 360.dp))

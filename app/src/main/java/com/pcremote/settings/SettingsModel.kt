@@ -31,6 +31,11 @@ class SettingsModel(private val kv: KeyValue) {
         get() = float(K_POINTER, 1f)
         set(v) = kv.put(K_POINTER, v.coerceIn(0.5f, 3f).toString())
 
+    var captureShortcut: com.pcremote.stream2.CaptureShortcut
+        get() = kv.get("secpar_capture_shortcut")?.let { value -> com.pcremote.stream2.CaptureShortcut.entries.firstOrNull { it.name == value } }
+            ?: com.pcremote.stream2.CaptureShortcut.CTRL_F12
+        set(value) = kv.put("secpar_capture_shortcut", value.name)
+
     var gyroSensitivity: Float
         get() = float(K_GYRO, 1f)
         set(v) = kv.put(K_GYRO, v.coerceIn(0.25f, 3f).toString())

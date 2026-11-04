@@ -60,3 +60,7 @@ Protocols: [docs/protocol.md](docs/protocol.md) (control), [docs/stream-protocol
 ## License
 
 GPL-3.0.
+
+## Secpar branding
+
+Secpar is an independent fork with parody branding. Its SECPAR wordmark uses rearranged letter outlines sourced from the logo on [Parsec’s official website](https://parsec.app/), with a mirrored cyan/pink symbol. These are exact source letterforms, not an identified full font family. The [brand assets](assets/branding/README.md) include SVG/PNG artwork and a six-letter logo font.

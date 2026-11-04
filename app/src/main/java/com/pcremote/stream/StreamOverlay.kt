@@ -52,8 +52,12 @@ private const val VK_F1 = 0x70
 private fun glass() = LocalMidnight.current.surface.copy(alpha = 0.86f)
 
 @Composable
-internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions) {
+internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (Boolean) -> Unit = {}) {
     var panel by remember { mutableStateOf(false) }
+    DisposableEffect(panel, state.keyboardOpen) {
+        onLocalUi(panel || state.keyboardOpen)
+        onDispose { }
+    }
     Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(state.connecting != null, enter = fadeIn(), exit = fadeOut()) {
             Connecting(state.pcName, state.connecting.orEmpty(), a::disconnect)
@@ -75,7 +79,7 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions) {
             enter = slideInHorizontally { it } + fadeIn(), exit = slideOutHorizontally { it } + fadeOut()) {
             EdgePanel(state, a) { panel = false }
         }
-        if (!state.coachShown) CoachMarks(Modifier.align(Alignment.Center)) { state.coachShown = true; a.coachDone() }
+
     }
 }
 
@@ -286,30 +290,7 @@ private fun KeyboardBar(state: ToolbarState, a: ToolbarActions) {
     }
 }
 
-@Composable
-private fun CoachMarks(modifier: Modifier, done: () -> Unit) {
-    val c = LocalMidnight.current
-    Column(
-        modifier.padding(24.dp).widthIn(max = 420.dp).clip(MidnightShapes.card).background(c.surface.copy(alpha = 0.96f))
-            .border(1.dp, c.border, MidnightShapes.card).padding(24.dp),
-    ) {
-        Text(stringResource(R.string.pcr_coach_title), color = c.text, style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(16.dp))
-        listOf(
-            Icons.Rounded.SwipeLeft to R.string.pcr_coach_edge,
-            Icons.Rounded.TouchApp to R.string.pcr_coach_tap,
-            Icons.Rounded.Pinch to R.string.pcr_coach_pinch,
-        ).forEach { (icon, text) ->
-            Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, null, tint = c.accent, modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(14.dp))
-                Text(stringResource(text), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        PrimaryButton(stringResource(R.string.pcr_got_it), done, Modifier.align(Alignment.End))
-    }
-}
+
 
 /** Midnight connecting screen (replaces Moonlight's spinner dialog). */
 @Composable

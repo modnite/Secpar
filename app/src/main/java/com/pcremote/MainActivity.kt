@@ -44,12 +44,14 @@ const val SETUP_GUIDE_URL = "https://github.com/modnite/Secpar#readme"
 val IMPLEMENTED_MODES = setOf(Mode.SCREEN, Mode.REMOTE, Mode.MEDIA, Mode.SLIDES, Mode.PAD, Mode.FILES)
 
 class MainActivity : ComponentActivity() {
+    var desktopCapture: com.pcremote.stream2.DesktopCapture? = null
+    private var captureShortcutKey: Int? = null
     var desktopMotion: ((android.view.MotionEvent) -> Boolean)? = null
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
-        desktopMotion?.invoke(event) == true || super.dispatchGenericMotionEvent(event)
+        (desktopCapture?.forwarding == true && desktopMotion?.invoke(event) == true) || super.dispatchGenericMotionEvent(event)
 
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && desktopMotion?.invoke(event) == true) return true
+        if (desktopCapture?.forwarding == true && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && desktopMotion?.invoke(event) == true) return true
         return super.dispatchTouchEvent(event)
     }
 
@@ -57,7 +59,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) desktopInput?.release()
+        if (!hasFocus) desktopCapture?.lostFocus()
     }
 
     private lateinit var home: HomeController
@@ -215,15 +217,22 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
-        if (desktopInput != null && event.keyCode == android.view.KeyEvent.KEYCODE_Z &&
-            event.isCtrlPressed && event.isAltPressed && event.isShiftPressed) {
-            if (event.action == android.view.KeyEvent.ACTION_DOWN) {
-                desktopInput?.release()
-                window.decorView.findFocus()?.releasePointerCapture()
+        if (event.keyCode == captureShortcutKey) {
+            if (event.action == android.view.KeyEvent.ACTION_UP) captureShortcutKey = null
+            return true
+        }
+        val capture = desktopCapture
+        val chosen = com.pcremote.settings.SettingsModel.get(this).captureShortcut
+        val isToggle = chosen.matches(event.keyCode, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed) ||
+            com.pcremote.stream2.CaptureShortcut.MOONLIGHT.matches(event.keyCode, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed)
+        if (capture != null && isToggle) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                captureShortcutKey = event.keyCode
+                capture.toggle()
             }
             return true
         }
-        if (desktopInput?.key(event) == true) return true
+        if (capture?.forwarding == true && desktopInput?.key(event) == true) return true
         val up = when (event.keyCode) {
             android.view.KeyEvent.KEYCODE_VOLUME_UP -> true
             android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> false

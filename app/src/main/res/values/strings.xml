@@ -227,4 +227,5 @@
     <string name="pcr_files_browse_failed">Couldn\'t open this folder. It may be protected, or the PC went offline.</string>
     <string name="pcr_files_empty">This folder is empty.</string>
     <string name="pcr_files_download">Download</string>
+    <string name="secpar_capture_shortcut">Mouse capture shortcut</string>
 </resources>

@@ -83,7 +83,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val agent by session.conn.state.collectAsState()
-    val toolbar = remember { ToolbarState().apply { pcName = session.pc.name; connecting = session.pc.name; coachShown = coachSeen(ctx) } }
+    val toolbar = remember { ToolbarState().apply { pcName = session.pc.name; connecting = session.pc.name; coachShown = true } }
 
     Immersive()
     KeepScreenOn()
@@ -150,9 +150,30 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val send: (Msg) -> Unit = { currentController.sendInput(it) }
     val desktop = remember { DesktopInput(send) }
     val activity = ctx as? com.pcremote.MainActivity
+    val captureView = remember { java.util.concurrent.atomic.AtomicReference<android.view.View?>() }
+    var captured by remember { mutableStateOf(false) }
+    val capture = remember {
+        DesktopCapture(desktop::release) { on ->
+            captured = on
+            captureView.get()?.let { view ->
+                if (on) { view.requestFocus(); view.requestPointerCapture() } else view.releasePointerCapture()
+            }
+            (ctx as? Activity)?.let { act ->
+                val insets = WindowCompat.getInsetsController(act.window, act.window.decorView)
+                if (on) insets.hide(WindowInsetsCompat.Type.systemBars()) else insets.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
     DisposableEffect(activity, streaming != null) {
-        if (streaming != null) activity?.desktopInput = desktop
-        onDispose { desktop.release(); if (activity?.desktopInput === desktop) activity.desktopInput = null }
+        if (streaming != null) {
+            activity?.desktopInput = desktop
+            activity?.desktopCapture = capture
+            capture.setRequested(true)
+        }
+        onDispose {
+            capture.setRequested(false)
+            if (activity?.desktopInput === desktop) { activity.desktopInput = null; activity.desktopCapture = null }
+        }
     }
     val trackpad = remember { TrackpadModel(settings.pointerSpeed, settings.naturalScroll) }
     val direct = remember { DirectTouchModel(settings.naturalScroll) }
@@ -174,7 +195,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val c = LocalMidnight.current
     var box by remember { mutableStateOf(IntSize.Zero) }
     val motionHandler by rememberUpdatedState<(android.view.MotionEvent) -> Boolean>({ event ->
-        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && streaming != null) {
+        if (capture.forwarding && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && streaming != null) {
             fit(box, streaming.w, streaming.h)?.let { bounds ->
                 send(Msg.MousePos(
                     ((zoom.toStreamX(event.x) - bounds.left) / bounds.w).coerceIn(0f, 1f),
@@ -194,18 +215,19 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
         AndroidView(
             factory = { context ->
                 SurfaceView(context).apply {
+                    captureView.set(this)
                     isFocusable = true
                     isFocusableInTouchMode = true
-                    setOnCapturedPointerListener { _, event -> desktop.mouse(event) }
+                    setOnCapturedPointerListener { _, event -> capture.forwarding && desktop.mouse(event) }
                     setOnGenericMotionListener { view, event ->
-                        if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
-                            view.requestFocus(); view.requestPointerCapture(); true
+                        if (capture.forwarding && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+                            capture.refresh(); true
                         } else false
                     }
                     setOnFocusChangeListener { view, focused ->
-                        if (focused) view.requestPointerCapture() else desktop.release()
+                        if (focused && capture.forwarding) view.requestPointerCapture() else if (!focused) desktop.release()
                     }
-                    post { requestFocus(); requestPointerCapture() }
+                    post { capture.refresh() }
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(h: SurfaceHolder) { surface = h }
                         override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
@@ -310,7 +332,11 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                 }
             })
         }
-        StreamOverlay(toolbar, actions)
+        StreamOverlay(toolbar, actions) { capture.setUiOpen(it) }
+        if (streaming != null && !captured) {
+            GhostButton("Android controls · ${settings.captureShortcut.label} to capture", { capture.setRequested(true) },
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
+        }
         // On the lock or sign-in screen: one tap and a fingerprint types the PIN
         val locked by session.conn.locked.collectAsState()
         val unlock = com.pcremote.modes.rememberUnlocker(pcId, session::send, session.conn.incoming)

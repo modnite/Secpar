@@ -22,8 +22,8 @@ export function about(): HTMLElement {
   return h(
     "section.view.about",
     {},
-    h("img.logo", { src: "/icon.svg", alt: "", width: 72, height: 72 }),
-    h("h2", {}, "Secpar for Windows"),
+    h("img.about-wordmark", { src: "/wordmark.svg", alt: "Secpar" }),
+    h("h2", {}, "Windows host"),
     h("p.hint", {}, `Version ${__APP_VERSION__}`),
     h("p.lead", {}, "Windows companion for Secpar."),
     h("p.hint", {}, "Preview build · GPL-3.0"),

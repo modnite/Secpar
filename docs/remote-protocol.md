@@ -215,3 +215,29 @@ frame representing a closer camera capture. This tests on-device image
 decoding, not physical Galaxy S23 camera capture or Android 17 compatibility.
 The bundled native scanner increases APK size and needs no first-use model
 download. Debug builds remain unoptimized.
+
+## Preview 6 desktop input release
+
+The first-run touch tips overlay has been removed. Touch defaults to trackpad
+mode as a fallback; connecting a physical keyboard does not require opening
+an on-screen keyboard.
+
+Ctrl+F12 toggles physical mouse/keyboard forwarding between the PC and Android.
+Ctrl+Alt+Shift+Z remains a fallback toggle. Settings > Controls > Mouse capture
+shortcut offers Ctrl+F12, Ctrl+Shift+F12, or the Moonlight chord. The shorter
+choices avoid the combinations in Samsung's published DeX system shortcut
+list, but user mappings and OEM versions can differ. These shortcuts are local
+to an active Secpar stream; other desktop shortcuts are not remapped.
+
+Releasing input disables Activity-level mouse/keyboard interception as well as
+native pointer capture, releases held PC keys/buttons, and shows system bars.
+Focus changes and pointer movement do not override an explicit release. Opening
+Secpar's controls releases input too. Press the toggle again or click the
+Android controls chip to recapture. Window focus loss releases input.
+
+Android routing tests check that uncaptured pointer events bypass the remote
+handler, can click a real Android Button, and that holding the capture shortcut
+does not toggle repeatedly. Physical S23/DeX pointer travel outside the app must
+still be verified on the device.
+
+Preview 6 also applies the Secpar parody branding to both apps. See assets/branding/README.md for the official outline source, exact letterform match, modified symbol, and six-letter logo-font scope. The Windows update is cosmetic; the capture-routing fix is entirely Android-side.
