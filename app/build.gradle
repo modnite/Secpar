@@ -63,12 +63,12 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
-            resValue "string", "app_label", "PC Remote (Debug)"
-            resValue "string", "app_label_root", "PC Remote (Debug)"
+            resValue "string", "app_label", "Secpar (Debug)"
+            resValue "string", "app_label_root", "Secpar (Debug)"
         }
         release {
-            resValue "string", "app_label", "PC Remote"
-            resValue "string", "app_label_root", "PC Remote"
+            resValue "string", "app_label", "Secpar"
+            resValue "string", "app_label_root", "Secpar"
 
             minifyEnabled true
             shrinkResources true

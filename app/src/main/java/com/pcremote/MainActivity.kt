@@ -38,7 +38,7 @@ import kotlinx.coroutines.launch
 import kotlin.concurrent.thread
 
 const val PREF_ONBOARDED = "pcremote_onboarded"
-const val SETUP_GUIDE_URL = "https://github.com/SadikTD/pc-remote#readme"
+const val SETUP_GUIDE_URL = "https://github.com/modnite/Secpar#readme"
 
 /** Modes with a screen in this build. */
 val IMPLEMENTED_MODES = setOf(Mode.SCREEN, Mode.REMOTE, Mode.MEDIA, Mode.SLIDES, Mode.PAD, Mode.FILES)

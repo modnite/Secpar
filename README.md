@@ -1,4 +1,8 @@
-# PC Remote
+# Secpar
+
+Secpar is a fork of [PC Remote](https://github.com/SadikTD/pc-remote) focused on docked keyboard and mouse use, resolution handling, and a simpler Android interface. See [fork changes](docs/dock-input.md). The compatible Windows companion is still named PC Remote.
+
+The Android app is named Secpar; package IDs, pairing links, protocol names and transfer folder names remain compatible with PC Remote.
 
 Control your Windows PC from your Android phone, at home or from anywhere. You can:
 - see the PC's screen;

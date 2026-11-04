@@ -38,7 +38,7 @@ data class Release(val version: String, val apkUrl: String)
  * until then (or when "Install unknown apps" is off) the user gets one tap via a notification.
  */
 object Updater {
-    private const val LATEST = "https://api.github.com/repos/modnite/pc-remote/releases/latest"
+    private const val LATEST = "https://api.github.com/repos/modnite/Secpar/releases/latest"
     private const val JOB = 47_01
     private const val CHANNEL = "updates"
     private val http by lazy { OkHttpClient() }

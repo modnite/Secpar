@@ -30,7 +30,7 @@ import com.pcremote.ui.theme.MidnightShapes
 import com.pcremote.ui.components.glass
 import com.pcremote.ui.theme.rememberHaptics
 
-private const val REPO_URL = "https://github.com/SadikTD/pc-remote"
+private const val REPO_URL = "https://github.com/modnite/Secpar"
 
 @Composable
 fun SettingsScreen(model: SettingsModel, onBack: () -> Unit, onThemeChanged: () -> Unit) {
