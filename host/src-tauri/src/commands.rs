@@ -223,6 +223,24 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[test]
+    fn export_host_qr_fixture() {
+        let Some(dir) = std::env::var_os("SECPAR_QR_FIXTURE_DIR") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fp = "ab".repeat(32);
+        let mut link = qr_payload("DESKTOP-Secpar", &["192.168.0.126".into(), "10.0.0.5".into()], PORT, &fp, "abcdefghijklmnopqrstuv");
+        let pc = "12345678-1234-1234-1234-123456789012";
+        let relay = pairing_relay_url("wss://pcr-rendezvous.sadikhossain747.workers.dev", pc, "pair_abcdefghijklmnopqrstuv", &[7;32], 1_700_000_000);
+        link.push_str(&format!("&pc={pc}&r={}", utf8_percent_encode(&relay, NAME_SET)));
+        let q = qrcode::QrCode::with_error_correction_level(&link, qrcode::EcLevel::M).unwrap();
+        let svg = q.render::<qrcode::render::svg::Color>().quiet_zone(true)
+            .dark_color(qrcode::render::svg::Color("#000000"))
+            .light_color(qrcode::render::svg::Color("#FFFFFF")).build();
+        std::fs::write(dir.join("host-qr.svg"), svg).unwrap();
+        std::fs::write(dir.join("host-qr.txt"), link).unwrap();
+    }
+
+    #[test]
     fn secpar_host_does_not_share_legacy_runtime_or_installer_identity() {
         assert_eq!(PORT, 48999);
         assert_eq!(crate::engine::session::STREAM_PORT, 48998);

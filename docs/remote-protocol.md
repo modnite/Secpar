@@ -196,3 +196,22 @@ The host UI now uses flat opaque surfaces, plain tabs and controls, a static QR,
 and a text expiry timer. Ambient backgrounds, glass blur, Mica transparency,
 QR-ring animation, glow, spring motion and redundant descriptions were removed.
 Side-by-side service and installer isolation from preview 3 is retained.
+
+## Preview 5 built-in Android scanner
+
+Android uses the bundled ML Kit camera-image detector with rotation metadata,
+a ZXing fallback for dense codes, automatic zoom suggestions, tap-to-focus and
+manual zoom. ImageProxy frames stay open until both decoders finish. Camera
+binding failures, decoder errors, absent frames and persistent non-detection
+are shown in the scanner. A Paste link action is available inside the scanner.
+No host upgrade or re-pairing is required for existing paired devices.
+
+Regression fixtures were generated with the Rust host QR renderer using dummy
+credentials, then rasterized from its SVG rectangle paths. The Android device
+test exercises the production scanner combination against this image at full
+size and 90-degree rotation. At 320px it reproduces the detection failure and
+verifies that repeated misses request camera zoom, then supplies a detailed
+frame representing a closer camera capture. This tests on-device image
+decoding, not physical Galaxy S23 camera capture or Android 17 compatibility.
+The bundled native scanner increases APK size and needs no first-use model
+download. Debug builds remain unoptimized.

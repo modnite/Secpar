@@ -48,6 +48,7 @@ import com.pcremote.ui.components.PrimaryButton
 import com.pcremote.ui.theme.LocalMidnight
 import com.pcremote.ui.theme.MidnightTheme
 import com.pcremote.ui.theme.rememberHaptics
+import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -60,16 +61,30 @@ object QrScan {
         activity.startActivity(Intent(activity, ScanActivity::class.java))
     }
 
+    fun cancel() { pending = null }
+
     internal fun deliver(text: String) {
         pending?.invoke(text)
         pending = null
     }
 }
 
-/** Full-screen camera scanner (CameraX + ZXing); works without Google Play services. */
+/** CameraX with the bundled on-device ML Kit QR detector; no model download is needed. */
 class ScanActivity : ComponentActivity() {
     private val analyzer = Executors.newSingleThreadExecutor()
     private val done = AtomicBoolean(false)
+    @Volatile private var boundCamera: Camera? = null
+    private val scanner = CameraQrScanner(analyzer) { ratio ->
+        boundCamera?.let { cam ->
+            val state = cam.cameraInfo.zoomState.value
+            val target = ratio.coerceIn(state?.minZoomRatio ?: 1f, state?.maxZoomRatio ?: 1f)
+            if (target > (state?.zoomRatio ?: 1f)) cam.cameraControl.setZoomRatio(target)
+            true
+        } ?: false
+    }
+    private var scanStatus by mutableStateOf("Starting camera…")
+    private var frames = 0
+    private val openedAt = android.os.SystemClock.elapsedRealtime()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,6 +94,8 @@ class ScanActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         analyzer.shutdown()
+        boundCamera = null
+        scanner.close()
     }
 
     @Composable
@@ -86,6 +103,10 @@ class ScanActivity : ComponentActivity() {
         val c = LocalMidnight.current
         val haptics = rememberHaptics()
         val owner = LocalLifecycleOwner.current
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(8_000)
+            if (frames == 0 && !done.get()) scanStatus = "No camera frames processed. Reopen the scanner or paste a pairing link."
+        }
         var granted by remember {
             mutableStateOf(ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
         }
@@ -100,27 +121,76 @@ class ScanActivity : ComponentActivity() {
                     val view = PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
                     val providerFuture = ProcessCameraProvider.getInstance(ctx)
                     providerFuture.addListener({
+                      try {
                         val provider = providerFuture.get()
                         val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
                         val analysis = ImageAnalysis.Builder()
                             .setTargetResolution(android.util.Size(1920, 1080))
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                             .build()
-                        analysis.setAnalyzer(analyzer) { img ->
-                            img.use {
-                                val plane = it.planes[0]
-                                val buf = plane.buffer
-                                val bytes = ByteArray(buf.remaining()).also { b -> buf.get(b) }
-                                val text = QrDecoder.decode(bytes, it.width, it.height, plane.rowStride, plane.pixelStride)
-                                if (text != null && done.compareAndSet(false, true)) runOnUiThread {
-                                    haptics.click()
-                                    QrScan.deliver(text)
-                                    finish()
+                        analysis.setAnalyzer(analyzer) { proxy ->
+                            val media = proxy.image
+                            if (media == null || done.get()) {
+                                proxy.close()
+                            } else {
+                              try {
+                                // Keep ImageProxy open until asynchronous scanning completes.
+                                val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
+                                scanner.process(image) {
+                                    val plane = proxy.planes[0]
+                                    val buffer = plane.buffer.duplicate()
+                                    val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+                                    QrDecoder.decode(bytes, proxy.width, proxy.height, plane.rowStride, plane.pixelStride)
                                 }
+                                    .addOnSuccessListener { result ->
+                                        frames++
+                                        val text = result.text
+                                        scanStatus = when {
+                                            text != null -> "Code read"
+                                            result.potential -> "QR detected. Tap the code to focus, or increase zoom."
+                                            android.os.SystemClock.elapsedRealtime() - openedAt > 8_000 ->
+                                                "No QR detected. Tap to focus, increase zoom, or paste a pairing link."
+                                            else -> "Scanning…"
+                                        }
+                                        if (text != null && done.compareAndSet(false, true)) {
+                                            haptics.click()
+                                            QrScan.deliver(text)
+                                            finish()
+                                        }
+                                    }
+                                    .addOnFailureListener { error ->
+                                        android.util.Log.e("SecparScan", "Camera decoder failed", error)
+                                        scanStatus = "Scanner error. You can paste a pairing link instead."
+                                    }
+                                    .addOnCompleteListener { proxy.close() }
+                              } catch (error: Exception) {
+                                proxy.close()
+                                android.util.Log.e("SecparScan", "Unsupported camera image", error)
+                                runOnUiThread { scanStatus = "Camera image could not be read. Paste a pairing link instead." }
+                              }
                             }
                         }
                         provider.unbindAll()
                         camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                        boundCamera = camera
+                        view.setOnTouchListener { _, event ->
+                            if (event.action == android.view.MotionEvent.ACTION_UP) {
+                                val point = view.meteringPointFactory.createPoint(event.x, event.y)
+                                camera?.cameraControl?.startFocusAndMetering(
+                                    androidx.camera.core.FocusMeteringAction.Builder(point)
+                                        .setAutoCancelDuration(3, java.util.concurrent.TimeUnit.SECONDS).build())
+                                view.performClick()
+                            }
+                            true
+                        }
+                        view.post {
+                            val center = view.meteringPointFactory.createPoint(view.width / 2f, view.height / 2f)
+                            camera?.cameraControl?.startFocusAndMetering(androidx.camera.core.FocusMeteringAction.Builder(center).build())
+                        }
+                      } catch (error: Exception) {
+                        android.util.Log.e("SecparScan", "Could not bind camera analysis", error)
+                        scanStatus = "Camera could not start scanning. Reopen it or paste a pairing link."
+                      }
                     }, ContextCompat.getMainExecutor(ctx))
                     view
                 }, modifier = Modifier.fillMaxSize())
@@ -142,9 +212,26 @@ class ScanActivity : ComponentActivity() {
                     }
                 }
             }
-            Text(stringResource(R.string.pcr_scan_hint), color = Color.White, textAlign = TextAlign.Center,
+            Column(Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    for (ratio in listOf(1f, 2f, 3f)) {
+                        androidx.compose.material3.TextButton(onClick = {
+                            camera?.let { cam ->
+                                val state = cam.cameraInfo.zoomState.value
+                                cam.cameraControl.setZoomRatio(ratio.coerceIn(state?.minZoomRatio ?: 1f, state?.maxZoomRatio ?: 1f))
+                            }
+                        }) { Text("${ratio.toInt()}×", color = Color.White) }
+                    }
+                    androidx.compose.material3.TextButton(onClick = {
+                        QrScan.cancel()
+                        startActivity(Intent(this@ScanActivity, com.pcremote.MainActivity::class.java).putExtra("secpar_paste_pairing", true))
+                        finish()
+                    }) { Text("Paste link", color = Color.White) }
+                }
+            Text(scanStatus, color = Color.White, textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(32.dp))
+                modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 

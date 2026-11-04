@@ -56,4 +56,11 @@ class QrDecoderTest {
         assertEquals(url, QrDecoder.decode(buffer, w, h, stride, 2))
         assertNull(QrDecoder.decode(buffer.copyOf(10), w, h, stride, 2))
     }
+
+    @Test fun `decodes actual Rust host QR renderer output`() {
+        val image = javax.imageio.ImageIO.read(javaClass.getResourceAsStream("/qr/host-qr.png"))
+        val expected = javaClass.getResourceAsStream("/qr/host-qr.txt")!!.bufferedReader().readText()
+        val bytes = ByteArray(image.width * image.height) { i -> (image.getRGB(i % image.width, i / image.width) and 255).toByte() }
+        assertEquals(expected, QrDecoder.decode(bytes, image.width, image.height, image.width))
+    }
 }
