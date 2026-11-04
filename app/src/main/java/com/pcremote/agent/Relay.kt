@@ -42,7 +42,12 @@ object RelayWs {
     private val client = OkHttpClient.Builder().socketFactory(NoDelaySockets).connectTimeout(6, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
 
     fun open(r: RelayInfo, listener: WsListener): Ws {
-        val ws = client.newWebSocket(Request.Builder().url(r.phoneUrl(System.currentTimeMillis() / 1000)).build(), object : WebSocketListener() {
+        return openUrl(r.phoneUrl(System.currentTimeMillis() / 1000), listener)
+    }
+
+    /** A fixed, signed bootstrap URL; contains no reusable device ticket. */
+    fun openUrl(url: String, listener: WsListener): Ws {
+        val ws = client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) = listener.onOpen()
             override fun onMessage(webSocket: WebSocket, text: String) = listener.onText(text)
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) = listener.onBinary(bytes.toByteArray())

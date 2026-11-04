@@ -20,7 +20,7 @@ sealed interface PairingState {
 class AgentPairException(val reason: FailReason) : Exception(reason.name)
 
 /** A successful agent pairing: device token, PC info, and the LAN address that answered. */
-data class AgentPaired(val token: String, val pc: PcInfo, val host: String)
+data class AgentPaired(val token: String, val pc: PcInfo, val host: String, val relay: com.pcremote.agent.RelayInfo? = null)
 
 /** Everything pairing touches, injected so the flow is testable. */
 class PairingDeps(
@@ -43,7 +43,7 @@ class PairingModel(private val deps: PairingDeps) {
         val pin = "%04d".format(SecureRandom().nextInt(10_000))
         deps.agentPair(uri, deps.device, pin).fold(
             onSuccess = { r ->
-                deps.save(PairedPc(r.pc.id, r.pc.name, uri.hosts, uri.port, uri.fingerprint, r.token, r.pc.macs))
+                deps.save(PairedPc(r.pc.id, r.pc.name, uri.hosts, uri.port, uri.fingerprint, r.token, r.pc.macs, relay = r.relay))
                 _state.value = PairingState.Done(r.pc.id)
             },
             onFailure = { e -> _state.value = PairingState.Error(messageFor((e as? AgentPairException)?.reason)) },

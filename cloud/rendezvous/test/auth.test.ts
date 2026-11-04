@@ -35,3 +35,21 @@ describe("auth", () => {
     expect(sameHex("ab", "abc")).toBe(false);
   });
 });
+
+
+describe("Secpar bootstrap compatibility", () => {
+  it("accepts the fixed signed URL until its two-minute window closes", async () => {
+    const now = 1700000000;
+    const ts = String(now - 480);
+    const dev = "pair_bootstrap123";
+    const ticket = createHmac("sha256", key).update(`ticket:PC1:${dev}`).digest();
+    const signature = createHmac("sha256", ticket).update(`phone:PC1:${dev}:${ts}`).digest("hex");
+    expect(await phoneSig(key, "PC1", dev, ts)).toBe(signature);
+    expect(freshTs(ts, now)).toBe(true);
+    expect(freshTs(ts, now + 119)).toBe(true);
+    expect(freshTs(ts, now + 121)).toBe(false);
+    // A captured signature cannot be moved to a fresh timestamp or different PC.
+    expect(await phoneSig(key, "PC1", dev, String(now))).not.toBe(signature);
+    expect(await phoneSig(key, "PC2", dev, ts)).not.toBe(signature);
+  });
+});

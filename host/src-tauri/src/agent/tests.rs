@@ -369,6 +369,30 @@ mod relay {
     }
 
     #[tokio::test]
+    async fn relayed_pair_issues_independent_credentials_and_consumes_otp() {
+        let r = rig("relay-pair", Duration::from_secs(30)).await;
+        let otp = r.store.lock().unwrap().new_otp();
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("ws://{}", l.local_addr().unwrap());
+        tokio::spawn(crate::remote::rendezvous::run(r.handle.clone(), r.store.clone(), base));
+        let (_, w) = accept(&l, false).await;
+        let mut w = w.unwrap();
+        w.send(Message::text(r#"{"c":7,"o":"open"}"#)).await.unwrap();
+        w.send(text_env(7, &json!({"t":"pair","otp":otp,"device":"Secpar","pin":"1234"}).to_string())).await.unwrap();
+        let paired = env(&mut w).await;
+        assert_eq!(paired["m"]["t"], "paired");
+        let token = paired["m"]["token"].as_str().unwrap();
+        let remote = env(&mut w).await;
+        assert_eq!(remote["m"]["t"], "remote");
+        let dev = remote["m"]["dev"].as_str().unwrap();
+        assert_eq!(r.store.lock().unwrap().auth(token).unwrap(), dev);
+        assert_eq!(remote["m"]["ticket"], crate::store::b64url(&r.store.lock().unwrap().ticket(dev)));
+        w.send(Message::text(r#"{"c":8,"o":"open"}"#)).await.unwrap();
+        w.send(text_env(8, &json!({"t":"pair","otp":otp,"device":"replay","pin":"1234"}).to_string())).await.unwrap();
+        assert_eq!(env(&mut w).await["m"]["code"], "bad_otp");
+    }
+
+    #[tokio::test]
     async fn relayed_phone_runs_the_agent_protocol() {
         let r = rig("relay", Duration::from_secs(30)).await;
         let (dev, token) = r.store.lock().unwrap().add_device("Pixel 8").unwrap();

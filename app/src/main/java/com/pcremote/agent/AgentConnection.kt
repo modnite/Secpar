@@ -115,6 +115,8 @@ class AgentConnection(
     val state: StateFlow<AgentState> = _state
     private val _incoming = MutableSharedFlow<Msg>(extraBufferCapacity = 64)
     val incoming: SharedFlow<Msg> = _incoming
+    private val _remote = MutableStateFlow<Msg.Remote?>(null)
+    val remote: StateFlow<Msg.Remote?> = _remote
     private val _locked = MutableStateFlow(false)
     /** The PC shows its lock or sign-in screen (from `welcome` and `lock`). */
     val locked: StateFlow<Boolean> = _locked
@@ -170,6 +172,7 @@ class AgentConnection(
             if (id != session) return
             rxSincePing = true
             val m = Wire.decode(s) ?: return
+            if (m is Msg.Remote) _remote.value = m
             if (m is Msg.Lock) _locked.value = m.locked
             val hs = handshake
             if (hs != null && !hs.isCompleted) hs.complete(m) else _incoming.tryEmit(m)

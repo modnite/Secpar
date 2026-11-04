@@ -64,4 +64,12 @@ class PairingModelTest {
         assertEquals(PairedPc("pc-1", "DESK", listOf("192.168.0.9"), 47999, fp, "tok", listOf("AA:BB")), f.stored.single())
         assertTrue(f.pinSeenByAgent!!.matches(Regex("""\d{4}""")))
     }
+
+    @Test fun `remote pairing saves permanent relay credentials immediately`() = runTest {
+        val relay = com.pcremote.agent.RelayInfo("wss://relay.example", pc.id, "device", ByteArray(32) { 1 })
+        val f = Fakes(Result.success(AgentPaired("token", pc, "@relay", relay)))
+        PairingModel(f.deps).onScanned(qr)
+        assertEquals(relay, f.stored.single().relay)
+        assertEquals(listOf("192.168.0.9"), f.stored.single().hosts)
+    }
 }

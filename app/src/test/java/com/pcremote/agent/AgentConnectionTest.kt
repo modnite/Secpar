@@ -186,4 +186,15 @@ class AgentConnectionTest {
         assertTrue(f.live!!.sent.contains(Msg.Key(1, true)))
         c.close()
     }
+
+    @Test fun `immediate remote credentials survive paired response race`() = runTest {
+        val remote = Msg.Remote("wss://relay.example", "new-device", RelayInfo.b64url(ByteArray(32) { 1 }))
+        val f = FakeWs(mapOf("@relay" to "ok")) { m ->
+            if (m is Msg.Pair) listOf(Msg.Paired("new-token", pc), remote) else emptyList()
+        }
+        val c = conn(f, listOf("@relay"))
+        assertTrue(c.pair("otp", "Secpar", "1234").isSuccess)
+        assertEquals(remote, c.remote.value)
+        c.close()
+    }
 }

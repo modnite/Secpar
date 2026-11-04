@@ -113,3 +113,54 @@ Carrier NATs can give the same PC (or phone) a different public IP for different
   4. Send PRS packets as ChannelData (`0x4000`, len u16, data, padded to 4 bytes).
   5. Refresh the allocation every 5 minutes, and the permission and channel every 4 minutes.
 - **Announcing the relay:** the phone sends `stream.cand` with the relayed address. The host punches to it like any other candidate, and the relay forwards that to the phone.
+
+## Secpar remote pairing bootstrap
+
+An updated host appends `pc` (the PC ID) and `r` (a percent-encoded signed
+`wss://.../v1/phone` URL) to a fresh pairing link once its relay key is registered.
+The ordinary LAN addresses, certificate fingerprint, and one-time token remain.
+Older clients ignore the new fields. Older hosts still support direct pairing.
+
+The bootstrap uses a random `pair_` device identifier. The host signs one fixed
+URL using the existing ticket derivation, but does **not** include that ticket or
+the relay master key. Its timestamp is host Unix time minus 480 seconds: with
+the existing relay's +/-600-second acceptance window, it expires about 120
+seconds after issuance. Clock differences can shorten or extend relay admission;
+the host's independent monotonic 120-second OTP expiry and single-use check are
+the final authorization gate. Reissuing a code invalidates the previous OTP.
+A bootstrap URL can be replayed during its window but cannot authorize a second
+pairing or renew itself. This requires no change to the existing relay Worker.
+
+Secpar tries that signed relay address first, then the direct addresses. The
+normal `pair` exchange issues a new device token. Secpar waits for the subsequent
+`remote` message and stores the new device's permanent relay ticket before
+closing the bootstrap connection, so the first normal connection works remotely.
+The QR PC ID must match the paired response. Neither credential nor full pairing
+URL should be logged. Share the QR/link only with the intended device.
+
+Direct connections still pin the host certificate. Relay pairing uses the same
+TLS-to-Worker trust model as existing relay control: the Worker terminates TLS
+and can read agent messages. The QR fingerprint does not provide end-to-end
+certificate pinning across that relay. Use a relay operator you trust.
+
+Deployment: install the updated Android client and updated Windows companion;
+then request a **fresh** pairing code on the PC through the existing remote
+session. A QR produced by the unmodified companion has no relay bootstrap and
+cannot be made remotely reachable by an Android-only update. Restarting the
+Windows companion/service can interrupt the existing connection.
+
+### Running your own relay
+
+Deploy `cloud/rendezvous` into your own Cloudflare account using Wrangler. The
+included migration uses SQLite Durable Objects and can use the Workers Free
+plan within its limits. Set the `TURN_KEY_ID` and `TURN_KEY_TOKEN` Worker secrets
+from your own Cloudflare Realtime TURN key if you need relayed video fallback.
+Build the Windows companion with `PCR_RENDEZVOUS_URL=wss://YOUR-WORKER-HOST`;
+the host currently selects this address at build time. Android learns the URL
+from the new QR and subsequent `remote` credentials. No Android rebuild is
+required just to change the relay address. A `workers.dev` hostname is enough;
+a custom domain is optional. Existing paired clients need to receive updated
+relay credentials over a working connection after a backend change.
+
+Cloudflare usage limits and prices apply independently to Workers/Durable
+Objects and TURN. See the provider's current pricing before enabling billing.

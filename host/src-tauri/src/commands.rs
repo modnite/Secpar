@@ -84,8 +84,26 @@ fn new_qr(app: &App) -> PairCode {
 
 /// A fresh one-time pairing link (what the QR code encodes).
 pub fn pair_url(app: &App) -> String {
-    let otp = app.store.lock().unwrap().new_otp();
-    qr_payload(&crate::win::sys::pc_name(), &rank_ips(crate::win::sys::adapters().0), PORT, &app.fp, &otp)
+    let mut store = app.store.lock().unwrap();
+    let otp = store.new_otp();
+    let mut link = qr_payload(&crate::win::sys::pc_name(), &rank_ips(crate::win::sys::adapters().0), PORT, &app.fp, &otp);
+    if let Some(base) = crate::remote::url().filter(|_| store.relay_registered()) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        // The Worker's fixed +/-600s window expires this URL after 120s, matching the OTP.
+        // Only a signature is exported, never the ticket that could mint fresh URLs.
+        let dev = format!("pair_{}", crate::store::b64url(&crate::store::random::<16>()));
+        let pc = store.pc_id();
+        let relay = pairing_relay_url(base, pc, &dev, &store.ticket(&dev), now);
+        link.push_str(&format!("&pc={pc}&r={}", utf8_percent_encode(&relay, NAME_SET)));
+    }
+    link
+}
+
+/// A fixed URL valid for roughly two minutes under the existing Worker's timestamp policy.
+fn pairing_relay_url(base: &str, pc: &str, dev: &str, ticket: &[u8], now: u64) -> String {
+    let ts = now.saturating_sub(480);
+    let sig = crate::tls::hex(&crate::store::hmac(ticket, &format!("phone:{pc}:{dev}:{ts}")));
+    format!("{}/v1/phone?pc={pc}&dev={dev}&ts={ts}&sig={sig}", base.trim_end_matches('/'))
 }
 
 #[derive(Serialize)]
@@ -144,7 +162,7 @@ async fn check_update() -> Result<UpdateView, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let v = crate::update::latest_release().await?;
     let latest = v["tag_name"].as_str().unwrap_or_default().to_string();
-    let url = v["html_url"].as_str().unwrap_or("https://github.com/SadikTD/pc-remote/releases").to_string();
+    let url = v["html_url"].as_str().unwrap_or("https://github.com/modnite/Secpar/releases").to_string();
     Ok(UpdateView { newer: is_newer(&latest, &current), current, latest, url })
 }
 
@@ -203,6 +221,19 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn relay_bootstrap_is_fixed_and_does_not_export_ticket() {
+        let url = pairing_relay_url("wss://relay.example/", "PC1", "pair_test", &[7; 32], 1_700_000_000);
+        let parsed = reqwest::Url::parse(&url).unwrap();
+        let q: std::collections::HashMap<_, _> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(parsed.path(), "/v1/phone");
+        assert_eq!(q["ts"], "1699999520");
+        assert_eq!(q["dev"], "pair_test");
+        assert_eq!(q["sig"], crate::tls::hex(&crate::store::hmac(&[7; 32], "phone:PC1:pair_test:1699999520")));
+        assert!(!url.contains("ticket="));
+        assert!(!url.contains(&crate::store::b64url(&[7; 32])));
+    }
 
     #[test]
     fn qr_payload_matches_protocol() {

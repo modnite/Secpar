@@ -28,7 +28,7 @@
     <string name="pcr_tb_disconnect">Disconnect</string>
     <string name="pcr_qr_invalid">That\'s not a PC Remote code. Open PC Remote on your PC and scan the code it shows.</string>
     <string name="pcr_qr_expired">That code expired. Scan the new one on your PC.</string>
-    <string name="pcr_same_wifi">Can\'t reach your PC. Make sure your phone and PC are on the same Wi-Fi.</string>
+    <string name="pcr_same_wifi">Can\'t reach your PC. Check that it is online. For pairing away from home, use a fresh code from the Secpar-compatible host.</string>
     <string name="pcr_cert_mismatch">Security check failed: the PC at that address isn\'t the one that showed this code. Nothing was saved.</string>
     <string name="pcr_ob_welcome_title">Secpar</string>
     <string name="pcr_ob_welcome_body">Connect to your Windows PC.</string>

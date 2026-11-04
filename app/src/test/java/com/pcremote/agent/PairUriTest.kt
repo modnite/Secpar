@@ -30,4 +30,21 @@ class PairUriTest {
     @Test fun `fingerprint is normalised to lowercase`() {
         assertEquals(fp, PairUri.parse("pcremote://pair?n=PC&h=1.2.3.4&p=47999&fp=${fp.uppercase()}&t=x")!!.fingerprint)
     }
+
+    @Test fun `remote code accepts empty LAN hosts and keeps signed URL`() {
+        val relay = "wss://relay.example/v1/phone?pc=pc-1&dev=pair_test&ts=123&sig=abc"
+        val encoded = java.net.URLEncoder.encode(relay, "UTF-8")
+        val p = PairUri.parse("pcremote://pair?n=Desk&h=&p=47999&fp=$fp&t=otp&pc=pc-1&r=$encoded")!!
+        assertEquals(relay, p.relayUrl)
+        assertEquals("pc-1", p.pcId)
+        assertEquals(emptyList<String>(), p.hosts)
+    }
+
+    @Test fun `remote code rejects insecure or malformed URL`() {
+        for (url in listOf("ws://relay.example/v1/phone", "wss://user@relay.example/v1/phone", "wss://relay.example/wrong")) {
+            val encoded = java.net.URLEncoder.encode(url, "UTF-8")
+            assertNull(PairUri.parse("pcremote://pair?h=1.2.3.4&p=47999&fp=$fp&t=otp&pc=pc-1&r=$encoded"))
+        }
+        assertNull(PairUri.parse("pcremote://pair?h=1.2.3.4&p=47999&fp=$fp&t=%ZZ"))
+    }
 }

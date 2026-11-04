@@ -5,7 +5,7 @@
 use serde_json::Value;
 use std::path::Path;
 
-const LATEST: &str = "https://api.github.com/repos/SadikTD/pc-remote/releases/latest";
+const LATEST: &str = "https://api.github.com/repos/modnite/Secpar/releases/latest";
 /// base64 of the minisign public key file.
 const PUBKEY: &str = include_str!("../updater.pub");
 
