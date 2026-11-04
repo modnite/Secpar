@@ -1,7 +1,7 @@
 [package]
-name = "pc-remote-host"
+name = "secpar-host"
 version = "3.0.3"
-description = "PC Remote Host"
+description = "Secpar Host"
 edition = "2021"
 license = "GPL-3.0"
 
@@ -10,7 +10,7 @@ name = "pc_remote_host"
 path = "src/lib.rs"
 
 [[bin]]
-name = "pc-remote-host"
+name = "secpar-host"
 path = "src/main.rs"
 
 [build-dependencies]

@@ -23,7 +23,7 @@ export function about(): HTMLElement {
     "section.view.about",
     {},
     h("img.logo", { src: "/icon.svg", alt: "", width: 72, height: 72 }),
-    h("h2", {}, "PC Remote for Windows"),
+    h("h2", {}, "Secpar for Windows"),
     h("p.hint", {}, `Version ${__APP_VERSION__}`),
     h("p.lead", {}, "Control this PC from your phone, from anywhere: its screen, mouse, keyboard, files, media and power."),
     h("p.hint", {}, "Updates install automatically. Open source under GPL-3.0."),

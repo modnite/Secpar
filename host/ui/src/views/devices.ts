@@ -39,6 +39,6 @@ export function devices(state: State, reload: () => void): HTMLElement {
     h("h2", {}, "Paired phones"),
     state.devices.length
       ? h("ul.list", {}, ...state.devices.map((d) => row(d, reload)))
-      : h("p.empty", {}, "No phones yet. Scan the code on the Home tab with PC Remote on your phone."),
+      : h("p.empty", {}, "No phones yet. Scan the code on the Home tab with Secpar on your phone."),
   );
 }

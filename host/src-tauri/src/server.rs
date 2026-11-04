@@ -29,7 +29,6 @@ pub fn run() {
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let dir = crate::data_dir();
     std::fs::create_dir_all(&dir)?;
-    migrate(&dir);
     let identity = tls::Identity::load_or_create(&dir)?;
     let store = Arc::new(Mutex::new(Store::open(&dir)?));
     let host = Arc::new(crate::host::Host::new(store.clone()));
@@ -38,7 +37,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         let net = net.clone();
         tokio::spawn(async move { *net.lock().unwrap() = net::apply_now(true).await });
     }
-    let agent = crate::agent::Agent::start(&identity, store.clone(), host, "0.0.0.0:47999".parse()?, Duration::from_secs(30)).await?;
+    let agent = crate::agent::Agent::start(&identity, store.clone(), host, "0.0.0.0:48999".parse()?, Duration::from_secs(30)).await?;
     if let Some(url) = remote::url() {
         tokio::spawn(remote::rendezvous::run(agent.clone(), store.clone(), url.into()));
     }
@@ -93,31 +92,6 @@ async fn start_tray(store: Arc<Mutex<Store>>) {
             Some(_) => {}
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
-    }
-}
-
-/// Upgrading from 2.x: the data lived in the user's `%APPDATA%\PC Remote` with a user-scope DPAPI key.
-/// Copy it here once and re-wrap the key, so paired phones keep working with the same fingerprint.
-fn migrate(dir: &Path) {
-    if dir.join("store.json").exists() {
-        return;
-    }
-    let Some(token) = win::session::user_token() else { return };
-    let Some(old) = win::session::profile_dir(*token).map(|p| p.join("AppData").join("Roaming").join("PC Remote")) else { return };
-    let key = std::fs::read(old.join("tls.key")).ok().and_then(|blob| {
-        use windows::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
-        // SAFETY: impersonation is reverted before returning; the token outlives it.
-        unsafe {
-            ImpersonateLoggedOnUser(*token).ok()?;
-            let k = win::dpapi::unprotect(&blob).ok();
-            let _ = RevertToSelf();
-            k
-        }
-    });
-    match copy_data(&old, dir, key.as_deref()) {
-        Ok(true) => crate::log::line(&format!("server: migrated data from {}", old.display())),
-        Ok(false) => {}
-        Err(e) => crate::log::line(&format!("server: migration failed: {e}")),
     }
 }
 

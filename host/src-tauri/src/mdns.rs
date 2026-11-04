@@ -6,7 +6,7 @@ use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::DNS_REQUEST_PENDING;
 use windows::Win32::NetworkManagement::Dns::*;
 
-pub const PORT: u16 = 47999;
+pub const PORT: u16 = crate::commands::PORT;
 const SERVICE: &str = "_pcremote._udp.local";
 
 pub fn txt(id: &str, name: &str) -> Vec<(&'static str, String)> {
@@ -42,7 +42,7 @@ impl Advert {
     /// Starts advertising; None when this Windows has no DNS-SD API or refused.
     pub fn start(id: &str, name: &str) -> Option<Advert> {
         let host = HSTRING::from(format!("{}.local", crate::win::sys::pc_name()));
-        let inst_name = HSTRING::from(instance(name));
+        let inst_name = HSTRING::from(instance(&format!("Secpar-{name}")));
         let pairs = txt(id, name);
         let keys: Vec<HSTRING> = pairs.iter().map(|(k, _)| HSTRING::from(*k)).collect();
         let vals: Vec<HSTRING> = pairs.iter().map(|(_, v)| HSTRING::from(v.as_str())).collect();
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn txt_contents() {
         assert_eq!(txt("abc123", "DESKTOP-1"), vec![("id", "abc123".into()), ("v", "2".into()), ("name", "DESKTOP-1".into())]);
-        assert_eq!(PORT, 47999);
+        assert_eq!(PORT, 48999);
     }
 
     #[test]
@@ -103,13 +103,13 @@ mod tests {
     #[test]
     #[ignore = "manual: keeps the advert up for 8 s for an outside mDNS query"]
     fn advertises_for_a_while() {
-        let _a = Advert::start("test-id", "PC Remote test").unwrap();
+        let _a = Advert::start("test-id", "Secpar test").unwrap();
         std::thread::sleep(std::time::Duration::from_secs(8));
     }
 
     #[test]
     fn registers_on_this_pc() {
-        let a = Advert::start("test-id", "PC Remote test");
+        let a = Advert::start("test-id", "Secpar test");
         assert!(a.is_some(), "DnsServiceRegister refused");
         drop(a);
     }

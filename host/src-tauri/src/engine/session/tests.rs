@@ -364,8 +364,8 @@ fn punching_keeps_the_stream_alive_past_the_timeout() {
 fn ready_candidates_in_order() {
     let lan = ["192.168.0.126".to_string(), "10.0.0.2".to_string()];
     let pub_ip = Some(IpAddr::from([203, 0, 113, 7]));
-    let refl = Some("203.0.113.7:47998".parse().unwrap());
-    assert_eq!(host_cands(&lan, STREAM_PORT, pub_ip, refl), ["192.168.0.126:47998", "10.0.0.2:47998", "203.0.113.7:47998"]);
+    let refl = Some("203.0.113.7:48998".parse().unwrap());
+    assert_eq!(host_cands(&lan, STREAM_PORT, pub_ip, refl), ["192.168.0.126:48998", "10.0.0.2:48998", "203.0.113.7:48998"]);
     let refl = Some("198.51.100.4:6100".parse().unwrap());
-    assert_eq!(host_cands(&lan[..1], 50000, pub_ip, refl), ["192.168.0.126:50000", "198.51.100.4:6100"], "UPnP maps only 47998");
+    assert_eq!(host_cands(&lan[..1], 50000, pub_ip, refl), ["192.168.0.126:50000", "198.51.100.4:6100"], "UPnP maps only 48998");
 }

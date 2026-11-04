@@ -1,4 +1,4 @@
-//! `--service`: the "PC Remote" Windows service (SYSTEM, session 0, starts at boot).
+//! `--service`: the "Secpar" Windows service (SYSTEM, session 0, starts at boot).
 //! It keeps one `--server` running as SYSTEM in the console session — at the sign-in screen too —
 //! and installs signed updates.
 
@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use windows::core::{w, PWSTR};
 use windows::Win32::System::Services::*;
 
-const NAME: windows::core::PCWSTR = w!("PC Remote");
+const NAME: windows::core::PCWSTR = w!("Secpar");
 static STOP: AtomicBool = AtomicBool::new(false);
 static mut STATUS: SERVICE_STATUS_HANDLE = SERVICE_STATUS_HANDLE(std::ptr::null_mut());
 
@@ -51,7 +51,7 @@ unsafe extern "system" fn main(_: u32, _: *mut PWSTR) {
 
 /// Runs as a service; when started by hand (not by the SCM) it supervises in the foreground.
 pub fn run() {
-    let mut name: Vec<u16> = "PC Remote".encode_utf16().chain([0]).collect();
+    let mut name: Vec<u16> = "Secpar".encode_utf16().chain([0]).collect();
     let table = [
         SERVICE_TABLE_ENTRYW { lpServiceName: PWSTR(name.as_mut_ptr()), lpServiceProc: Some(main) },
         SERVICE_TABLE_ENTRYW::default(),

@@ -164,3 +164,20 @@ relay credentials over a working connection after a backend change.
 
 Cloudflare usage limits and prices apply independently to Workers/Durable
 Objects and TURN. See the provider's current pricing before enabling billing.
+
+## Secpar Host side-by-side installation (preview 3+)
+
+Secpar Host is a separate application (`com.secpar.host`, `secpar-host.exe`),
+installed in its own directory. It uses Windows service `Secpar`, named pipe
+`\\.\pipe\secpar`, `%ProgramData%\Secpar`, TCP 48999 and UDP 48998.
+Its own newly generated PC ID, relay key and TLS identity prevent it from
+replacing PC Remote's existing relay connection. Legacy settings/identity
+migration is disabled. It does not stop or kill PC Remote or alter its firewall,
+registry entries, power settings, network adapters, shared drivers or Sunshine.
+The gamepad feature reuses an existing ViGEmBus installation, if available.
+
+Install into the default Secpar Host directory, never the PC Remote directory.
+Keep PC Remote installed and use its existing connection while testing Secpar.
+Use a fresh code from the Secpar Host window; this is a separate pairing, not
+an import of the old PC Remote device. The preview-2 replacement installer is
+superseded; use the side-by-side installer from preview 3 or newer.

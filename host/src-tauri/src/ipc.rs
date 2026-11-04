@@ -1,4 +1,4 @@
-//! The server ⇄ UI pipe: JSON lines over `\\.\pipe\pc-remote`.
+//! The server ⇄ UI pipe: JSON lines over `\\.\pipe\secpar`.
 //! - UI → server: `{"id":1,"cmd":"get_state","args":{…}}`
 //! - server → UI: `{"id":1,"ok":…}` or `{"id":1,"err":"…"}`, and pushed events `{"ev":"devices",…}`.
 //!
@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-pub const PIPE: &str = r"\\.\pipe\pc-remote";
+pub const PIPE: &str = r"\\.\pipe\secpar";
 
 pub type Handler = Arc<dyn Fn(String, Value) -> crate::agent::BoxFut<Result<Value, String>> + Send + Sync>;
 
@@ -143,13 +143,13 @@ impl Client {
         let sent = self.out.lock().unwrap().as_ref().is_some_and(|o| o.send(line).is_ok());
         if !sent {
             self.waiting.lock().unwrap().remove(&id);
-            return Err("PC Remote service is not running".into());
+            return Err("Secpar service is not running".into());
         }
         match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
             Ok(Ok(r)) => r,
             _ => {
                 self.waiting.lock().unwrap().remove(&id);
-                Err("PC Remote service is not responding".into())
+                Err("Secpar service is not responding".into())
             }
         }
     }
@@ -169,7 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_reply_and_events() {
-        let name: &'static str = Box::leak(format!(r"\\.\pipe\pc-remote-test-{}", std::process::id()).into_boxed_str());
+        let name: &'static str = Box::leak(format!(r"\\.\pipe\secpar-test-{}", std::process::id()).into_boxed_str());
         let ev = broadcast::channel(8).0;
         let h: Handler = Arc::new(|cmd, args| Box::pin(async move {
             match cmd.as_str() {

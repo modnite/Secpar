@@ -17,8 +17,8 @@ const nav = h("nav.tabs", { role: "tablist" }, indicator, ...tabs.map((t) =>
 /** Shown instead of a view while the background service can't be reached. */
 const down = () => h("section.view.down", {},
   h("div.down-mark", { "aria-hidden": "true" }),
-  h("h2", {}, "The PC Remote service isn't running"),
-  h("p.lead", {}, "It starts with Windows and keeps your phone connected. It should be back in a few seconds. If it isn't, reinstall PC Remote."));
+  h("h2", {}, "The Secpar service isn't running"),
+  h("p.lead", {}, "It starts with Windows and keeps your phone connected. It should be back in a few seconds. If it isn't, reinstall Secpar."));
 
 async function show(t: Tab) {
   current = t;

@@ -12,7 +12,7 @@ const PUBKEY: &str = include_str!("../updater.pub");
 pub async fn latest_release() -> Result<Value, String> {
     reqwest::Client::new()
         .get(LATEST)
-        .header("User-Agent", "pc-remote-host")
+        .header("User-Agent", "secpar-host")
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
@@ -43,7 +43,7 @@ pub fn verify(data: &[u8], sig: &str, pubkey_b64: &str) -> bool {
 }
 
 async fn download(url: &str) -> Result<Vec<u8>, String> {
-    let r = reqwest::Client::new().get(url).header("User-Agent", "pc-remote-host").send().await.and_then(|r| r.error_for_status());
+    let r = reqwest::Client::new().get(url).header("User-Agent", "secpar-host").send().await.and_then(|r| r.error_for_status());
     Ok(r.map_err(|e| e.to_string())?.bytes().await.map_err(|e| e.to_string())?.to_vec())
 }
 

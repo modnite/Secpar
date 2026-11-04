@@ -61,7 +61,7 @@ export function home(state: State): HTMLElement {
       h(`span.pill.${tone}`, {}, h("i.dot"), text),
       h("h1.pc", {}, state.name)),
     h("div.code", {}, ring, qr),
-    h("p.lead", {}, "Scan with PC Remote on your phone, or with its camera."),
+    h("p.lead", {}, "Scan with Secpar on your phone, or with its camera."),
     h("div.under", {}, left, copy),
     connected.length
       ? h("ul.list.compact", {}, ...connected.map((d) => h("li.row", {}, h("i.dot.live"), h("span.grow.label", {}, d.name),

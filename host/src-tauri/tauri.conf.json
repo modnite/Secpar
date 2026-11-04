@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PC Remote Host",
+  "productName": "Secpar Host",
   "version": "3.0.3",
-  "identifier": "com.pcremote.host",
+  "identifier": "com.secpar.host",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -27,7 +27,7 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "publisher": "SadikTD",
+    "publisher": "modnite",
     "shortDescription": "Control this PC from your phone",
     "copyright": "GPL-3.0",
     "windows": {

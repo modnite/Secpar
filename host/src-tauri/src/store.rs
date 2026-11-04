@@ -42,7 +42,7 @@ impl Default for Config {
             allow_files: true,
             allow_clip: true,
             anywhere: false,
-            // empty: the signed-in user's Downloads\PC Remote (see Store::files_dir)
+            // empty: the signed-in user's Downloads\Secpar (see Store::files_dir)
             files_dir: String::new(),
         }
     }
@@ -208,10 +208,10 @@ impl Store {
         self.data.devices.iter().filter(|d| d.revoked).map(|d| d.id.clone()).collect()
     }
 
-    /// Where received files go: the configured folder, else the signed-in user's Downloads\PC Remote.
+    /// Where received files go: the configured folder, else the signed-in user's Downloads\Secpar.
     pub fn files_dir(&self) -> PathBuf {
         match self.data.config.files_dir.as_str() {
-            "" => crate::win::session::user_profile().join("Downloads").join("PC Remote"),
+            "" => crate::win::session::user_profile().join("Downloads").join("Secpar"),
             d => PathBuf::from(d),
         }
     }
@@ -330,6 +330,6 @@ mod tests {
         let c = s.config();
         assert!(c.autostart && c.allow_files && c.allow_clip && !c.anywhere);
         assert!(c.files_dir.is_empty());
-        assert!(s.files_dir().ends_with(std::path::Path::new("Downloads").join("PC Remote")));
+        assert!(s.files_dir().ends_with(std::path::Path::new("Downloads").join("Secpar")));
     }
 }

@@ -31,9 +31,9 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter as _, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
-/// `C:\ProgramData\PC Remote`: the server's store, TLS identity and log (SYSTEM + Administrators only).
+/// `C:\ProgramData\Secpar`: the server's store, TLS identity and log (SYSTEM + Administrators only).
 pub fn data_dir() -> PathBuf {
-    PathBuf::from(std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".into())).join("PC Remote")
+    PathBuf::from(std::env::var("PROGRAMDATA").unwrap_or_else(|_| r"C:\ProgramData".into())).join("Secpar")
 }
 
 /// The tray process's link to the server.
@@ -50,7 +50,7 @@ pub fn show_window(app: &AppHandle) {
         return;
     }
     let built = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-        .title("PC Remote")
+        .title("Secpar")
         .inner_size(440.0, 680.0)
         .resizable(false)
         .maximizable(false)
@@ -136,11 +136,11 @@ pub fn run_with(extra: impl FnOnce(tauri::Builder<tauri::Wry>) -> tauri::Builder
         .invoke_handler(tauri::generate_handler![call, send_file, pick_files_dir, open_files_dir, open_release])
         .setup(move |app| {
             let _ = win::sys::register_send_verb();
-            let open = MenuItem::with_id(app, "open", "Open PC Remote", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "Open Secpar", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Hide from tray", true, None::<&str>)?;
             let tray = TrayIconBuilder::with_id("tray")
                 .icon(app.default_window_icon().cloned().expect("icon"))
-                .tooltip("PC Remote")
+                .tooltip("Secpar")
                 .menu(&Menu::with_items(app, &[&open, &quit])?)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, e| match e.id.as_ref() {
@@ -172,9 +172,9 @@ pub fn run_with(extra: impl FnOnce(tauri::Builder<tauri::Wry>) -> tauri::Builder
                     if let Ok(s) = client.call("get_state", Value::Null).await {
                         let n = s["devices"].as_array().map_or(0, |d| d.iter().filter(|d| d["connected"] == true).count());
                         let tip = match n {
-                            0 => "PC Remote".to_string(),
-                            1 => "PC Remote · 1 phone connected".to_string(),
-                            n => format!("PC Remote · {n} phones connected"),
+                            0 => "Secpar".to_string(),
+                            1 => "Secpar · 1 phone connected".to_string(),
+                            n => format!("Secpar · {n} phones connected"),
                         };
                         let _ = tray.set_tooltip(Some(tip));
                     }

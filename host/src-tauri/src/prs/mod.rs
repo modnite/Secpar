@@ -1,4 +1,4 @@
-//! PRS: PC Remote Stream protocol (docs/stream-protocol.md): header, crypto, FEC, framing.
+//! PRS: Secpar Stream protocol (docs/stream-protocol.md): header, crypto, FEC, framing.
 
 pub mod crypt;
 pub mod fec;

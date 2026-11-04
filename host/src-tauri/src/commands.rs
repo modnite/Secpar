@@ -9,7 +9,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 
 const NAME_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
-pub const PORT: u16 = 47999;
+pub const PORT: u16 = 48999;
 
 pub fn qr_payload(name: &str, ips: &[String], port: u16, fp: &str, otp: &str) -> String {
     format!(
@@ -223,6 +223,25 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[test]
+    fn secpar_host_does_not_share_legacy_runtime_or_installer_identity() {
+        assert_eq!(PORT, 48999);
+        assert_eq!(crate::engine::session::STREAM_PORT, 48998);
+        assert_eq!(crate::ipc::PIPE, r"\\.\pipe\secpar");
+        assert_eq!(crate::data_dir().file_name().unwrap(), "Secpar");
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(config["identifier"], "com.secpar.host");
+        assert_eq!(config["productName"], "Secpar Host");
+        let hooks = include_str!("../installer/hooks.nsh");
+        assert!(hooks.contains("!define PCR_SVC \"Secpar\""));
+        assert!(!hooks.contains("pc-remote-host.exe"));
+        assert!(!hooks.contains("PCRemote.Send"));
+        assert!(!hooks.contains("localport=47999"));
+        assert!(!hooks.contains("HiberbootEnabled"));
+        assert!(!hooks.contains("Set-NetAdapterPowerManagement"));
+        assert!(!hooks.contains("msiexec.exe"));
+    }
+
+    #[test]
     fn relay_bootstrap_is_fixed_and_does_not_export_ticket() {
         let url = pairing_relay_url("wss://relay.example/", "PC1", "pair_test", &[7; 32], 1_700_000_000);
         let parsed = reqwest::Url::parse(&url).unwrap();
@@ -238,14 +257,14 @@ mod tests {
     #[test]
     fn qr_payload_matches_protocol() {
         let fp = "ab".repeat(32);
-        let uri = qr_payload("DESKTOP-ABC", &["192.168.0.126".into(), "10.0.0.5".into()], 47999, &fp, "otp_-x");
-        assert_eq!(uri, format!("pcremote://pair?n=DESKTOP-ABC&h=192.168.0.126,10.0.0.5&p=47999&fp={fp}&t=otp_-x"));
+        let uri = qr_payload("DESKTOP-ABC", &["192.168.0.126".into(), "10.0.0.5".into()], 48999, &fp, "otp_-x");
+        assert_eq!(uri, format!("pcremote://pair?n=DESKTOP-ABC&h=192.168.0.126,10.0.0.5&p=48999&fp={fp}&t=otp_-x"));
     }
 
     #[test]
     fn qr_payload_url_encodes_name() {
-        let uri = qr_payload("Sadik's PC & Co é", &[], 47999, "f", "t");
-        assert!(uri.starts_with("pcremote://pair?n=Sadik%27s%20PC%20%26%20Co%20%C3%A9&h=&p=47999"), "{uri}");
+        let uri = qr_payload("Sadik's PC & Co é", &[], 48999, "f", "t");
+        assert!(uri.starts_with("pcremote://pair?n=Sadik%27s%20PC%20%26%20Co%20%C3%A9&h=&p=48999"), "{uri}");
     }
 
     #[test]

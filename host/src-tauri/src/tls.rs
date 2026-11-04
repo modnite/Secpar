@@ -30,7 +30,7 @@ impl Identity {
                 let year = 1970 + (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() / 31_556_952) as i32;
                 p.not_before = rcgen::date_time_ymd(year - 1, 1, 1);
                 p.not_after = rcgen::date_time_ymd(year + 10, 1, 1);
-                p.distinguished_name.push(rcgen::DnType::CommonName, "PC Remote Host");
+                p.distinguished_name.push(rcgen::DnType::CommonName, "Secpar Host");
                 let cert = p.self_signed(&key)?;
                 let (c, k) = (cert.der().to_vec(), key.serialize_der());
                 std::fs::create_dir_all(dir)?;

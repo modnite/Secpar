@@ -83,7 +83,7 @@ impl Router for Igd {
         let g = self.0.clone();
         Box::pin(async move {
             // Lease 0 = permanent; some routers only accept a finite lease.
-            let add = |lease| g.add_port(proto.igd(), port, SocketAddr::V4(local), lease, "PC Remote");
+            let add = |lease| g.add_port(proto.igd(), port, SocketAddr::V4(local), lease, "Secpar");
             match add(0).await {
                 Ok(()) => Ok(()),
                 Err(_) => add(7 * 24 * 3600).await.map_err(|e| e.to_string()),
@@ -172,7 +172,7 @@ mod tests {
         let r = FakeRouter::default();
         let s = apply(true, Ok(&r)).await;
         assert_eq!(s, NetStatus { upnp: true, public: Some("203.0.113.7".into()), manual: false });
-        assert_eq!(*r.calls.lock().unwrap(), ["map Tcp 47999 192.168.0.126:47999", "map Udp 47998 192.168.0.126:47998"]);
+        assert_eq!(*r.calls.lock().unwrap(), ["map Tcp 48999 192.168.0.126:48999", "map Udp 48998 192.168.0.126:48998"]);
     }
 
     #[tokio::test]
@@ -180,7 +180,7 @@ mod tests {
         let r = FakeRouter::default();
         let s = apply(false, Ok(&r)).await;
         assert_eq!(s, NetStatus::default());
-        assert_eq!(*r.calls.lock().unwrap(), ["unmap Tcp 47999", "unmap Udp 47998"]);
+        assert_eq!(*r.calls.lock().unwrap(), ["unmap Tcp 48999", "unmap Udp 48998"]);
         assert_eq!(apply(false, Err::<&FakeRouter, _>("none".into())).await, NetStatus::default());
     }
 

@@ -45,7 +45,7 @@ pub struct Params {
 const RELAY_PPS: u64 = 3_000;
 
 /// The UDP port streams use when it's free (mapped on the router by `net`).
-pub const STREAM_PORT: u16 = 47998;
+pub const STREAM_PORT: u16 = 48998;
 
 /// Pushes an agent message to the phone (`cursor.shape`, a new `stream.ready`).
 pub type Notify = Arc<dyn Fn(ServerMsg) + Send + Sync>;

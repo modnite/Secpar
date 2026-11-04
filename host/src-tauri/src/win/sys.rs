@@ -110,8 +110,8 @@ pub fn pick(owner: Option<windows::Win32::Foundation::HWND>, folder: bool) -> Op
     }
 }
 
-const SEND_VERB: PCWSTR = w!(r"Software\Classes\*\shell\PCRemote.Send");
-const SEND_CMD: PCWSTR = w!(r"Software\Classes\*\shell\PCRemote.Send\command");
+const SEND_VERB: PCWSTR = w!(r"Software\Classes\*\shell\Secpar.Send");
+const SEND_CMD: PCWSTR = w!(r"Software\Classes\*\shell\Secpar.Send\command");
 
 /// Explorer right-click → "Send to phone" (per user): runs `"exe" --send "%1"`.
 pub fn register_send_verb() -> windows::core::Result<()> {

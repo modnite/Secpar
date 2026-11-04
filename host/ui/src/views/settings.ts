@@ -27,7 +27,7 @@ export async function settings(): Promise<HTMLElement> {
     const n = await invoke<{ upnp: boolean; public: string | null; manual: boolean; lan: string[] }>("get_net");
     netNote.textContent = !config.anywhere ? ""
       : n.upnp ? `Your router forwards connections to this PC${n.public ? ` (public address ${n.public})` : ""}.`
-      : n.manual ? `Your router didn't accept UPnP. Your phone still connects through the PC Remote relay. For the fastest connection, forward TCP 47999 and UDP 47998 to ${n.lan[0] ?? "this PC"}.`
+      : n.manual ? `Your router didn't accept UPnP. Your phone still connects through the Secpar relay. For the fastest connection, forward TCP 48999 and UDP 48998 to ${n.lan[0] ?? "this PC"}.`
       : "Asking your router…";
   };
   showNet();
@@ -47,8 +47,8 @@ export async function settings(): Promise<HTMLElement> {
     h(
       "div.group",
       {},
-      h("div.row.info", {}, h("span.grow", {}, h("span.label", {}, "Always on"), h("span.hint", {}, "PC Remote runs as a service from startup, so your phone can reach the sign-in screen, lock screen and admin prompts."))),
-      toggle("Show in the tray", "Adds the PC Remote icon when you sign in", config.autostart, (v) => save({ autostart: v })),
+      h("div.row.info", {}, h("span.grow", {}, h("span.label", {}, "Always on"), h("span.hint", {}, "Secpar runs as a service from startup, so your phone can reach the sign-in screen, lock screen and admin prompts."))),
+      toggle("Show in the tray", "Adds the Secpar icon when you sign in", config.autostart, (v) => save({ autostart: v })),
       select("Display to stream", config.display, [["", "Primary display"], ...displays.map((d): [string, string] => [d.id, d.primary ? `${d.name} (primary)` : d.name])], (v) => save({ display: v })),
       select("Max quality", config.max_quality, [["auto", "Auto"], ["smooth", "Smooth"], ["sharp", "Sharp"], ["battery", "Battery saver"]], (v) => save({ max_quality: v })),
     ),
