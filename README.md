@@ -1,5 +1,12 @@
 # Secpar
 
+## Download Preview 10
+
+[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-preview10.apk) · [Windows host installer](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-Host-preview10-setup.exe) · [Release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.10)
+
+Both apps use the rounded mint-and-orange triangle as their app icon. These direct links work without expanding GitHub’s Assets panel. Update in place to preserve pairings; do not uninstall first. The Windows host installs alongside PC Remote. This is a debug-signed Android preview and unsigned Windows installer.
+
+
 Secpar is a fork of [PC Remote](https://github.com/SadikTD/pc-remote) focused on docked keyboard and mouse use, resolution handling, and a simpler Android interface. See [fork changes](docs/dock-input.md). Secpar Host now installs alongside PC Remote with its own service, ports and pairing identity.
 
 The Android app is named Secpar; the Android package ID and pairing-link format remain compatible. Secpar Host uses a separate Downloads/Secpar transfer folder.
