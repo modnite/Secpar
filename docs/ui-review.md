@@ -26,3 +26,9 @@ To reproduce the host preview, run `npm run dev` in host and open
 `http://127.0.0.1:1420/layout-review.html`. It supplies sample state only and never
 contacts a real host. It is not a production Vite entry point. The ordinary app loads
 index.html with the real Tauri bridge. Desktop capture instructions are in desktop/README.md.
+
+
+The account-linked host section was reviewed at 640×400 using the native renderer.
+This is sample account state, not proof of installed-host enrollment.
+
+![Desktop host linking at 640×400](screenshots/desktop-host-linked-640x400.png)

@@ -178,6 +178,14 @@ fn to_value(v: impl Serialize) -> Result<Value, String> {
 pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, String> {
     match cmd.as_str() {
         "get_state" => to_value(state(&app)),
+        "host_account_state" => to_value(app.account.as_ref().map_err(Clone::clone)?.state().await),
+        "host_enrollment_proof" => {
+            let challenge: crate::account_link::Challenge = arg(&args, "challenge")?;
+            app.account.as_ref().map_err(Clone::clone)?.allow_owner(&challenge.owner).await?;
+            to_value(crate::account_link::prove(&app.identity, challenge, &crate::win::sys::pc_name())?)
+        }
+        "host_account_install" => to_value(app.account.as_ref().map_err(Clone::clone)?.install(arg(&args, "registration")?).await?),
+        "host_account_unlink" => to_value(app.account.as_ref().map_err(Clone::clone)?.unlink().await?),
         "new_qr" => to_value(new_qr(&app)),
         "revoke" => {
             app.agent.revoke(&arg::<String>(&args, "id")?);

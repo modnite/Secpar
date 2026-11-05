@@ -14,6 +14,8 @@ pub struct App {
     pub store: Arc<Mutex<Store>>,
     pub agent: AgentHandle,
     pub fp: String,
+    pub identity: tls::Identity,
+    pub account: Result<Arc<crate::host_account::Account>, String>,
     pub outgoing: files::Outgoing,
     pub net: Arc<Mutex<net::NetStatus>>,
 }
@@ -58,7 +60,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(watch_lock(agent.clone(), ui.clone()));
     tokio::spawn(start_tray(store.clone()));
 
-    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex, outgoing, net });
+    // Account-link failure must never interrupt existing owner connections.
+    let account = crate::host_account::Account::open(&dir, &identity.fingerprint_hex);
+    if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
+    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net });
     let handler: ipc::Handler = Arc::new(move |cmd, args| Box::pin(crate::commands::dispatch(app.clone(), cmd, args)));
     ipc::serve(ipc::PIPE, handler, ui).await?;
     Ok(())

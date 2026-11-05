@@ -24,7 +24,7 @@
 - Email/password registration, verification email and sign-in **confirmed working by
   the user on 2026-11-05**. Resend sender uses accounts@mail.secpar.win.
 - Browser form origin bug fixed with same-origin referrer policy; verified with a
-  real browser. Sixteen account-service tests now include owner-isolated block lists.
+  real browser. Account-service tests include owner-isolated block lists.
 
 - Desktop Development 2 published: native account/friend management and secure
   last-pair storage, plus the compact Windows host installer. All four CI build/package
@@ -38,9 +38,10 @@
 
 ## Active implementation
 
-1. Native end-to-end account validation: the user has been asked to test Friends → Sign in in the published desktop client. Browser approval, friend codes/accept/remove/block/unblock and OS credential storage are implemented; do not mark native user validation passed without a result.
-2. Compact desktop layouts reviewed with native-rendered screenshots at 800×600 and 640×400. Host pairing/settings reviewed in the actual frontend with sample state; settings now has zero scrolling at 640×400.
-3. Last paired-computer persistence is implemented; the Windows credential-store roundtrip passed using a disposable entry. Native app sign-in and cross-process reconnect still need real-user checks.
+1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.
+2. Cryptographic host enrollment, restricted machine credentials, local Windows host linking/unlinking and heartbeat are implemented. Verification includes 22 API tests, Rust/Jose signature interoperability, a local Cloudflare/D1 runtime smoke, 14 desktop tests and four host credential tests. Not yet validated against an installed host; friend streaming remains disabled pending host permission enforcement.
+3. Compact desktop layouts reviewed with native-rendered screenshots at 800×600 and 640×400. Host pairing/settings reviewed in the actual frontend with sample state; settings now has zero scrolling at 640×400.
+4. Last paired-computer persistence is implemented; the Windows credential-store roundtrip passed using a disposable entry. Native Windows sign-in is confirmed; cross-process reconnect and Linux/macOS native sign-in still need real-user checks.
 
 ## Still required
 

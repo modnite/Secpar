@@ -1,3 +1,4 @@
+import { hostRoutes } from "./hosts";
 import { passwordRoutes, accountPage } from "./passwords";
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
 
@@ -536,7 +537,12 @@ export async function handle(
         `<!doctype html><html lang="en"><meta charset="utf-8"><title>Secpar device approval</title><h1>Authorize ${escapeHtml(row.name)}</h1><p>Signed in as ${escapeHtml(signed.handle)}.</p><p>Approve only if this code matches the one in your Secpar app: <strong>${code}</strong></p><form method="post" action="/activate"><input type="hidden" name="code" value="${code}"><button type="submit">Approve device</button></form></html>`,
       );
     }
+    const hostApi = {body,fail:deny,hash,limit:(r:Request,_env:unknown,operation:string,maximum:number)=>limit(r,env,operation,maximum)};
+    const machineResponse=await hostRoutes(request,env,null,hostApi);
+    if(machineResponse)return machineResponse;
     const me = await user(request, env);
+    const ownerHostResponse=await hostRoutes(request,env,me,hostApi);
+    if(ownerHostResponse)return ownerHostResponse;
     if (path === "/activate" && method === "POST") {
       const code = text((await body(request)).code, 8);
       if (!/^[A-Z2-9]{8}$/.test(code)) deny(400, "invalid_user_code");
@@ -831,6 +837,7 @@ export async function handle(
 export async function cleanup(env: Env) {
   const now = seconds();
   await env.DB.batch([
+    q(env, "DELETE FROM host_challenges WHERE expires<=?", now),
     q(env, "DELETE FROM email_tokens WHERE expires<=?", now),
     q(env, "DELETE FROM oauth_states WHERE expires<=?", now),
     q(env, "DELETE FROM sessions WHERE expires<=?", now),

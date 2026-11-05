@@ -39,3 +39,22 @@ The native worker pins its account origin, permits HTTPS only, refuses redirects
 ## Reproduce layout screenshots
 
 Build the separate `secpar-desktop-review` binary with `--features ui-review`. Set `EFRAME_SCREENSHOT_TO` to an absolute PNG path and `SECPAR_REVIEW_SIZE` to `640x400` or `800x600`. Set `SECPAR_REVIEW_PAGE` to `computers`, `friends` or `friends-sample`. The sample page uses fictional names and says Layout sample. Screenshot mode disables account networking and credential-store access and exits after the native renderer exports the frame. Review code is excluded from ordinary builds.
+
+
+## Linking the local Windows host
+
+Under Computers → This computer, choose Link to my account after signing in under
+Friends. An updated Secpar Host must already be running in the same Windows session.
+The host proves possession of its existing TLS key using an account-bound one-use
+challenge. The account session stays in the desktop worker. Only a separate,
+machine-scoped credential is sent to the host service and protected with Windows
+DPAPI in the existing restricted Secpar data directory.
+
+Unlink host revokes that credential and guest leases. It does not change existing
+owner pairings. Signing out of the desktop account is separate from unlinking the
+host. Friend access remains off until host permission enforcement is complete.
+Linux/macOS hosting is still in development. This update must not be installed over
+the only working remote connection as part of a development test.
+
+The native screenshot fixture `SECPAR_REVIEW_PAGE=host-sample` shows fictional
+linked state without accessing the account service or local host.

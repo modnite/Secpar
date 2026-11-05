@@ -1,9 +1,11 @@
+pub mod account_link;
 pub mod agent;
 pub mod clip;
 pub mod commands;
 pub mod engine;
 pub mod files;
 pub mod host;
+pub mod host_account;
 pub mod input;
 pub mod ipc;
 pub mod log;
@@ -103,7 +105,7 @@ async fn open_files_dir(app: AppHandle) -> Result<(), String> {
 /// Opens the project's GitHub releases page in the default browser.
 #[tauri::command]
 fn open_release(url: String) -> Result<(), String> {
-    if !url.starts_with("https://github.com/SadikTD/") {
+    if !url.starts_with("https://github.com/modnite/Secpar/releases") {
         return Err("refused".into());
     }
     std::process::Command::new("explorer.exe").arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())

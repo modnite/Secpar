@@ -1,5 +1,5 @@
 //! Account credentials remain on this worker; UI events never contain a bearer token.
-use crate::vault;
+use crate::{local_host, vault};
 use reqwest::{Client, Method, StatusCode};
 use secpar_client::control::Computer;
 use serde::Deserialize;
@@ -30,6 +30,9 @@ pub enum Action {
     Unblock(String),
 }
 pub enum Command {
+    HostRefresh,
+    LinkHost,
+    UnlinkHost,
     SignIn,
     Cancel,
     Refresh,
@@ -39,6 +42,7 @@ pub enum Command {
     ForgetComputer,
 }
 pub enum Event {
+    Host(Result<local_host::State, String>),
     SignedOut(String),
     Waiting {
         code: String,
@@ -58,6 +62,7 @@ pub enum Event {
 }
 
 pub struct Panel {
+    host: Option<Result<local_host::State, String>>,
     pub restored_computer: Option<Computer>,
     pub forgot_computer: bool,
     pub storage_note: Option<String>,
@@ -78,9 +83,22 @@ impl Panel {
             if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some() {
                 let (tx, _rx) = mpsc::channel(1);
                 let (_events, rx) = mpsc::channel(1);
-                let sample = std::env::var("SECPAR_REVIEW_PAGE").as_deref() == Ok("friends-sample");
+                let sample =
+                    std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.ends_with("-sample"));
                 let own = "00000000-0000-4000-8000-000000000001".to_string();
                 return Self {
+                    host: Some(Ok(
+                        if std::env::var("SECPAR_REVIEW_PAGE").as_deref() == Ok("host-sample") {
+                            local_host::State {
+                                computer: Some("00000000-0000-4000-8000-000000000010".into()),
+                                owner: Some(own.clone()),
+                                online: true,
+                                note: String::new(),
+                            }
+                        } else {
+                            local_host::State::default()
+                        },
+                    )),
                     restored_computer: None,
                     forgot_computer: false,
                     storage_note: None,
@@ -124,6 +142,7 @@ impl Panel {
             start(ctx)
         };
         Self {
+            host: None,
             restored_computer: None,
             forgot_computer: false,
             storage_note: None,
@@ -154,6 +173,7 @@ impl Panel {
     pub fn poll(&mut self) {
         while let Ok(event) = self.events.try_recv() {
             match event {
+                Event::Host(state) => self.host = Some(state),
                 Event::SignedOut(note) => {
                     self.user = None;
                     self.friends.clear();
@@ -184,6 +204,81 @@ impl Panel {
                 Event::ForgotComputer => self.forgot_computer = true,
                 Event::StorageNote(note) => self.storage_note = Some(note),
             }
+        }
+    }
+    pub fn host_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        ui.horizontal(|ui| {
+            ui.strong("This computer");
+            if cfg!(windows)
+                && ui
+                    .add_enabled(!self.busy, egui::Button::new("Refresh"))
+                    .clicked()
+            {
+                self.send(Command::HostRefresh);
+            }
+        });
+        match self.host.clone() {
+            Some(Ok(state)) if state.computer.is_some() => {
+                let own = self
+                    .user
+                    .as_ref()
+                    .is_some_and(|u| Some(&u.id) == state.owner.as_ref());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(if own {
+                        "Linked to your account"
+                    } else {
+                        "Host account linked"
+                    });
+                    ui.weak(if state.online { "Online" } else { "Offline" });
+                    if ui
+                        .add_enabled(!self.busy, egui::Button::new("Unlink host"))
+                        .clicked()
+                    {
+                        self.send(Command::UnlinkHost);
+                    }
+                });
+                ui.weak("Friend access is off.");
+                if !state.note.is_empty() {
+                    ui.label(state.note);
+                }
+            }
+            Some(Ok(_)) => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Host account not linked");
+                    if ui
+                        .add_enabled(
+                            !self.busy && self.user.is_some(),
+                            egui::Button::new("Link to my account"),
+                        )
+                        .clicked()
+                    {
+                        self.send(Command::LinkHost);
+                    }
+                });
+                if self.user.is_none() {
+                    ui.weak("Sign in under Friends to link this host.");
+                }
+            }
+            Some(Err(_)) => {
+                ui.horizontal_wrapped(|ui| {
+                    if cfg!(windows) {
+                        ui.label("Host unavailable or needs an update");
+                        ui.hyperlink_to(
+                            "Host downloads",
+                            "https://github.com/modnite/Secpar/releases",
+                        );
+                    } else {
+                        ui.weak("Hosting on this platform is still in development.");
+                    }
+                });
+            }
+            None => {
+                ui.weak("Checking Secpar Host…");
+            }
+        }
+        if !self.note.is_empty() {
+            ui.label(&self.note);
         }
     }
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
@@ -418,6 +513,11 @@ impl Api {
                 "authorization_pending" => "authorization_pending",
                 "slow_down" => "slow_down",
                 "session_expired" | "sign_in_required" => "Your session expired. Sign in again.",
+                "host_already_linked" => "This host is linked to another account. Unlink it first.",
+                "host_challenge_expired_or_used" => "Host linking expired. Please try again.",
+                "invalid_host_proof" => {
+                    "The host identity could not be verified. Update Secpar Host and try again."
+                }
                 "account_unavailable" => "Friend code was not found or is unavailable.",
                 "cannot_friend_yourself" => "That is your own friend code.",
                 "rate_limited" => "Too many attempts. Please wait and try again.",
@@ -428,6 +528,63 @@ impl Api {
             return Err((status, message.into()));
         }
         Ok(data)
+    }
+    async fn link_host(&self) -> Result<local_host::State, (StatusCode, String)> {
+        self.link_host_via(local_host::call).await
+    }
+    async fn link_host_via<F, Fut>(
+        &self,
+        mut host: F,
+    ) -> Result<local_host::State, (StatusCode, String)>
+    where
+        F: FnMut(&'static str, Value) -> Fut,
+        Fut: std::future::Future<Output = Result<Value, String>>,
+    {
+        if self.token.is_none() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Sign in under Friends first".into(),
+            ));
+        }
+        let state = host("host_account_state", Value::Null)
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+        serde_json::from_value::<local_host::State>(state).map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "Update Secpar Host to use account linking".into(),
+            )
+        })?;
+        let challenge = self
+            .call(Method::POST, "/v1/host-enrollment/start", None)
+            .await?;
+        let proof = host("host_enrollment_proof", json!({"challenge":challenge}))
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+        // No user session crosses the pipe. Only the one-use proof and resulting machine credential do.
+        let registration = self
+            .call(Method::POST, "/v1/host-enrollment/finish", Some(proof))
+            .await?;
+        match host("host_account_install", json!({"registration":registration})).await {
+            Ok(state) => serde_json::from_value(state)
+                .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid host link response".into())),
+            Err(_) => {
+                // Don't leave a usable cloud credential behind if the local service couldn't save it.
+                if let Some(id) = registration["computer"]
+                    .as_str()
+                    .filter(|id| path_id(id).is_ok())
+                {
+                    let _ = self
+                        .call(Method::DELETE, &format!("/v1/computers/{id}/link"), None)
+                        .await;
+                }
+                Err((
+                    StatusCode::BAD_GATEWAY,
+                    "The host could not save its account link. Refresh and try linking again."
+                        .into(),
+                ))
+            }
+        }
     }
     async fn snapshot(&self) -> Result<(User, Vec<Friend>, Vec<User>), (StatusCode, String)> {
         let user = serde_json::from_value(self.call(Method::GET, "/v1/me", None).await?)
@@ -475,6 +632,8 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             }
             let token=match vault::load(CREDENTIAL) { Ok(t)=>t,Err(note)=>{let _=events.send(Event::Message(note)).await;None} };
             let client=match Client::builder().https_only(true).redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(15)).connect_timeout(Duration::from_secs(8)).build() { Ok(c)=>c,Err(_)=>{let _=events.send(Event::SignedOut("Could not start secure account networking".into())).await;ctx.request_repaint();return} };
+            let _=events.send(Event::Host(local_host::state().await)).await;
+            ctx.request_repaint();
             let mut api=Api{client,token,base:ORIGIN.into()}; let mut pending: Option<Pending>=None;
             if api.token.is_some() {
                 match api.snapshot().await {
@@ -491,8 +650,19 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 let command=tokio::select! { command=rx.recv()=>{let Some(command)=command else {break};Some(command)}, _=timer.tick()=>None };
                 if let Some(command)=command {
                     let _=events.send(Event::Busy(true)).await;
-                    let skip_refresh=matches!(&command,Command::Remember(_)|Command::ForgetComputer);
+                    let skip_refresh=matches!(&command,Command::Remember(_)|Command::ForgetComputer|Command::HostRefresh|Command::LinkHost|Command::UnlinkHost);
                     let result: Result<String,(StatusCode,String)>= match command {
+                        Command::HostRefresh=>{let _=events.send(Event::Host(local_host::state().await)).await;let _=events.send(Event::Message(String::new())).await;Ok(String::new())},
+                        Command::LinkHost=>match api.link_host().await {
+                            Ok(state)=>{let _=events.send(Event::Host(Ok(state))).await;let _=events.send(Event::Message("Host linked. Friend access remains off.".into())).await;Ok(String::new())},
+                            Err(e)=>Err(e)
+                        },
+                        Command::UnlinkHost=>{
+                            match local_host::call("host_account_unlink",Value::Null).await {
+                                Ok(value)=>{let state=serde_json::from_value(value).map_err(|_|"Invalid host response".to_string());let _=events.send(Event::Host(state)).await;let _=events.send(Event::Message("Host unlinked".into())).await;Ok(String::new())},
+                                Err(e)=>Err((StatusCode::BAD_GATEWAY,e))
+                            }
+                        },
                         Command::SignIn=>{
                             pending=None;
                             api.token=None;
@@ -677,6 +847,97 @@ mod tests {
             assert_eq!(status, StatusCode::UNAUTHORIZED);
             assert!(note.contains("Sign in again"));
             assert!(!note.contains("do-not-display"));
+        });
+        server.join().unwrap();
+    }
+    #[test]
+    fn host_link_keeps_the_user_session_out_of_the_service() {
+        let registration = json!({"computer":"00000000-0000-4000-8000-000000000001","owner":"me","certificate_fp":"ab".repeat(32),"credential":format!("h1_{}","a".repeat(64))});
+        let (base, server) = server(vec![
+            (
+                "POST /v1/host-enrollment/start ",
+                json!({"challenge":"1".repeat(64),"owner":"me"}).to_string(),
+            ),
+            ("POST /v1/host-enrollment/finish ", registration.to_string()),
+        ]);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let api = Api {
+                base,
+                client: Client::new(),
+                token: Some("d".repeat(64)),
+            };
+            let mut calls = Vec::new();
+            let state = api
+                .link_host_via(|command, args| {
+                    assert!(!args.to_string().contains(&"d".repeat(64)));
+                    calls.push(command);
+                    std::future::ready(Ok(match command {
+                        "host_account_state" => {
+                            json!({"computer":null,"owner":null,"online":false})
+                        }
+                        "host_enrollment_proof" => {
+                            assert_eq!(args["challenge"]["owner"], "me");
+                            json!({"certificate":"public-fixture","proof":"one-use-proof"})
+                        }
+                        "host_account_install" => {
+                            assert_eq!(args["registration"], registration);
+                            json!({"computer":registration["computer"],"owner":"me","online":true})
+                        }
+                        _ => panic!("unexpected local command"),
+                    }))
+                })
+                .await
+                .unwrap();
+            assert!(state.online);
+            assert_eq!(
+                calls,
+                vec![
+                    "host_account_state",
+                    "host_enrollment_proof",
+                    "host_account_install"
+                ]
+            );
+        });
+        server.join().unwrap();
+    }
+    #[test]
+    fn failed_local_install_revokes_the_new_machine_link() {
+        let computer = "00000000-0000-4000-8000-000000000001";
+        let (base, server) = server(vec![
+            (
+                "POST /v1/host-enrollment/start ",
+                json!({"challenge":"fixture","owner":"me"}).to_string(),
+            ),
+            (
+                "POST /v1/host-enrollment/finish ",
+                json!({"computer":computer,"credential":"machine-only"}).to_string(),
+            ),
+            (
+                "DELETE /v1/computers/00000000-0000-4000-8000-000000000001/link ",
+                "{}".into(),
+            ),
+        ]);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let api = Api {
+                base,
+                client: Client::new(),
+                token: Some("d".repeat(64)),
+            };
+            let error = api
+                .link_host_via(|command, _| {
+                    std::future::ready(match command {
+                        "host_account_state" => Ok(json!({"online":false})),
+                        "host_enrollment_proof" => {
+                            Ok(json!({"certificate":"fixture","proof":"fixture"}))
+                        }
+                        "host_account_install" => Err("local-disk-error".into()),
+                        _ => panic!("unexpected command"),
+                    })
+                })
+                .await
+                .err()
+                .unwrap();
+            assert!(error.1.contains("could not save"));
         });
         server.join().unwrap();
     }

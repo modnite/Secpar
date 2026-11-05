@@ -51,3 +51,6 @@ dist-desktop/
 
 __pycache__/
 *.pyc
+
+# Local Cloudflare runtime state
+.wrangler/

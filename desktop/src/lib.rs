@@ -1,6 +1,7 @@
 mod account;
 mod audio;
 mod input;
+mod local_host;
 mod vault;
 use eframe::egui::{
     self, Color32, CursorGrab, Event as UiEvent, Key, TextureHandle, TextureOptions,
@@ -52,7 +53,7 @@ fn review_size() -> [f32; 2] {
 }
 fn initial_status() -> String {
     #[cfg(feature = "ui-review")]
-    if std::env::var("SECPAR_REVIEW_PAGE").as_deref() == Ok("friends-sample") {
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.ends_with("-sample")) {
         return "Layout sample".into();
     }
     "Ready".into()
@@ -567,6 +568,9 @@ impl eframe::App for App {
                                 }
                             });
                     });
+                    ui.add_space(16.);
+                    ui.separator();
+                    self.account.host_ui(ui);
                 }
             } else {
                 ui.centered_and_justified(|ui| {
