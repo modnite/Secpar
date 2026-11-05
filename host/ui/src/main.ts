@@ -5,8 +5,8 @@ import { devices } from "./views/devices";
 import { settings } from "./views/settings";
 import { about } from "./views/about";
 
-type Tab = "Home" | "Phones" | "Settings" | "About";
-const tabs: Tab[] = ["Home", "Phones", "Settings", "About"];
+type Tab = "Home" | "Devices" | "Settings" | "About";
+const tabs: Tab[] = ["Home", "Devices", "Settings", "About"];
 let current: Tab = "Home";
 
 const main = h("main");
@@ -30,7 +30,7 @@ async function show(t: Tab) {
       : t === "About" ? about()
       : await (async () => {
         const s = await invoke<State>("get_state");
-        return t === "Home" ? home(s) : devices(s, () => show("Phones"));
+        return t === "Home" ? home(s) : devices(s, () => show("Devices"));
       })();
   } catch {
     view = down();
@@ -42,6 +42,6 @@ document.getElementById("app")!.append(titlebar(), nav, main);
 show("Home");
 
 // The server pushes these on connect/disconnect, lock changes, and when a code was used.
-listen("devices", () => (current === "Home" || current === "Phones") && show(current));
-listen("paired", () => show(current === "Phones" ? "Phones" : "Home"));
+listen("devices", () => (current === "Home" || current === "Devices") && show(current));
+listen("paired", () => show(current === "Devices" ? "Devices" : "Home"));
 listen<{ up: boolean }>("server", () => show(current));

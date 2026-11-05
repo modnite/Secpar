@@ -4,10 +4,10 @@ const TTL = 120;
 
 function status(s: State): [string, string] {
   const n = s.devices.filter((d) => d.connected).length;
-  if (s.locked && n) return ["warn", "Locked, phone connected"];
-  if (n === 1) return ["live", "Phone connected"];
-  if (n > 1) return ["live", `${n} phones connected`];
-  return ["ok", "Ready for your phone"];
+  if (s.locked && n) return ["warn", "Locked, device connected"];
+  if (n === 1) return ["live", "Device connected"];
+  if (n > 1) return ["live", `${n} devices connected`];
+  return ["ok", "Ready"];
 }
 
 export function home(state: State): HTMLElement {

@@ -11,7 +11,7 @@ function row(d: Device, reload: () => void): HTMLElement {
     );
   };
   const rename = () => {
-    const input = h("input.text", { value: d.name, maxLength: 40, "aria-label": "Phone name" }) as HTMLInputElement;
+    const input = h("input.text", { value: d.name, maxLength: 40, "aria-label": "Device name" }) as HTMLInputElement;
     const save = async () => {
       await invoke("rename", { id: d.id, name: input.value });
       reload();
@@ -36,9 +36,9 @@ export function devices(state: State, reload: () => void): HTMLElement {
   return h(
     "section.view",
     {},
-    h("h2", {}, "Paired phones"),
+    h("h2", {}, "Paired devices"),
     state.devices.length
       ? h("ul.list", {}, ...state.devices.map((d) => row(d, reload)))
-      : h("p.empty", {}, "No phones yet. Scan the code on the Home tab with Secpar on your phone."),
+      : h("p.empty", {}, "No paired devices. Use the code or pairing link on Home."),
   );
 }

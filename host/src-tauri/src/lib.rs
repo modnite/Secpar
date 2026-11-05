@@ -171,8 +171,8 @@ pub fn run_with(extra: impl FnOnce(tauri::Builder<tauri::Wry>) -> tauri::Builder
                         let n = s["devices"].as_array().map_or(0, |d| d.iter().filter(|d| d["connected"] == true).count());
                         let tip = match n {
                             0 => "Secpar".to_string(),
-                            1 => "Secpar · 1 phone connected".to_string(),
-                            n => format!("Secpar · {n} phones connected"),
+                            1 => "Secpar · 1 device connected".to_string(),
+                            n => format!("Secpar · {n} devices connected"),
                         };
                         let _ = tray.set_tooltip(Some(tip));
                     }

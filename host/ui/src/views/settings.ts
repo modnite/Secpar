@@ -27,7 +27,7 @@ export async function settings(): Promise<HTMLElement> {
     const n = await invoke<{ upnp: boolean; public: string | null; manual: boolean; lan: string[] }>("get_net");
     netNote.textContent = !config.anywhere ? ""
       : n.upnp ? `Your router forwards connections to this PC${n.public ? ` (public address ${n.public})` : ""}.`
-      : n.manual ? `Your router didn't accept UPnP. Your phone still connects through the Secpar relay. For the fastest connection, forward TCP 48999 and UDP 48998 to ${n.lan[0] ?? "this PC"}.`
+      : n.manual ? `Your router didn't accept UPnP. Your devices can still connect through the Secpar relay. For the fastest connection, forward TCP 48999 and UDP 48998 to ${n.lan[0] ?? "this PC"}.`
       : "Asking your router…";
   };
   showNet();
