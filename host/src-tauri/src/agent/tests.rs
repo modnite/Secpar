@@ -1,5 +1,5 @@
 use super::*;
-use crate::proto::PcInfo;
+use crate::proto::{PcInfo, ClientMsg, ServerMsg};
 use crate::store::Store;
 use crate::tls::Identity;
 use futures_util::{SinkExt, StreamExt};

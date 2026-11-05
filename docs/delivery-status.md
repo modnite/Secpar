@@ -174,6 +174,15 @@
   real decoder/SurfaceView/PixelCopy test passed again after diagnostics were added.
   No physical phone installation or installed PC service change was performed.
 
+- Linux hosting branch checkpoint: extracted secpar-host-core for shared wire
+  models, TLS/WebSocket owner authentication, revocation and session handling.
+  Windows uses an adapter retaining the existing DPAPI identity and owner store.
+  Eight portable protocol tests and 14 existing Windows TLS/pairing/relay tests
+  pass (one live internet test intentionally ignored). Native Linux capture/input,
+  persistent credentials and Linux runtime checks remain to be implemented. No
+  platform package is published from this branch. Work was set aside to address
+  the user's unsuccessful Android Preview 14 playback test.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.

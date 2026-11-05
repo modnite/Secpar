@@ -17,6 +17,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+secpar-host-core = { path = "../../crates/secpar-host-core" }
 secpar-network = { path = "../../crates/secpar-network" }
 base64 = "0.23.1"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "alloc"] }
