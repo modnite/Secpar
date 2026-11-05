@@ -76,7 +76,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/secpar-target
+      CARGO_TARGET_DIR: /tmp/secpar-target
     steps:
       - uses: actions/checkout@v4
         with:
