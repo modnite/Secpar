@@ -46,3 +46,8 @@ app/.externalNativeBuild/
 crates/**/target/
 
 desktop/target/
+
+dist-desktop/
+
+__pycache__/
+*.pyc

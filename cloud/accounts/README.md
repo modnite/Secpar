@@ -8,10 +8,10 @@ Guest grants are restricted to view/audio/gamepad/keyboard/mouse/clipboard/files
 
 ## Configuration before deployment
 
-1. Decide the real HTTPS account-service origin. The example.invalid origin deliberately refuses authentication.
-2. Sign in to Cloudflare with Wrangler and create a D1 database named secpar-accounts. Replace the all-zero database id in wrangler.jsonc.
-3. Create a GitHub OAuth application with callback URL `https://YOUR-ACCOUNT-ORIGIN/auth/callback`. Set GITHUB_CLIENT_ID in the Worker configuration and GITHUB_CLIENT_SECRET as a Wrangler secret. GitHub is the initial identity provider; no passwords or GitHub access tokens are retained by Secpar.
-4. Generate a P-256 private signing JWK and install it as the GRANT_PRIVATE_JWK Worker secret. The service publishes only its public key at /.well-known/jwks.json. Do not commit private keys or .dev.vars.
+1. The configured account-service origin is https://accounts.secpar.win, on the user's secpar.win domain.
+2. Save a scoped Cloudflare API token in the Secpar repository's CLOUDFLARE_API_TOKEN Actions secret. The manual Deploy Secpar Cloudflare services workflow finds the account owning secpar.win, creates/reuses only secpar-accounts, generates a deployment configuration and applies its migrations. The checked-in all-zero database id is a placeholder, not a deployment target.
+3. Create a GitHub OAuth application with callback URL `https://YOUR-ACCOUNT-ORIGIN/auth/callback`. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET as Worker secrets or persistent configuration; keep_vars preserves them on later deployments. GitHub is the initial identity provider; no passwords or GitHub access tokens are retained by Secpar.
+4. The deployment workflow generates a P-256 private signing JWK once if GRANT_PRIVATE_JWK is missing. It uploads it straight to Cloudflare's secret store without logging or committing it, and preserves the key on subsequent deploys. The service publishes only its public key at /.well-known/jwks.json. Do not commit private keys or .dev.vars.
 5. Apply migrations to the intended database, validate the deployed origin/provider configuration, then deploy. Local test fixtures must not be used as production sessions or signing keys.
 
 The hourly maintenance trigger removes expired OAuth/device codes, sessions, rate-limit buckets and old connection requests. Device and OAuth endpoints have IP-based request limits; provider/API calls have timeouts. Public account signup still needs production abuse monitoring and a deployment review.

@@ -25,3 +25,7 @@ The portable client has real loopback TLS/WebSocket/UDP tests for pairing/reconn
 These are development checks, not a claim that all hardware/platform combinations are supported. The first Windows window was launched, but visual automation could not capture it (Windows capture helper timed out); visual review remains outstanding. Real host-to-client sessions and physical mouse-grab behavior require validation on each target OS. TURN allocation against the production relay has not been tested with this desktop client.
 
 Remaining client work: hardware decoding, audio/video timing and jitter handling, IME and full physical-key coverage, credential-store persistence, native signed packaging and live network/performance testing. Linux/macOS hosting, the unified host UI, concurrent guest sessions and account/friend features are separate unfinished milestones. This source is not a new stable release or a replacement for Preview 10.
+
+## Development packages
+
+Windows provides a standalone x64 executable. Linux provides an x64 archive with a user-level launcher installer and the triangle icon; extract it and run `install-user.sh` if you want a desktop entry. The Linux binary is built on the OMV runner, so older distributions may need a source build. macOS provides separate Apple Silicon and Intel app bundles for macOS 13 or later, with the triangle Dock icon. Mac builds are ad hoc signed, not notarized; Windows builds are unsigned. These are client development packages, not unified host/client installers.

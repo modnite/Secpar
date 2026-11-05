@@ -32,13 +32,13 @@ jobs:
             rustup: C:/actions-runner-secpar/_tool/rustup
             cargo: C:/actions-runner-secpar/_tool/cargo
             target: D:/Secpar-CI/target
-            artifact: D:/Secpar-CI/target/debug/secpar-desktop.exe
+            artifact: dist-desktop/Secpar-Desktop-development-windows-x64.exe
             runner: [self-hosted, Windows, X64, secpar]
           - platform: Linux
             rustup: /opt/secpar-runner/_work/_tool/rustup
             cargo: /opt/secpar-runner/_work/_tool/cargo
             target: /opt/secpar-runner/_work/_tool/target
-            artifact: Secpar-Desktop-development-linux-x64.tar.gz
+            artifact: dist-desktop/Secpar-Desktop-development-linux-x64.tar.gz
             runner: [self-hosted, Linux, X64, secpar]
     runs-on: ${{ matrix.runner }}
     env:
@@ -66,7 +66,10 @@ jobs:
             cargo test --locked --manifest-path $manifest
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          cargo build --locked --manifest-path desktop/Cargo.toml
+          $env:RUSTFLAGS='-C target-feature=+crt-static'
+          cargo build --release --locked --manifest-path desktop/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python desktop/package.py windows
           exit $LASTEXITCODE
       - name: Test protocol on Linux
         if: runner.os == 'Linux'
@@ -75,8 +78,8 @@ jobs:
           for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
             cargo test --locked --manifest-path "$manifest"
           done
-          cargo build --locked --manifest-path desktop/Cargo.toml
-          tar -czf Secpar-Desktop-development-linux-x64.tar.gz -C "$CARGO_TARGET_DIR/debug" secpar-desktop -C "$GITHUB_WORKSPACE/desktop" README.md
+          cargo build --release --locked --manifest-path desktop/Cargo.toml
+          python3 desktop/package.py linux
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
@@ -84,8 +87,16 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
   macos:
-    name: protocol (macOS, GitHub-hosted)
-    runs-on: macos-latest
+    name: protocol (macOS ${{ matrix.arch }}, GitHub-hosted)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     env:
       CARGO_TARGET_DIR: /tmp/secpar-target
@@ -98,11 +109,11 @@ jobs:
           for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
             cargo test --locked --manifest-path "$manifest"
           done
-          cargo build --locked --manifest-path desktop/Cargo.toml
-          tar -czf Secpar-Desktop-development-macos-arm64.tar.gz -C "$CARGO_TARGET_DIR/debug" secpar-desktop -C "$GITHUB_WORKSPACE/desktop" README.md
+          cargo build --release --locked --manifest-path desktop/Cargo.toml
+          python3 desktop/package.py macos
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
-          name: Secpar-Desktop-development-macOS-arm64
-          path: Secpar-Desktop-development-macos-arm64.tar.gz
+          name: Secpar-Desktop-development-macOS-${{ matrix.arch }}
+          path: dist-desktop/Secpar-Desktop-development-macos-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
