@@ -60,7 +60,8 @@
   before starting because GitHub could not acquire a runner (capacity annotations).
   Native Apple Silicon execution is still unverified. Normal CI now uses native
   Intel protocol tests plus an ARM cross build; dedicated native ARM checks remain
-  available manually. Run 42082490182 is still finishing its Mac jobs as of this record.
+  available manually. All four normal CI targets passed in run 42082490182. Account CI including
+  the workerd/D1 smoke passed again in run 42084030014.
 - The published host is an unsigned debug installer and was not installed. Native
   host enrollment needs a real-user check with backup access available; do not
   interrupt the user's sole remote connection to perform that check.
