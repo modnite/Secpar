@@ -92,8 +92,21 @@
 - Tray exit discoverability fix: the misleading "Hide from tray" action is now
   "Quit Secpar", separated from Open Secpar. Explicit app.exit(0) bypasses the
   close-window exit guard; the separate Windows hosting service keeps running.
-  Build/package verification is in progress. No installed process/service is
-  stopped to test this change.
+  Host Preview 12 installer built successfully and published with matching
+  asset hashes. No installed process/service was stopped to test this change.
+
+- Android scanner startup fix (Preview 12): recovered the Galaxy S23 crash log
+  and reproduced the identical exception in the signed Preview 11 APK on the
+  isolated emulator. R8 removed the manifest-discovered ML Kit registrars' public
+  constructors. Added a targeted constructor keep rule and a ZXing fallback for
+  native detector initialization failures. The minified release now opens and
+  analyzes camera frames, survives two reopen cycles, handles permission denial,
+  and recovers after permission is granted. No native-init fallback or crash was
+  logged during those checks; all 177 unit tests passed. Physical Galaxy S23
+  scanning still needs a user check. No physical phone or installed host updated.
+  A release instrumentation attempt could not run because AndroidX Test calls a
+  tracing method optimized out of the app; release verification used the actual
+  UI/camera instead. No instrumentation-only keep rules are shipped.
 
 ## Active implementation
 
@@ -131,7 +144,8 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 
 - Repository: https://github.com/modnite/Secpar
 - Desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
-- Android Preview 11: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.11
+- Android Preview 12: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.12
+- Host Preview 12 (tray Quit): https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-host-preview.12
 - Previous desktop development 3: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.3
 - Previous desktop development 2: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.2
 - Android/host Preview 10: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.10

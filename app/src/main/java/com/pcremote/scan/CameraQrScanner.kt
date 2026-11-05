@@ -1,6 +1,8 @@
 package com.pcremote.scan
 
 import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.Tasks
+import android.util.Log
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.ZoomSuggestionOptions
@@ -13,15 +15,19 @@ class CameraQrScanner(worker: Executor, zoom: (Float) -> Boolean = { false }) : 
     private val worker = worker
     private val requestZoom = zoom
     private var misses = 0
-    private val scanner = BarcodeScanning.getClient(BarcodeScannerOptions.Builder()
+    private val scanner = try { BarcodeScanning.getClient(BarcodeScannerOptions.Builder()
         .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
         .enableAllPotentialBarcodes()
         .setZoomSuggestionOptions(ZoomSuggestionOptions.Builder { zoom(it) }.setMaxSupportedZoomRatio(3f).build())
-        .build())
+        .build()) } catch (error: RuntimeException) {
+        Log.w("CameraQrScanner", "Native detector unavailable; using QR fallback", error)
+        null
+    }
 
     data class Result(val text: String?, val potential: Boolean)
 
-    fun process(image: InputImage, fallback: () -> String?): Task<Result> = scanner.process(image).continueWith(worker) { task ->
+    fun process(image: InputImage, fallback: () -> String?): Task<Result> =
+        (scanner?.process(image) ?: Tasks.forResult(emptyList<Barcode>())).continueWith(worker) { task ->
         val codes = if (task.isSuccessful) task.result else emptyList()
         val native = codes.firstNotNullOfOrNull { it.rawValue?.takeIf(String::isNotBlank) }
         val text = native ?: fallback()
@@ -39,5 +45,5 @@ class CameraQrScanner(worker: Executor, zoom: (Float) -> Boolean = { false }) : 
         Result(text, codes.isNotEmpty())
     }
 
-    override fun close() = scanner.close()
+    override fun close() { scanner?.close() }
 }
