@@ -9,18 +9,26 @@ const LATEST: &str = "https://api.github.com/repos/modnite/Secpar/releases/lates
 /// base64 of the minisign public key file.
 const PUBKEY: &str = include_str!("../updater.pub");
 
-pub async fn latest_release() -> Result<Value, String> {
-    reqwest::Client::new()
-        .get(LATEST)
-        .header("User-Agent", "secpar-host")
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| e.to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())
+pub async fn latest_release() -> Result<Option<Value>, String> {
+    stable_release_from(LATEST).await
+}
+
+async fn stable_release_from(url: &str) -> Result<Option<Value>, String> {
+    let mut result = reqwest::Client::builder().timeout(std::time::Duration::from_secs(12))
+        .build().map_err(|_| "Could not start update check")?
+        .get(url).header("User-Agent", "secpar-host")
+        .header("Accept", "application/vnd.github+json").send().await
+        .map_err(|_| "Could not reach GitHub")?;
+    // GitHub's stable endpoint deliberately excludes development prereleases.
+    // No stable release is a valid state, not a connectivity failure.
+    if result.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
+    if !result.status().is_success() { return Err("GitHub update check failed".into()); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = result.chunk().await.map_err(|_| "Incomplete update response")? {
+        if bytes.len() + chunk.len() > 256 * 1024 { return Err("Invalid update response".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| "Invalid update response".into())
 }
 
 /// The release's version and the download URLs of its `…-setup.exe` and `…-setup.exe.sig`.
@@ -49,7 +57,7 @@ async fn download(url: &str) -> Result<Vec<u8>, String> {
 
 /// Installs a newer release if there is one; returns its version once the installer started.
 pub async fn check_and_install(dir: &Path) -> Result<Option<String>, String> {
-    let release = latest_release().await?;
+    let Some(release) = latest_release().await? else { return Ok(None) };
     let Some((version, exe_url, sig_url)) = pick_assets(&release) else { return Ok(None) };
     if !crate::commands::is_newer(&version, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
@@ -74,6 +82,15 @@ pub async fn check_and_install(dir: &Path) -> Result<Option<String>, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn no_stable_release_is_not_a_network_failure() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({"message":"Not Found"}))).mount(&server).await;
+        assert!(stable_release_from(&server.uri()).await.unwrap().is_none());
+    }
 
     #[test]
     fn picks_installer_and_signature() {

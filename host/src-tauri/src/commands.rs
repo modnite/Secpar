@@ -155,15 +155,18 @@ pub struct UpdateView {
     current: String,
     latest: String,
     newer: bool,
+    preview: bool,
     url: String,
 }
 
 async fn check_update() -> Result<UpdateView, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let v = crate::update::latest_release().await?;
+    let Some(v) = crate::update::latest_release().await? else {
+        return Ok(UpdateView { current, latest: String::new(), newer: false, preview: true, url: "https://github.com/modnite/Secpar/releases".into() });
+    };
     let latest = v["tag_name"].as_str().unwrap_or_default().to_string();
     let url = v["html_url"].as_str().unwrap_or("https://github.com/modnite/Secpar/releases").to_string();
-    Ok(UpdateView { newer: is_newer(&latest, &current), current, latest, url })
+    Ok(UpdateView { newer: is_newer(&latest, &current), preview: false, current, latest, url })
 }
 
 fn arg<T: serde::de::DeserializeOwned>(args: &Value, k: &str) -> Result<T, String> {

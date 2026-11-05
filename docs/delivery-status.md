@@ -43,6 +43,10 @@
 - Host-enrollment backend deployed successfully (run 42079405866); account CI passed
   (42079362570). Native desktop/host packages are being prepared for Development 3.
 
+- Update checks now recognize GitHub's expected “no stable release” response and
+  offer development downloads, rather than reporting a connection failure. Silent
+  updates still require a signed stable release; prereleases are not auto-installed.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.

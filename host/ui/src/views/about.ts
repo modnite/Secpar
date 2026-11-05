@@ -8,7 +8,10 @@ export function about(): HTMLElement {
     result.textContent = "Checking…";
     try {
       const u = await invoke<Update>("check_update");
-      if (u.newer) {
+      if (u.preview) {
+        result.replaceChildren("No stable release yet. ",
+          h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); invoke("open_release", { url: u.url }); } }, "Development downloads"));
+      } else if (u.newer) {
         result.replaceChildren(`Version ${u.latest.replace(/^v/, "")} is available. `,
           h("a", { href: "#", onclick: (e: Event) => { e.preventDefault(); invoke("open_release", { url: u.url }); } }, "What's new"));
       } else {

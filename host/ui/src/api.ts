@@ -25,7 +25,7 @@ export interface Config {
   allow_files: boolean; allow_clip: boolean; anywhere: boolean; files_dir: string;
 }
 export interface Display { id: string; name: string; primary: boolean }
-export interface Update { current: string; latest: string; newer: boolean; url: string }
+export interface Update { current: string; latest: string; newer: boolean; preview: boolean; url: string }
 
 /** Tiny element builder: h("div.card", {onclick}, child, "text"). */
 export function h(tag: string, props: Record<string, unknown> = {}, ...kids: (Node | string | null | false)[]): HTMLElement {

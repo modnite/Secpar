@@ -6,6 +6,7 @@ if(cmd==='new_qr')return {link:'',svg:'<svg xmlns="http://www.w3.org/2000/svg" v
 if(cmd==='get_config')return {config:{autostart:true,display:'',max_quality:'auto',allow_files:true,allow_clip:true,anywhere:false,files_dir:'Downloads'},displays:[{id:'1',name:'Display 1',primary:true}]};
 if(cmd==='get_net')return {upnp:false,public:null,manual:false,lan:[]};
 if(cmd==='set_config')return null;
+if(cmd==='check_update')return {current:'3.0.3',latest:'',newer:false,preview:true,url:'https://github.com/modnite/Secpar/releases'};
 throw Error('Unavailable in layout review');
 }},event:{listen:async()=>()=>{}},window:{getCurrentWindow:()=>({minimize:async()=>{},close:async()=>{}})}};
 </script><script type="module" src="/src/main.ts"></script></html>
