@@ -26,3 +26,6 @@ jobs:
         working-directory: cloud/accounts
       - run: npm test
         working-directory: cloud/accounts
+      - name: Exercise the real Worker runtime and D1 enrollment
+        run: npm run test:runtime
+        working-directory: cloud/accounts

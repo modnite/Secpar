@@ -47,6 +47,10 @@
   offer development downloads, rather than reporting a connection failure. Silent
   updates still require a signed stable release; prereleases are not auto-installed.
 
+- Real workerd/D1 enrollment regression test added to account CI and deployment
+  checks. Test tools upgraded after an audit; all 22 tests/type checks/runtime
+  smoke passed locally and npm audit reports zero vulnerabilities.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.

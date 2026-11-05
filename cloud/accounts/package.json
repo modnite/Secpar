@@ -6,7 +6,8 @@
     "test": "vitest run",
     "check": "tsc --noEmit",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test:runtime": "node test/runtime-smoke.mjs"
   },
   "dependencies": {
     "jose": "^6.0.0"
@@ -14,9 +15,11 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261103.1",
     "@types/node": "^22.0.0",
+    "esbuild": "0.28.2",
+    "jsonc-parser": "^3.3.1",
+    "miniflare": "5.20261103.0-beta",
     "typescript": "^5.6.0",
-    "vitest": "^3.2.0",
-    "wrangler": "^4.40.0",
-    "jsonc-parser": "^3.3.1"
+    "vitest": "5.1.0",
+    "wrangler": "^4.40.0"
   }
 }
