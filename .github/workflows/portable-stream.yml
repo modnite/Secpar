@@ -11,14 +11,36 @@ on:
       - 'docs/prs-vectors.json'
       - '.github/workflows/portable-stream.yml'
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  protocol:
+  desktop:
+    # Fork code is never scheduled on the personal desktop or OMV server.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: protocol (${{ matrix.platform }}, self-hosted)
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - platform: Windows
+            runner: [self-hosted, Windows, X64, secpar]
+          - platform: Linux
+            runner: [self-hosted, Linux, X64, secpar]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --manifest-path crates/secpar-stream/Cargo.toml
+  macos:
+    name: protocol (macOS, GitHub-hosted)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked --manifest-path crates/secpar-stream/Cargo.toml

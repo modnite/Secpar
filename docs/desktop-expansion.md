@@ -59,3 +59,11 @@ Accounts require a Secpar-controlled backend. The original project's public rend
 Do not label a platform supported until a real host/client session has passed end-to-end tests on that OS. For each combination test LAN and remote routing, resize/multi-monitor behavior, keyboard/mouse capture and escape, audio, reconnect, disconnect cleanup and permissions. Multiplayer additionally needs simultaneous physical controllers, guest revocation and packet loss tests. Native platform testing and signed distribution remain required before public stable releases.
 
 This document and the portable stream extraction are the first foundation milestone. They do not add desktop client, Linux/macOS host or account functionality to Preview 10.
+
+## CI runners
+
+The portable protocol workflow uses repository-specific self-hosted runners on the Windows desktop (`secpar-desktop-windows`) and OMV server (`secpar-omv-linux`), selected with the additional `secpar` label. macOS uses GitHub's `macos-latest` runner. These are separate runner installations from Dockless, with separate working folders and credentials.
+
+The Windows runner lives at `C:\actions-runner-secpar` and runs through the `Secpar-GitHub-Runner` scheduled task at user sign-in. It is not available while the desktop is signed out. The Linux runner lives at `/opt/secpar-runner` and runs as `ghrunner` through `actions.runner.modnite-Secpar.secpar-omv-linux.service`, enabled at boot.
+
+External fork pull requests skip the self-hosted jobs and run the macOS check. GitHub approval is required for workflow runs from all external contributors, including returning contributors. Before approving an outside workflow, review its changes: self-hosted runner protections in a workflow can themselves be modified by a pull request. Personal runners must not execute unreviewed external code.
