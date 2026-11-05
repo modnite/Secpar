@@ -1,7 +1,7 @@
 """Package existing native builds; does not install or launch them."""
 import os
 from pathlib import Path
-import platform
+import struct
 import plistlib
 import shutil
 import subprocess
@@ -71,7 +71,11 @@ with tempfile.TemporaryDirectory(prefix="secpar-package-") as temporary:
                 raise RuntimeError("Bundle requires an unbundled library: " + dependency)
         subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app.parent)], check=True)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app.parent)], check=True)
-        arch = "arm64" if platform.machine() == "arm64" else "x64"
+        # Derive the label from the packaged Mach-O, including cross builds.
+        magic, cpu = struct.unpack("<II", binary.read_bytes()[:8])
+        if magic != 0xfeedfacf or cpu not in (0x1000007, 0x100000c):
+            raise RuntimeError("Unexpected Mac executable architecture")
+        arch = "arm64" if cpu == 0x100000c else "x64"
         name = f"Secpar-Desktop-development-macos-{arch}.tar.gz"
     with tarfile.open(DIST / name, "w:gz") as archive:
         archive.add(stage, arcname="Secpar")
