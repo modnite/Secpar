@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity android:name="com.pcremote.review.VideoReviewActivity" android:exported="false" />
         <activity android:name="com.pcremote.review.LayoutReviewActivity" android:exported="true" />
     </application>
 </manifest>

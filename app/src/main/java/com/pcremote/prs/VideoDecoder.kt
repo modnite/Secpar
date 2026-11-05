@@ -7,12 +7,13 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import android.view.Choreographer
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
 
 /**
- * Hardware MediaCodec in async mode, tuned for latency: low-latency keys, every output rendered the
- * moment it's ready. Configures itself on the first keyframe (parameter sets become csd buffers).
+ * Hardware MediaCodec with bounded input and display-paced output. Configures itself on the first
+ * keyframe (parameter sets become csd buffers). Obsolete decoded frames never queue on the surface.
  * [onError] fires once if the decoder can't handle the stream (caller falls back to another codec).
  */
 class VideoDecoder(
@@ -27,14 +28,22 @@ class VideoDecoder(
     private val thread = HandlerThread("pcr-video", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
     private val lock = Any()
-    private val frames = ArrayDeque<Frame>()
+    private val frames = VideoInputQueue(fps)
+    private val pictures = VideoOutputQueue(fps)
     private val inputs = ArrayDeque<Int>()
-    private var mc: MediaCodec? = null
+    @Volatile private var mc: MediaCodec? = null
+    private var configureScheduled = false
+    private var choreographer: Choreographer? = null
+    private var renderPosted = false
+    private val feedPosted = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var dead = false
 
     /** Average time from frame arrival to render, ms (for REPORT and stats). */
     @Volatile var decodeMs = 0; private set
     private var decodeAvgUs = 0.0
+    private var outputDrops = 0
+    private var presented = 0
+    private var statsAtNs = System.nanoTime()
 
     /** Called on each rendered frame with the frame's arrival time (our clock, µs). */
     @Volatile var onRendered: ((receivedUs: Long) -> Unit)? = null
@@ -42,20 +51,23 @@ class VideoDecoder(
     fun submit(f: Frame) {
         if (dead) return
         synchronized(lock) {
-            if (mc == null) {
-                if (!f.header.keyframe) { onNeedKeyframe(); return }
+            val admission = frames.offer(f, System.nanoTime() / 1000)
+            if (admission.requestKey) onNeedKeyframe()
+            if (!admission.accepted) return
+            if (mc == null && !configureScheduled) {
+                configureScheduled = true
                 handler.post { configure(f) }
             }
-            frames.addLast(f)
-            // falling behind: decoding stale frames only adds latency, so restart from a keyframe
-            if (frames.size > 8) { frames.clear(); onNeedKeyframe(); return }
         }
-        handler.post(::feed)
+        if (feedPosted.compareAndSet(false, true)) handler.post { feedPosted.set(false); feed() }
     }
 
     fun release() {
         dead = true
         handler.post {
+            choreographer?.removeFrameCallback(renderFrame)
+            pictures.clear().forEach { picture -> runCatching { mc?.releaseOutputBuffer(picture.index, false) } }
+            synchronized(lock) { frames.clear(); inputs.clear() }
             runCatching { mc?.stop() }; runCatching { mc?.release() }; mc = null
             thread.quitSafely()
         }
@@ -68,8 +80,10 @@ class VideoDecoder(
         val fmt = MediaFormat.createVideoFormat(mime, width, height).apply {
             if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             setInteger(MediaFormat.KEY_PRIORITY, 0)
+            setInteger(MediaFormat.KEY_FRAME_RATE, fps)
+            if (Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, 1)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, 1 shl 20))
-            if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+            if (Build.VERSION.SDK_INT >= 30) setFloat(MediaFormat.KEY_OPERATING_RATE, fps.toFloat())
             CodecPicker.vendorLowLatencyKeys(info.name).forEach { (k, v) -> setInteger(k, v) }
             csd(first.data, codec).forEachIndexed { i, b -> setByteBuffer("csd-$i", ByteBuffer.wrap(b)) }
         }
@@ -86,6 +100,10 @@ class VideoDecoder(
             }
             c.start()
             mc = c
+            choreographer = Choreographer.getInstance()
+            if (Build.VERSION.SDK_INT >= 30) runCatching {
+                surface.setFrameRate(fps.toFloat(), Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
+            }
             Log.i(TAG, "decoder ${info.name} $codec ${width}x$height@$fps lowLatency=${info.lowLatency}")
         } catch (e: Exception) {
             fail("decoder ${info.name}: ${e.message}")
@@ -96,13 +114,21 @@ class VideoDecoder(
         val c = mc ?: return
         while (true) {
             val (idx, f) = synchronized(lock) {
-                if (inputs.isEmpty() || frames.isEmpty()) return
-                inputs.removeFirst() to frames.removeFirst()
+                if (dead || inputs.isEmpty()) return
+                val nowUs = System.nanoTime() / 1000
+                val frame = frames.poll(nowUs)
+                if (frames.needsKey(nowUs)) onNeedKeyframe()
+                if (frame == null) return
+                inputs.removeFirst() to frame
             }
             try {
-                val buf = c.getInputBuffer(idx) ?: continue
+                val buf = c.getInputBuffer(idx) ?: return fail("decoder input buffer unavailable")
                 buf.clear()
-                if (f.data.size > buf.remaining()) { c.queueInputBuffer(idx, 0, 0, 0, 0); onNeedKeyframe(); continue }
+                if (f.data.size > buf.remaining()) {
+                    c.queueInputBuffer(idx, 0, 0, 0, 0)
+                    synchronized(lock) { if (frames.invalidate(System.nanoTime() / 1000)) onNeedKeyframe() }
+                    continue
+                }
                 buf.put(f.data)
                 c.queueInputBuffer(idx, 0, f.data.size, f.receivedUs, if (f.header.keyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
             } catch (e: IllegalStateException) { return fail("decoder input: ${e.message}") }
@@ -111,17 +137,20 @@ class VideoDecoder(
 
     private val callback = object : MediaCodec.Callback() {
         override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
+            if (dead) return
             synchronized(lock) { inputs.addLast(index) }
             feed()
         }
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-            runCatching { codec.releaseOutputBuffer(index, true) }
-            if (info.presentationTimeUs > 0) {
-                val took = (System.nanoTime() / 1000 - info.presentationTimeUs).coerceIn(0, 1_000_000)
-                decodeAvgUs += (took - decodeAvgUs) / 16
-                decodeMs = (decodeAvgUs / 1000).toInt()
-                onRendered?.invoke(info.presentationTimeUs)
+            if (dead) { runCatching { codec.releaseOutputBuffer(index, false) }; return }
+            pictures.offer(VideoOutputQueue.Picture(index, info.presentationTimeUs))?.let {
+                outputDrops++
+                runCatching { codec.releaseOutputBuffer(it.index, false) }
+            }
+            if (!renderPosted) {
+                renderPosted = true
+                choreographer?.postFrameCallback(renderFrame)
             }
         }
 
@@ -131,6 +160,38 @@ class VideoDecoder(
         }
 
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {}
+    }
+
+    private val renderFrame = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            renderPosted = false
+            if (dead) return
+            pictures.poll(frameTimeNanos)?.let { picture ->
+                try {
+                    mc?.releaseOutputBuffer(picture.index, frameTimeNanos)
+                    presented++
+                    if (picture.receivedUs > 0) {
+                        val took = (System.nanoTime() / 1000 - picture.receivedUs).coerceIn(0, 1_000_000)
+                        decodeAvgUs += (took - decodeAvgUs) / 16
+                        decodeMs = (decodeAvgUs / 1000).toInt()
+                        onRendered?.invoke(picture.receivedUs)
+                    }
+                    val now = System.nanoTime()
+                    if (now - statsAtNs >= 5_000_000_000L) {
+                        val shownFps = presented * 1_000_000_000.0 / (now - statsAtNs)
+                        val resyncs = synchronized(lock) { frames.resyncs }
+                        Log.i(TAG, "pacing shownFps=${shownFps.toInt()} queueDrops=$outputDrops inputResyncs=$resyncs decodeMs=$decodeMs")
+                        statsAtNs = now
+                        presented = 0
+                        outputDrops = 0
+                    }
+                } catch (error: IllegalStateException) { fail("decoder render: ${error.message}") }
+            }
+            if (!dead && !pictures.isEmpty()) {
+                renderPosted = true
+                choreographer?.postFrameCallback(this)
+            }
+        }
     }
 
     private fun fail(why: String) {

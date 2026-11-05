@@ -41,3 +41,8 @@ Do not offer a separate desktop client download alongside a "combined" installer
 or promote client-only Linux/macOS builds as the requested finished applications.
 Internal UI/service binaries and CI artifacts are implementation details; the user
 must see one Secpar app per OS. Android has one client-only APK.
+
+The user has one Windows PC and a CachyOS laptop for testing. The OMV box is a
+build runner/server, not a streaming target. Prioritize Linux hosting next so
+Windows↔Linux and Linux↔Linux can be tested; macOS must also eventually support
+both roles in its one application. CachyOS desktop/session type is not yet known.

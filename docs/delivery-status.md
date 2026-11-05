@@ -140,8 +140,7 @@
   There must be ONE application/package per desktop OS with both roles; Android
   stays client-only and connects to those same desktop hosts. Background service
   binaries are internal implementation details, not separate user-facing apps.
-  Windows/Linux/Mac Intel CI passed in run 42105758113; ARM cross-build was still
-  running at the last check. Those role-limited Linux/Mac artifacts stay internal
+  All four platform CI jobs passed in run 42105758113, including the ARM cross-build. Those role-limited Linux/Mac artifacts stay internal
   until their hosting implementations are available. The Windows installer was
   unpacked and checked, never installed; no active service was restarted. Static
   CRT/x64 PE checks and seven host command tests passed.
@@ -151,6 +150,22 @@
   isolated emulator. On 2026-11-05, the user confirmed that Preview 13 reads
   a fresh QR code and completes pairing on the Galaxy S23. The built-in scanner
   path is now physically verified; no external Camera app is required for this check.
+
+- Android video pacing work (Preview 14): the user reports periodic video slowdown
+  and catch-up while audio stays synchronized, with Moonlight on the laptop smooth.
+  Read-only S23 logs show c2.qti.hevc.decoder.low_latency at 1920×1080/120fps.
+  Identified that every decoded picture was immediately sent to the surface and
+  overflow discarded compressed frames without gating dependent P frames until
+  a new keyframe. Added a two-picture vsync-paced output queue, a time-bounded input
+  queue with keyframe recovery, display frame-rate hints and a realistic codec
+  operating-rate hint. Audio and the host engine are unchanged. Eight new queue
+  tests pass (187 total), and a real MediaCodec/SurfaceView instrumented test feeds
+  120fps synthetic input and verifies the decoded blue picture via PixelCopy.
+  This validates the path, not real S23 smoothness; physical comparison is pending.
+- Test topology clarified: one Windows PC; CachyOS laptop is the Linux test target.
+  OMV is not a streaming target. Linux hosting is the next desktop priority, and
+  macOS also needs both roles in its single application. Do not publish separate
+  client-only desktop products to meet this request.
 
 ## Active implementation
 
