@@ -25,8 +25,8 @@ jobs:
       matrix:
         include:
           - platform: Windows
-            rustup: D:/Secpar-CI/rustup
-            cargo: D:/Secpar-CI/cargo
+            rustup: C:/actions-runner-secpar/_tool/rustup
+            cargo: C:/actions-runner-secpar/_tool/cargo
             target: D:/Secpar-CI/target
             runner: [self-hosted, Windows, X64, secpar]
           - platform: Linux

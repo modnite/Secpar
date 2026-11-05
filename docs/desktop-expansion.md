@@ -68,4 +68,4 @@ The Windows runner lives at `C:\actions-runner-secpar` and runs through the `Sec
 
 External fork pull requests skip the self-hosted jobs and run the macOS check. GitHub approval is required for workflow runs from all external contributors, including returning contributors. Before approving an outside workflow, review its changes: self-hosted runner protections in a workflow can themselves be modified by a pull request. Personal runners must not execute unreviewed external code.
 
-Self-hosted CI uses dedicated Rust toolchains and caches: `D:/Secpar-CI` on Windows and `/opt/secpar-runner/_work/_tool` on Linux. CI must not update the desktop user's normal Rust toolchain.
+Self-hosted CI uses dedicated Rust toolchains and caches: `C:/actions-runner-secpar/_tool` for the Windows Rust toolchain and `D:/Secpar-CI/target` for Windows build output (D: uses exFAT, which cannot hold Rustup executable links) and `/opt/secpar-runner/_work/_tool` on Linux. CI must not update the desktop user's normal Rust toolchain.
