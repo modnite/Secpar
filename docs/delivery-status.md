@@ -41,7 +41,7 @@
   keyboard navigation reached device 12 with main scroll remaining zero. Settings
   still has zero overflow at 640×400.
 - Host-enrollment backend deployed successfully (run 42079405866); account CI passed
-  (42079362570). Native desktop/host packages are being prepared for Development 3.
+  (42079362570). Development 3 is published (see delivery links below).
 
 - Update checks now recognize GitHub's expected “no stable release” response and
   offer development downloads, rather than reporting a connection failure. Silent
@@ -50,6 +50,20 @@
 - Real workerd/D1 enrollment regression test added to account CI and deployment
   checks. Test tools upgraded after an audit; all 22 tests/type checks/runtime
   smoke passed locally and npm audit reports zero vulnerabilities.
+
+- Development 3 published with six verified public assets: Windows/Linux/Mac Intel
+  clients built from 15903ea, ARM client cross-built from b4cb939 (same app/library
+  source), and Windows host installer from a9fa7f9. All download HEADs returned 200;
+  sizes/GitHub SHA-256 digests match local files. Windows CRT/icon checks and Linux/
+  Mac archive, architecture, bundle-version/signature-resource checks passed.
+- ARM fallback cross-build 42082328506 passed. Native ARM run 42079362595 failed
+  before starting because GitHub could not acquire a runner (capacity annotations).
+  Native Apple Silicon execution is still unverified. Normal CI now uses native
+  Intel protocol tests plus an ARM cross build; dedicated native ARM checks remain
+  available manually. Run 42082490182 is still finishing its Mac jobs as of this record.
+- The published host is an unsigned debug installer and was not installed. Native
+  host enrollment needs a real-user check with backup access available; do not
+  interrupt the user's sole remote connection to perform that check.
 
 ## Active implementation
 
@@ -86,7 +100,8 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 ## Delivery links
 
 - Repository: https://github.com/modnite/Secpar
-- Desktop development 2: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.2
+- Desktop development 3: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.3
+- Previous desktop development 2: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.2
 - Android/host Preview 10: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.10
 - Account sign-in: https://accounts.secpar.win/auth/sign-in
 
