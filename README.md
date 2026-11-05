@@ -22,6 +22,10 @@ Control your Windows PC from your Android phone, at home or from anywhere. You c
 
 Both apps update themselves.
 
+## Desktop expansion
+
+The target is one Secpar app for Windows, Linux and macOS that can host or connect, with accounts, friends and approved multiplayer sharing. Android stays client-only. Desktop clients and Linux/macOS hosts are planned; Preview 10 remains Android-to-Windows. See the [architecture and delivery plan](docs/desktop-expansion.md).
+
 ## How it works
 
 - **Phone app and PC app:** a native Android app and a small Windows app. On the PC, a Windows service starts at boot and runs the host as SYSTEM in the console session, so it can see and control the sign-in screen, the lock screen and UAC prompts; the tray window runs as you and talks to it over a local pipe. Both apps are written from scratch for this project.

@@ -1,0 +1,24 @@
+name: Portable stream protocol
+on:
+  push:
+    paths:
+      - 'crates/secpar-stream/**'
+      - 'docs/prs-vectors.json'
+      - '.github/workflows/portable-stream.yml'
+  pull_request:
+    paths:
+      - 'crates/secpar-stream/**'
+      - 'docs/prs-vectors.json'
+      - '.github/workflows/portable-stream.yml'
+  workflow_dispatch:
+jobs:
+  protocol:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --manifest-path crates/secpar-stream/Cargo.toml

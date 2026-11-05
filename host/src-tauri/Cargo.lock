@@ -3591,10 +3591,10 @@ dependencies = [
  "percent-encoding",
  "qrcode",
  "rcgen",
- "reed-solomon-erasure",
  "reqwest",
  "ring",
  "rustls-platform-verifier",
+ "secpar-stream",
  "serde",
  "serde_json",
  "tauri",
@@ -3608,6 +3608,14 @@ dependencies = [
  "window-vibrancy",
  "windows",
  "wiremock",
+]
+
+[[package]]
+name = "secpar-stream"
+version = "0.1.0"
+dependencies = [
+ "reed-solomon-erasure",
+ "ring",
 ]
 
 [[package]]

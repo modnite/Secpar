@@ -1,0 +1,17 @@
+[package]
+name = "secpar-stream"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+description = "Shared Secpar stream protocol for Windows, Linux and macOS"
+publish = false
+
+[dependencies]
+ring = "0.17.14"
+reed-solomon-erasure = "6.0.0"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+
+[profile.dev.package.reed-solomon-erasure]
+opt-level = 3

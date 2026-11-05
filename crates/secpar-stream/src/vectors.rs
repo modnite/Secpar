@@ -100,7 +100,7 @@ fn rejects_lying_frame_header() {
     assert!(frame::assemble(1, 15, shards).is_none());
 }
 
-/// Writes docs/prs-vectors.json for the phone's tests: `cargo test prs::vectors::write_vectors -- --ignored`.
+/// Writes docs/prs-vectors.json for the phone's tests: `cargo test --manifest-path crates/secpar-stream/Cargo.toml write_vectors -- --ignored`.
 #[test]
 #[ignore]
 fn write_vectors() {
@@ -129,4 +129,31 @@ fn write_vectors() {
     // read back to prove it parses
     let back: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(back["session"], session);
+}
+
+// Keep the extracted library compatible with the vectors used by Android.
+#[test]
+fn matches_android_wire_vectors() {
+    let v: Value = serde_json::from_str(include_str!("../../../docs/prs-vectors.json")).unwrap();
+    let c = Crypt::new(&[0x42; 32], v["session"].as_u64().unwrap() as u32);
+    let decode = |s: &str| -> Vec<u8> {
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    };
+    for (name, dir) in [("sealed", Dir::HostToPhone), ("sealedIn", Dir::PhoneToHost)] {
+        let packet = decode(v[name]["packet"].as_str().unwrap());
+        let plain = decode(v[name]["plain"].as_str().unwrap());
+        let h = Header::decode(&packet).unwrap();
+        assert_eq!(c.seal(dir, &h, &plain), packet);
+        assert_eq!(c.open(dir, &packet).unwrap().1, plain);
+    }
+    let f = &v["frame"];
+    let payload = decode(f["payload"].as_str().unwrap());
+    let fh = frame::FrameHeader { len: payload.len() as u32, capture_us: f["captureUs"].as_u64().unwrap(), keyframe: true, codec: frame::Codec::H264 };
+    let packets = frame::packetize(f["frameId"].as_u64().unwrap() as u32, &fh, &payload, f["fecPct"].as_u64().unwrap() as usize);
+    let expected = f["shards"].as_array().unwrap();
+    assert_eq!(packets.len(), expected.len());
+    for ((header, data), shard) in packets.iter().zip(expected) {
+        assert_eq!(hex(&header.encode()), shard["header"].as_str().unwrap());
+        assert_eq!(hex(data), shard["data"].as_str().unwrap());
+    }
 }
