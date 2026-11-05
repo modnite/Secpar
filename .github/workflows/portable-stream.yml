@@ -87,19 +87,25 @@ jobs:
           path: ${{ matrix.artifact }}
           if-no-files-found: error
   macos:
-    name: protocol (macOS ${{ matrix.arch }}, GitHub-hosted)
+    name: protocol (macOS ${{ matrix.arch }} ${{ matrix.mode }}, GitHub-hosted)
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-latest
+          # Native ARM checks remain available through macos-arm64.yml. Hosted
+          # ARM capacity currently fails before starting; use the Intel pool for
+          # native protocol tests plus the ARM cross build/package in normal CI.
+          - runner: macos-15-intel
             arch: arm64
+            mode: cross-build
           - runner: macos-15-intel
             arch: x64
+            mode: native
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     env:
       CARGO_TARGET_DIR: /tmp/secpar-target
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,8 +115,14 @@ jobs:
           for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
             cargo test --locked --manifest-path "$manifest"
           done
-          cargo build --release --locked --manifest-path desktop/Cargo.toml
-          python3 desktop/package.py macos
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            rustup target add aarch64-apple-darwin
+            cargo build --release --locked --target aarch64-apple-darwin --manifest-path desktop/Cargo.toml
+            CARGO_TARGET_DIR=/tmp/secpar-target/aarch64-apple-darwin python3 desktop/package.py macos
+          else
+            cargo build --release --locked --manifest-path desktop/Cargo.toml
+            python3 desktop/package.py macos
+          fi
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
