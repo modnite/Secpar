@@ -22,6 +22,15 @@ Control your Windows PC from your Android phone, at home or from anywhere. You c
 
 Both apps update themselves.
 
+
+## Desktop Development 1
+
+Experimental native clients for the existing Windows Secpar Host:
+
+[Windows x64](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.1/Secpar-Desktop-dev1-windows-x64.exe) · [Linux x64](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.1/Secpar-Desktop-dev1-linux-x64.tar.gz) · [Mac Apple Silicon](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.1/Secpar-Desktop-dev1-macos-arm64.tar.gz) · [Mac Intel](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.1/Secpar-Desktop-dev1-macos-x64.tar.gz)
+
+Software H.264 video, Opus audio, keyboard/mouse capture and Ctrl+F12 release. Pairings stay in memory. These are client development builds; Linux/macOS hosting and live friend/multiplayer sharing remain unfinished. Read the [development release notes](https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.1) before testing alongside an existing stream.
+
 ## Desktop expansion
 
 The target is one Secpar app for Windows, Linux and macOS that can host or connect, with accounts, friends and approved multiplayer sharing. Android stays client-only. An experimental [native desktop client](desktop/README.md) is now in development; Linux/macOS hosts and the unified sharing interface remain unfinished. The [account/friend API](cloud/accounts/README.md) is implemented for development and is awaiting deployment and host integration. Preview 10 remains Android-to-Windows. See the [architecture and delivery plan](docs/desktop-expansion.md).
