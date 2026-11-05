@@ -1,0 +1,37 @@
+name: Mac Apple Silicon fallback build
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Source commit to build
+        type: string
+        required: true
+        default: main
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: /tmp/secpar-target
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test and package Apple Silicon desktop client
+        run: |
+          test "$(uname -m)" = arm64
+          for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
+            cargo test --locked --manifest-path "$manifest"
+          done
+          cargo build --release --locked --manifest-path desktop/Cargo.toml
+          python3 desktop/package.py macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Secpar-Desktop-development-macOS-arm64
+          path: dist-desktop/Secpar-Desktop-development-macos-arm64.tar.gz
+          if-no-files-found: error
