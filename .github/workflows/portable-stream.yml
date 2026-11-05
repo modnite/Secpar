@@ -33,8 +33,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Prefer Git Bash over the Windows WSL launcher
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $gitBin = Join-Path (Split-Path (Get-Command git).Source) '../bin'
+          if (!(Test-Path (Join-Path $gitBin 'bash.exe'))) { throw 'Git Bash is required' }
+          $gitBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked --manifest-path crates/secpar-stream/Cargo.toml
+        shell: ${{ runner.os == 'Windows' && 'powershell' || 'bash' }}
   macos:
     name: protocol (macOS, GitHub-hosted)
     runs-on: macos-latest
