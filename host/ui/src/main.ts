@@ -35,7 +35,10 @@ async function show(t: Tab) {
   } catch {
     view = down();
   }
-  if (current === t) main.replaceChildren(view);
+  if (current === t) {
+    main.dataset.view = view.classList.contains("down") ? "down" : t.toLowerCase();
+    main.replaceChildren(view);
+  }
 }
 
 document.getElementById("app")!.append(titlebar(), nav, main);

@@ -17,8 +17,9 @@ the QR code is hidden. No installed host/service was changed or restarted.
 
 The main host panel measured zero overflow at 640×400 on Home and Settings, compared
 with 138px of settings overflow before the two-column layout. Primary controls remain
-visible. Desktop friend lists scroll locally; long host device lists currently use the
-main scroller and need another layout pass when concurrent hosting is added. At widths below 560px host settings falls back to
+visible. Desktop friend lists and host device lists scroll locally. Twelve-device Home
+and Devices samples at 640×400/800×600 measured zero main-panel/horizontal overflow;
+keyboard navigation to device 12 scrolled only the device list. At widths below 560px host settings falls back to
 one column and may scroll. Readable text is preserved rather than uniformly shrinking
 controls. Actual high-DPI hardware/macOS/Linux reviews remain required.
 
@@ -32,3 +33,8 @@ The account-linked host section was reviewed at 640×400 using the native render
 This is sample account state, not proof of installed-host enrollment.
 
 ![Desktop host linking at 640×400](screenshots/desktop-host-linked-640x400.png)
+
+
+![Host pairing with twelve sample devices at 640×400](screenshots/host-home-many-devices-640x400.png)
+
+![Keyboard focus on the last sample device at 640×400](screenshots/host-devices-bottom-640x400.png)

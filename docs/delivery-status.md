@@ -36,6 +36,13 @@
   with sample state. The QR enlargement dialog opens and closes with Escape. No
   installed host or active connection was replaced/restarted during the work.
 
+- Host Home and Devices lists now scroll within their own area. Twelve-device sample
+  review at 640×400 and 800×600 measured zero main-panel/horizontal overflow;
+  keyboard navigation reached device 12 with main scroll remaining zero. Settings
+  still has zero overflow at 640×400.
+- Host-enrollment backend deployed successfully (run 42079405866); account CI passed
+  (42079362570). Native desktop/host packages are being prepared for Development 3.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.
@@ -48,7 +55,7 @@
 - Full saved-computer list, real host/client validation and packaged updates.
 - Native account integration on host and Android, cryptographically proven computer enrollment and presence.
 - Android built-in QR scanner still needs physical validation on the Galaxy S23; external Camera pairing was confirmed.
-- Bound host connected-device list scrolling when several devices are present; the current compact review covered the normal sample/empty state.
+- Physical high-DPI reviews on Windows, Linux and macOS; current compact layout checks use controlled logical viewport sizes.
 - Guest admission enforced by host (separate from owner tokens), permissions and live revocation.
 - Unified desktop host/client interface without enabling hosting implicitly.
 - Linux capture/input/encoding host; macOS capture/input/encoding host.

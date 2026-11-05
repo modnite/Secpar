@@ -34,7 +34,7 @@ function row(d: Device, reload: () => void): HTMLElement {
 
 export function devices(state: State, reload: () => void): HTMLElement {
   return h(
-    "section.view",
+    "section.view.devices",
     {},
     h("h2", {}, "Paired devices"),
     state.devices.length
