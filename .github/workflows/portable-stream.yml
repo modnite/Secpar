@@ -25,10 +25,20 @@ jobs:
       matrix:
         include:
           - platform: Windows
+            rustup: D:/Secpar-CI/rustup
+            cargo: D:/Secpar-CI/cargo
+            target: D:/Secpar-CI/target
             runner: [self-hosted, Windows, X64, secpar]
           - platform: Linux
+            rustup: /opt/secpar-runner/_work/_tool/rustup
+            cargo: /opt/secpar-runner/_work/_tool/cargo
+            target: /opt/secpar-runner/_work/_tool/target
             runner: [self-hosted, Linux, X64, secpar]
     runs-on: ${{ matrix.runner }}
+    env:
+      RUSTUP_HOME: ${{ matrix.rustup }}
+      CARGO_HOME: ${{ matrix.cargo }}
+      CARGO_TARGET_DIR: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
         with:

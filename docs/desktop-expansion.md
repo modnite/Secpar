@@ -67,3 +67,5 @@ The portable protocol workflow uses repository-specific self-hosted runners on t
 The Windows runner lives at `C:\actions-runner-secpar` and runs through the `Secpar-GitHub-Runner` scheduled task at user sign-in. It is not available while the desktop is signed out. The Linux runner lives at `/opt/secpar-runner` and runs as `ghrunner` through `actions.runner.modnite-Secpar.secpar-omv-linux.service`, enabled at boot.
 
 External fork pull requests skip the self-hosted jobs and run the macOS check. GitHub approval is required for workflow runs from all external contributors, including returning contributors. Before approving an outside workflow, review its changes: self-hosted runner protections in a workflow can themselves be modified by a pull request. Personal runners must not execute unreviewed external code.
+
+Self-hosted CI uses dedicated Rust toolchains and caches: `D:/Secpar-CI` on Windows and `/opt/secpar-runner/_work/_tool` on Linux. CI must not update the desktop user's normal Rust toolchain.
