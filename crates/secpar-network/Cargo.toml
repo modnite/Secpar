@@ -1,0 +1,10 @@
+[package]
+name = "secpar-network"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+publish = false
+
+[dependencies]
+ring = "0.17.14"
+log = "0.4"

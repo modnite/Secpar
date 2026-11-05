@@ -3594,6 +3594,7 @@ dependencies = [
  "reqwest",
  "ring",
  "rustls-platform-verifier",
+ "secpar-network",
  "secpar-stream",
  "serde",
  "serde_json",
@@ -3608,6 +3609,14 @@ dependencies = [
  "window-vibrancy",
  "windows",
  "wiremock",
+]
+
+[[package]]
+name = "secpar-network"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "ring",
 ]
 
 [[package]]

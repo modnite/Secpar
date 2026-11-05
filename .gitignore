@@ -44,3 +44,5 @@ app/.externalNativeBuild/
 .cxx/
 # Portable Rust libraries
 crates/**/target/
+
+desktop/target/

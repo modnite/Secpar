@@ -20,7 +20,9 @@ The current applications are a Windows host and an Android client. Although the 
 
 The library has no Tauri, Windows service, capture, decoder or input dependency. CI tests it on Windows, Linux and macOS. Passing these tests proves protocol portability only, not a functioning desktop streaming app.
 
-Next, separate the control/identity protocol and connection establishment from the Windows service. Desktop clients need connection/pairing storage, direct UDP/TURN transport, packet reassembly, hardware video decoding/presentation, audio playback, input capture, cursor release and display/resolution negotiation. A webview alone must not become the video or mouse transport.
+`crates/secpar-network` now also owns the existing portable STUN and TURN implementation, consumed by both the Windows host and new client. `crates/secpar-client` implements pinned control pairing/reconnect, the PRS receiver/session loop and remote route setup. `desktop/` contains a native development client with software H.264 decode, Opus playback and keyboard/mouse capture. See its [current implementation and limits](../desktop/README.md).
+
+Next, finish desktop client validation and separate the remaining control/identity protocol from the Windows service. Desktop clients need connection/pairing storage, direct UDP/TURN transport, packet reassembly, hardware video decoding/presentation, audio playback, input capture, cursor release and display/resolution negotiation. A webview alone must not become the video or mouse transport.
 
 The desktop UI should present Computers, Friends and This computer. Hosting is an explicit setting; opening the client does not automatically enable inbound control. Do not add active-looking UI for unavailable features.
 
@@ -58,7 +60,7 @@ Accounts require a Secpar-controlled backend. The original project's public rend
 
 Do not label a platform supported until a real host/client session has passed end-to-end tests on that OS. For each combination test LAN and remote routing, resize/multi-monitor behavior, keyboard/mouse capture and escape, audio, reconnect, disconnect cleanup and permissions. Multiplayer additionally needs simultaneous physical controllers, guest revocation and packet loss tests. Native platform testing and signed distribution remain required before public stable releases.
 
-This document and the portable stream extraction are the first foundation milestone. They do not add desktop client, Linux/macOS host or account functionality to Preview 10.
+The portable libraries and development desktop client are implemented in source. They do not change the Preview 10 downloads. Linux/macOS hosting, production desktop-client support, unified hosting/client UI, accounts/friends and simultaneous multiplayer remain unfinished.
 
 ## CI runners
 
