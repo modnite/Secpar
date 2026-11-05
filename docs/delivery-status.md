@@ -107,6 +107,9 @@
   A release instrumentation attempt could not run because AndroidX Test calls a
   tracing method optimized out of the app; release verification used the actual
   UI/camera instead. No instrumentation-only keep rules are shipped.
+  Preview 12 is published; both Android assets and both Host Preview 12 assets
+  returned HTTP 200 with matching local/GitHub sizes and SHA-256 digests. The
+  Android certificate matches Preview 11. The isolated emulator is stopped.
 
 ## Active implementation
 
