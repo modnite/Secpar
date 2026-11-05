@@ -87,7 +87,7 @@
   app took over the shared emulator. The isolated emulator is stopped after review.
   No connected physical phone or installed PC host was updated/restarted.
 - This UI release requires no PC host update. Android account/friend integration
-  and physical Galaxy S23/DeX/QR validation remain pending.
+  and broader physical DeX/window-layout validation remain pending; Preview 13 QR pairing was subsequently user-confirmed on the S23.
 
 - Tray exit discoverability fix: the misleading "Hide from tray" action is now
   "Quit Secpar", separated from Open Secpar. Explicit app.exit(0) bypasses the
@@ -103,7 +103,7 @@
   analyzes camera frames, survives two reopen cycles, handles permission denial,
   and recovers after permission is granted. No native-init fallback or crash was
   logged during those checks; all 177 unit tests passed. Physical Galaxy S23
-  scanning still needs a user check. No physical phone or installed host updated.
+  scanning was not yet checked in Preview 12; Preview 13 pairing was subsequently user-confirmed. No physical phone or installed host updated.
   A release instrumentation attempt could not run because AndroidX Test calls a
   tracing method optimized out of the app; release verification used the actual
   UI/camera instead. No instrumentation-only keep rules are shipped.
@@ -128,7 +128,8 @@
   The test intercepts the result and never connects to the fixture host. Earlier
   attempts failed because the emulator image was clipped at the right edge;
   correcting the fixture framing made the camera handoff pass. Native still
-  capture callbacks were exercised, but physical S23 decoding remains unverified.
+  capture callbacks were exercised; the user subsequently confirmed Preview 13
+  built-in scanning and pairing on the physical S23.
   179 Android unit tests and 15 desktop tests passed (credential-store test ignored).
   Read-only get_state/get_config calls against the installed host succeeded; no
   OTP was generated, configuration changed, or service restarted by these checks.
@@ -147,7 +148,9 @@
 - Android Preview 13 is public; both assets return HTTP 200 with matching digests.
   Release certificate matches Preview 12; debug layout activity is excluded. The
   camera handoff and original/rotated host-QR instrumented tests both passed on the
-  isolated emulator. The physical S23 result is pending user feedback.
+  isolated emulator. On 2026-11-05, the user confirmed that Preview 13 reads
+  a fresh QR code and completes pairing on the Galaxy S23. The built-in scanner
+  path is now physically verified; no external Camera app is required for this check.
 
 ## Active implementation
 
@@ -167,7 +170,7 @@ yet admit guests. The remaining security boundary is recorded in
 
 - Full saved-computer list, real host/client validation and packaged updates.
 - Android account/friend integration. Windows host enrollment/presence are implemented but still need an installed-host user check.
-- Android built-in QR scanner still needs physical validation on the Galaxy S23; external Camera pairing was confirmed.
+- Broader Android/DeX layout and lifecycle checks; built-in Galaxy S23 QR pairing is user-confirmed in Preview 13.
 - Physical high-DPI reviews on Windows, Linux and macOS; current compact layout checks use controlled logical viewport sizes.
 - Guest admission enforced by host (separate from owner tokens), permissions and live revocation.
 - Complete desktop unification on all platforms; Windows UI/service package is built and published; native installation remains unverified.
