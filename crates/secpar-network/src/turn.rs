@@ -230,6 +230,7 @@ pub struct Turn {
     pub server: SocketAddr,
     user: String,
     pass: String,
+    diagnostic: Option<Box<dyn Fn(&str) + Send + Sync>>,
     auth: Mutex<Option<Auth>>,
     pending: Mutex<HashMap<[u8; 12], mpsc::Sender<Msg>>>,
     channels: Mutex<HashMap<SocketAddrV4, u16>>,
@@ -243,12 +244,19 @@ impl Turn {
             server,
             user,
             pass,
+            diagnostic: None,
             auth: Mutex::default(),
             pending: Mutex::default(),
             channels: Mutex::default(),
             next_channel: Mutex::new(0x4000),
             relayed: Mutex::default(),
         }
+    }
+
+    /// Preserve the embedding application's diagnostics without depending on its platform logger.
+    pub fn with_diagnostics(mut self, callback: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.diagnostic = Some(Box::new(callback));
+        self
     }
 
     fn transact(&self, sock: &UdpSocket, m: &Msg, key: Option<&[u8]>) -> Option<Msg> {
@@ -311,7 +319,11 @@ impl Turn {
                     });
                 }
                 (code, _) => {
-                    log::debug!("turn: request {:04x} failed ({code:?})", m.typ);
+                    if let Some(diagnostic) = &self.diagnostic {
+                        diagnostic(&format!("turn: request {:04x} failed ({code:?})", m.typ));
+                    } else {
+                        log::debug!("turn: request {:04x} failed ({code:?})", m.typ);
+                    }
                     return None;
                 }
             }

@@ -160,7 +160,7 @@ impl Shared {
         if self.turn().is_some() {
             return None;
         }
-        let t = Arc::new(Turn::new(server, user, pass));
+        let t = Arc::new(Turn::new(server, user, pass).with_diagnostics(crate::log::line));
         *self.turn.lock().unwrap() = Some(t.clone()); // the receive loop now routes the server's answers to it
         let Some(relayed) = t.allocate(&self.sock) else {
             *self.turn.lock().unwrap() = None;

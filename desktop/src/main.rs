@@ -25,6 +25,8 @@ fn main() -> eframe::Result {
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_title("Secpar Desktop · Development")
+            .with_app_id("com.secpar.desktop")
             .with_inner_size([1100., 720.])
             .with_min_inner_size([640., 400.])
             .with_icon(Arc::new(icon)),

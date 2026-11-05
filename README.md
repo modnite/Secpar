@@ -24,7 +24,7 @@ Both apps update themselves.
 
 ## Desktop expansion
 
-The target is one Secpar app for Windows, Linux and macOS that can host or connect, with accounts, friends and approved multiplayer sharing. Android stays client-only. An experimental [native desktop client](desktop/README.md) is now in development; Linux/macOS hosts and account/friend services remain planned. Preview 10 remains Android-to-Windows. See the [architecture and delivery plan](docs/desktop-expansion.md).
+The target is one Secpar app for Windows, Linux and macOS that can host or connect, with accounts, friends and approved multiplayer sharing. Android stays client-only. An experimental [native desktop client](desktop/README.md) is now in development; Linux/macOS hosts and the unified sharing interface remain unfinished. The [account/friend API](cloud/accounts/README.md) is implemented for development and is awaiting deployment and host integration. Preview 10 remains Android-to-Windows. See the [architecture and delivery plan](docs/desktop-expansion.md).
 
 ## How it works
 

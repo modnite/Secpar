@@ -1,0 +1,15 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE accounts(id TEXT PRIMARY KEY, github_id TEXT NOT NULL UNIQUE, handle TEXT NOT NULL, name TEXT NOT NULL);
+CREATE INDEX accounts_handle ON accounts(handle);
+CREATE TABLE sessions(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES accounts(id), expires INTEGER NOT NULL);
+CREATE INDEX sessions_expiry ON sessions(expires);
+CREATE TABLE oauth_states(hash TEXT PRIMARY KEY, verifier TEXT NOT NULL, return_code TEXT, expires INTEGER NOT NULL);
+CREATE TABLE friends(a TEXT NOT NULL REFERENCES accounts(id), b TEXT NOT NULL REFERENCES accounts(id), requester TEXT NOT NULL REFERENCES accounts(id), state TEXT NOT NULL CHECK(state IN ('pending','accepted')), PRIMARY KEY(a,b), CHECK(a < b));
+CREATE TABLE blocks(owner TEXT NOT NULL REFERENCES accounts(id), blocked TEXT NOT NULL REFERENCES accounts(id), PRIMARY KEY(owner,blocked), CHECK(owner <> blocked));
+CREATE TABLE computers(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(id), name TEXT NOT NULL, platform TEXT NOT NULL CHECK(platform IN ('windows','linux','macos')), created INTEGER NOT NULL);
+CREATE INDEX computers_owner ON computers(owner);
+CREATE TABLE connection_requests(id TEXT PRIMARY KEY, computer TEXT NOT NULL REFERENCES computers(id), owner TEXT NOT NULL REFERENCES accounts(id), guest TEXT NOT NULL REFERENCES accounts(id), requested TEXT NOT NULL, approved TEXT, state TEXT NOT NULL CHECK(state IN ('pending','approved','claimed','rejected','revoked')), expires INTEGER NOT NULL);
+CREATE INDEX requests_owner ON connection_requests(owner,expires);
+CREATE INDEX requests_guest ON connection_requests(guest,expires);
+CREATE TABLE rate_limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE device_auth(hash TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL, account TEXT REFERENCES accounts(id), expires INTEGER NOT NULL, poll_after INTEGER NOT NULL DEFAULT 0, used INTEGER NOT NULL DEFAULT 0);

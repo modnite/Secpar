@@ -1,0 +1,28 @@
+name: Account service
+on:
+  push:
+    branches: [main]
+    paths: ['cloud/accounts/**', '.github/workflows/accounts.yml']
+  pull_request:
+    paths: ['cloud/accounts/**', '.github/workflows/accounts.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  accounts:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, secpar]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+        working-directory: cloud/accounts
+      - run: npm run check
+        working-directory: cloud/accounts
+      - run: npm test
+        working-directory: cloud/accounts

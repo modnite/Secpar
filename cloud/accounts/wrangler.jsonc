@@ -1,0 +1,18 @@
+{
+  "name": "secpar-accounts",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-04",
+  "triggers": { "crons": ["0 * * * *"] },
+  "vars": {
+    "PUBLIC_ORIGIN": "https://accounts.example.invalid",
+    "GITHUB_CLIENT_ID": "CONFIGURE_BEFORE_DEPLOYING",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "secpar-accounts",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+}
