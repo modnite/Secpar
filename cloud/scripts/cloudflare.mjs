@@ -137,6 +137,28 @@ async function signingKey() {
     "Created the Secpar admission signing key in Cloudflare's secret store.",
   );
 }
+async function emailCheck() {
+  const key = process.env.SECPAR_RESEND_API_KEY;
+  if (!key) {
+    console.log("Email sender check skipped: no email credential configured.");
+    return;
+  }
+  const config = parse(await readFile(resolve(accountProject, "wrangler.jsonc"), "utf8"));
+  const sender = config.vars?.EMAIL_FROM;
+  if (!sender) throw new Error("No account email sender is configured.");
+  // Resend's documented simulated-delivery address: no message reaches a person.
+  // Never send an account credential, session or verification link in this probe.
+  const result = await fetch("https://api.resend.com/emails", {
+    method: "POST", signal: AbortSignal.timeout(10000),
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json",
+      "idempotency-key": `secpar-email-check-${process.env.GITHUB_RUN_ID ?? crypto.randomUUID()}` },
+    body: JSON.stringify({ from: sender, to: ["delivered@resend.dev"],
+      subject: "Secpar email configuration check",
+      text: "Secpar email configuration check. This is a simulated-delivery test with no account data." }),
+  });
+  if (!result.ok) throw new Error(`Email sender check failed (HTTP ${result.status}). Check the Resend key's sending-domain restriction and mail.secpar.win verification.`);
+  console.log("Resend accepted the configured Secpar sender and simulated-delivery test. Actual inbox delivery is not verified by this check.");
+}
 async function emailKey() {
   const key = process.env.SECPAR_RESEND_API_KEY;
   if (!key) {
@@ -159,7 +181,8 @@ try {
   if (process.argv[2] === "prepare") await prepare();
   else if (process.argv[2] === "signing-key") await signingKey();
   else if (process.argv[2] === "email-key") await emailKey();
-  else throw new Error("Expected prepare, signing-key or email-key.");
+  else if (process.argv[2] === "email-check") await emailCheck();
+  else throw new Error("Expected prepare, signing-key, email-check or email-key.");
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

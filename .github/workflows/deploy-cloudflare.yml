@@ -48,7 +48,9 @@ jobs:
         if: inputs.service == 'accounts' || inputs.service == 'both'
         env:
           SECPAR_RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: node cloud/scripts/cloudflare.mjs email-key
+        run: |
+          node cloud/scripts/cloudflare.mjs email-check
+          node cloud/scripts/cloudflare.mjs email-key
       - name: Install the rendezvous build dependencies
         if: inputs.service == 'relay' || inputs.service == 'both'
         working-directory: cloud/rendezvous
