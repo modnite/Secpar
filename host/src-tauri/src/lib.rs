@@ -4,6 +4,7 @@ pub mod clip;
 pub mod commands;
 pub mod engine;
 pub mod files;
+pub mod guest_grant;
 pub mod host;
 pub mod host_account;
 pub mod input;

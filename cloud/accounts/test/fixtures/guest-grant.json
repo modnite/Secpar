@@ -1,0 +1,14 @@
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "x": "V9hf77eDHbowqIQ3rTp-zagtsC2uRL7-4irOCWtAPXg",
+      "y": "CSsRJaoXKc_iINx14_lZcZdhTERIsGv1CEBca7JOWNg",
+      "crv": "P-256",
+      "kid": "disposable-fixture",
+      "alg": "ES256",
+      "use": "sig"
+    }
+  ],
+  "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpc3Bvc2FibGUtZml4dHVyZSIsInR5cCI6IkpXVCJ9.eyJwZXJtaXNzaW9ucyI6WyJrZXlib2FyZCIsIm1vdXNlIiwidmlldyJdLCJpc3MiOiJodHRwczovL2FjY291bnRzLnNlY3Bhci53aW4iLCJhdWQiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJzdWIiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCJqdGkiOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJpYXQiOjE4MDAwMDAwMDAsImV4cCI6MTgwMDAwMDA2MH0.quRhc5ZSPUnwlCBXnA1XmiVrkq_JeJO9xQj4jLz23CctAJxWRWJHZHzNaVVPAOl_DeXK1D4OepK9yESVGbIAgQ"
+}

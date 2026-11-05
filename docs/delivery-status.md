@@ -58,6 +58,13 @@
 3. Compact desktop layouts reviewed with native-rendered screenshots at 800×600 and 640×400. Host pairing/settings reviewed in the actual frontend with sample state; settings now has zero scrolling at 640×400.
 4. Last paired-computer persistence is implemented; the Windows credential-store roundtrip passed using a disposable entry. Native Windows sign-in is confirmed; cross-process reconnect and Linux/macOS native sign-in still need real-user checks.
 
+Guest-grant signature verification and an atomic replay guard are implemented as
+an isolated host module, with a public Jose interoperability vector. Four tests
+pass, including simultaneous replay, wrong host/expiry, token-supplied keys,
+algorithm confusion, altered signatures and forbidden permission claims. They do not
+yet admit guests. The remaining security boundary is recorded in
+`docs/guest-access.md`; video and both TCP/UDP input must enforce the same policy.
+
 ## Still required
 
 - Full saved-computer list, real host/client validation and packaged updates.
