@@ -167,6 +167,13 @@
   macOS also needs both roles in its single application. Do not publish separate
   client-only desktop products to meet this request.
 
+- Android Preview 14 published from dd091f6. Both public assets return HTTP 200
+  with matching local/GitHub SHA-256 digests and sizes. Certificate matches Preview
+  13; both debug review activities and the synthetic video fixture are excluded
+  from the release APK. Final builds/vital lint and all 187 unit tests passed; the
+  real decoder/SurfaceView/PixelCopy test passed again after diagnostics were added.
+  No physical phone installation or installed PC service change was performed.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.
@@ -203,7 +210,8 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 
 - Repository: https://github.com/modnite/Secpar
 - Desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
-- Android Preview 13: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.13
+- Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
+- Previous Android Preview 13: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.13
 - Previous desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
 - Android Preview 12: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.12
 - Host Preview 12 (tray Quit): https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-host-preview.12
