@@ -603,3 +603,64 @@ describe("email and password accounts", () => {
     ).toBe(401);
   });
 });
+
+describe("browser form regression", () => {
+  it("keeps the origin on form submissions and hides recovery URLs from other sites", async () => {
+    env.RESEND_API_KEY = "test-key";
+    env.EMAIL_FROM = "accounts@mail.secpar.win";
+    for (const path of [
+      "/auth/sign-in",
+      "/auth/register",
+      "/auth/forgot",
+      "/auth/verify?token=" + "a".repeat(64),
+      "/auth/reset?token=" + "b".repeat(64),
+    ]) {
+      const page = await handle(new Request(base + path), env);
+      expect(page.status).toBe(200);
+      // The browser sets Origin:null for form POSTs under no-referrer. Keep the
+      // origin check; fix the policy that made legitimate forms fail it.
+      expect(page.headers.get("referrer-policy")).toBe("same-origin");
+      const markup = await page.text();
+      if (
+        path.includes("sign-in") ||
+        path.includes("register") ||
+        path.includes("reset")
+      )
+        expect(markup).toContain('minlength="8"');
+    }
+  });
+  it("accepts an eight-character signup password and still rejects foreign origins", async () => {
+    env.RESEND_API_KEY = "test-key";
+    env.EMAIL_FROM = "accounts@mail.secpar.win";
+    const form = {
+      email: "eight@example.com",
+      handle: "eight",
+      password: "8char-ok",
+    };
+    const sent: string[] = [];
+    const send: typeof fetch = async (_url, init) => {
+      sent.push(String(init?.body));
+      return Response.json({ id: "test" });
+    };
+    const submit = (origin: string) =>
+      handle(
+        new Request(base + "/auth/register", {
+          method: "POST",
+          headers: {
+            origin,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams(form),
+        }),
+        env,
+        send,
+      );
+    expect((await submit("null")).status).toBe(403);
+    expect((await submit("https://foreign.example")).status).toBe(403);
+    expect((await submit(base)).status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(
+      db.db.prepare("SELECT count(*) AS n FROM password_accounts").get()?.n,
+    ).toBe(1);
+  });
+});

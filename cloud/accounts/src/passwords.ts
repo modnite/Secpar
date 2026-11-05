@@ -69,8 +69,8 @@ export async function passwordMatches(
 }
 function password(value: unknown): string {
   // Preserve whitespace and permit long passphrases; no composition rules.
-  if (typeof value !== "string" || [...value].length < 15 || value.length > 256)
-    fail(400, "Use a password of 15 to 256 characters.");
+  if (typeof value !== "string" || [...value].length < 8 || value.length > 256)
+    fail(400, "Use a password of 8 to 256 characters.");
   return value;
 }
 function email(value: unknown): string {
@@ -89,7 +89,9 @@ function page(title: string, content: string, status = 200): Response {
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
+        // no-referrer makes browser form POSTs send Origin: null.
+        // same-origin preserves Origin without leaking recovery URLs off-site.
+        "referrer-policy": "same-origin",
         "x-content-type-options": "nosniff",
         "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
       },
@@ -206,7 +208,7 @@ export function accountPage(handle: string): Response {
 const inputs =
   '<label>Email<input type="email" name="email" autocomplete="email" required maxlength="254"></label>';
 const passwordInput = (newPassword: boolean) =>
-  `<label>Password<input type="password" name="password" autocomplete="${newPassword ? "new-password" : "current-password"}" required minlength="15" maxlength="256"></label>`;
+  `<label>Password<input type="password" name="password" autocomplete="${newPassword ? "new-password" : "current-password"}" required minlength="8" maxlength="256"></label>`;
 export async function passwordRoutes(
   request: Request,
   env: PasswordEnv,
@@ -240,7 +242,7 @@ export async function passwordRoutes(
         mailReady(env);
         return page(
           "Create your account",
-          `<form method="post">${hidden}${inputs}<label>Username<input name="handle" autocomplete="username" pattern="[a-zA-Z0-9_]{3,30}" required minlength="3" maxlength="30"></label>${passwordInput(true)}<p>Use at least 15 characters.</p><button>Create account</button></form>`,
+          `<form method="post">${hidden}${inputs}<label>Username<input name="handle" autocomplete="username" pattern="[a-zA-Z0-9_]{3,30}" required minlength="3" maxlength="30"></label>${passwordInput(true)}<p>Use at least 8 characters.</p><button>Create account</button></form>`,
         );
       }
       if (path === "/auth/forgot") {
