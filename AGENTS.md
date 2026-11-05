@@ -22,3 +22,8 @@ original project's installations and identities separate.
 
 Use the approved mint/orange triangle and Secpar wordmark. Never include QR
 pairing credentials, account tokens, private keys or personal data in screenshots.
+
+Flat and clean must still look deliberately designed: align control heights,
+baselines, shared column edges and section spacing. Use restrained surface contrast,
+borders and typography rather than leaving the default toolkit appearance. Apply
+layout attention to Android phone and docked/wide windows as well as desktop.

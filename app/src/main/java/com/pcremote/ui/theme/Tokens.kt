@@ -20,20 +20,17 @@ data class Palette(
     val textDim: Long,
 )
 
-/**
- * v3 "screen glow": a deep blue-black room lit by the PC's own screen. One indigo accent; green,
- * amber and red only ever mean live, waiting and wrong.
- */
+/** Flat tonal surfaces with the Secpar mint/orange accent palette. */
 object Midnight {
     val dark = Palette(
-        bg = 0xFF05070C, surface = 0xFF0D111A, surfaceHigh = 0xFF161B27, border = 0x1FFFFFFF,
-        accent = 0xFF7C93FF, accent2 = 0xFF5468F0, onAccent = 0xFF05070C,
+        bg = 0xFF11151C, surface = 0xFF171D27, surfaceHigh = 0xFF1F2733, border = 0xFF313B49,
+        accent = 0xFF0AFFB6, accent2 = 0xFFD95400, onAccent = 0xFF07261E,
         ok = 0xFF34D399, warn = 0xFFFBBF24, bad = 0xFFF87171,
         text = 0xFFF2F4FA, textDim = 0xFF98A2B8,
     )
     val light = Palette(
         bg = 0xFFF3F5FA, surface = 0xFFFFFFFF, surfaceHigh = 0xFFE9EDF5, border = 0x1A05070C,
-        accent = 0xFF3A50D9, accent2 = 0xFF2B3FB8, onAccent = 0xFFFFFFFF,
+        accent = 0xFF006B4F, accent2 = 0xFFA94000, onAccent = 0xFFFFFFFF,
         ok = 0xFF0F8A5F, warn = 0xFFA16207, bad = 0xFFC2334A,
         text = 0xFF0B0F1A, textDim = 0xFF566077,
     )

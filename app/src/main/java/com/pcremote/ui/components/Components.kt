@@ -7,6 +7,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,6 +17,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -58,21 +64,12 @@ fun Modifier.glass(shape: Shape = MidnightShapes.card, strong: Boolean = false):
 fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, icon: ImageVector? = null) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
-    val src = remember { MutableInteractionSource() }
-    val pressed by src.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, Springs.bouncy(), label = "s")
-    val bg by animateColorAsState(if (enabled) c.accent else c.surfaceHigh, label = "bg")
-    Row(
-        modifier
-            .scale(scale)
-            .clip(MidnightShapes.pill)
-            .background(bg)
-            .clickable(src, null, enabled, role = Role.Button) { haptics.click(); onClick() }
-            .padding(horizontal = 24.dp, vertical = 15.dp),
-        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) { Icon(icon, null, tint = if (enabled) c.onAccent else c.textDim, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(10.dp)) }
-        Text(text, color = if (enabled) c.onAccent else c.textDim, style = MaterialTheme.typography.labelLarge)
+    Button(onClick = { haptics.click(); onClick() }, modifier = modifier.heightIn(min = 48.dp), enabled = enabled,
+        shape = MidnightShapes.control, colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.onAccent,
+            disabledContainerColor = c.surfaceHigh, disabledContentColor = c.textDim),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)) {
+        if (icon != null) { Icon(icon, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)) }
+        Text(text, style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -81,12 +78,12 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
 fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, tint: Color? = null) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
-    Row(
-        modifier.glass(MidnightShapes.pill).clickable(role = Role.Button) { haptics.tick(); onClick() }.padding(horizontal = 18.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) { Icon(icon, null, tint = tint ?: c.text, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)) }
-        Text(text, color = tint ?: c.text, style = MaterialTheme.typography.labelLarge)
+    OutlinedButton(onClick = { haptics.tick(); onClick() }, modifier = modifier.heightIn(min = 48.dp),
+        shape = MidnightShapes.control, border = BorderStroke(1.dp, c.border),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = tint ?: c.text),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)) {
+        if (icon != null) { Icon(icon, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)) }
+        Text(text, style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -105,10 +102,10 @@ fun GlassCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, padd
 fun GlassIconButton(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, tint: Color? = null) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
-    Box(
-        modifier.size(44.dp).glass(CircleShape).clickable(role = Role.Button, onClickLabel = label) { haptics.tick(); onClick() },
-        contentAlignment = Alignment.Center,
-    ) { Icon(icon, label, tint = tint ?: c.text, modifier = Modifier.size(20.dp)) }
+    IconButton(onClick = { haptics.tick(); onClick() }, modifier = modifier.size(48.dp),
+        colors = IconButtonDefaults.iconButtonColors(containerColor = c.surface, contentColor = tint ?: c.text)) {
+        Icon(icon, label, modifier = Modifier.size(20.dp))
+    }
 }
 
 /** A status dot that breathes while [live]. */

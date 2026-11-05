@@ -38,3 +38,17 @@ This is sample account state, not proof of installed-host enrollment.
 ![Host pairing with twelve sample devices at 640×400](screenshots/host-home-many-devices-640x400.png)
 
 ![Keyboard focus on the last sample device at 640×400](screenshots/host-devices-bottom-640x400.png)
+
+
+## Visual polish pass
+
+Shared control heights and center lines replace the mixed default button/dropdown
+sizes. Page margins, panel padding, right-hand actions and section borders follow
+consistent keylines. The normal desktop layouts fit at 640×400; Friends retains
+local list scrolling. These are native-rendered sample states.
+
+![Polished desktop at 640×400](screenshots/desktop-polish-640x400.png)
+
+![Polished desktop at 800×600](screenshots/desktop-polish-800x600.png)
+
+![Polished Friends at 640×400](screenshots/desktop-polish-friends-640x400.png)

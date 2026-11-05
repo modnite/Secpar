@@ -1,5 +1,6 @@
 mod account;
 mod audio;
+mod design;
 mod input;
 mod local_host;
 mod vault;
@@ -53,7 +54,7 @@ fn review_size() -> [f32; 2] {
 }
 fn initial_status() -> String {
     #[cfg(feature = "ui-review")]
-    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.ends_with("-sample")) {
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.ends_with("-sample")) {
         return "Layout sample".into();
     }
     "Ready".into()
@@ -95,16 +96,7 @@ struct App {
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let mut style = (*cc.egui_ctx.style()).clone();
-        style.visuals = egui::Visuals::dark();
-        style.visuals.panel_fill = Color32::from_rgb(21, 22, 26);
-        style.visuals.window_fill = Color32::from_rgb(28, 29, 33);
-        style.visuals.selection.bg_fill = Color32::from_rgb(0, 120, 90);
-        style.visuals.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(225, 226, 230);
-        style.visuals.widgets.inactive.fg_stroke.color = Color32::from_rgb(210, 212, 217);
-        style.spacing.item_spacing = egui::vec2(8., 8.);
-        style.spacing.button_padding = egui::vec2(10., 6.);
-        cc.egui_ctx.set_style(style);
+        design::configure(&cc.egui_ctx);
         let image = image::load_from_memory(include_bytes!(
             "../../assets/branding/secpar-wordmark-light.png"
         ))
@@ -145,6 +137,66 @@ impl App {
             focused: true,
             auto_capture_pending: false,
         }
+    }
+    fn pairing_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        design::surface().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new("Pair a computer").size(15.).strong());
+            ui.add_sized(
+                [ui.available_width(), 34.],
+                egui::TextEdit::singleline(&mut self.pair_link)
+                    .hint_text("Paste a Secpar Host pairing link")
+                    .password(true)
+                    .margin(egui::vec2(10., 8.)),
+            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Resolution")
+                        .size(12.)
+                        .color(design::MUTED),
+                );
+                egui::ComboBox::from_id_salt("resolution")
+                    .width(142.)
+                    .selected_text(if self.options.width == 0 {
+                        "Host native".into()
+                    } else {
+                        format!("{} × {}", self.options.width, self.options.height)
+                    })
+                    .show_ui(ui, |ui| {
+                        for (w, h) in [
+                            (0, 0),
+                            (1280, 720),
+                            (1920, 1080),
+                            (2560, 1440),
+                            (3840, 2160),
+                        ] {
+                            let label = if w == 0 {
+                                "Host native".into()
+                            } else {
+                                format!("{w} × {h}")
+                            };
+                            if ui
+                                .selectable_label(self.options.width == w, label)
+                                .clicked()
+                            {
+                                self.options.width = w;
+                                self.options.height = h;
+                            }
+                        }
+                    });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            !self.pair_link.trim().is_empty(),
+                            design::primary("Pair and connect"),
+                        )
+                        .clicked()
+                    {
+                        self.start(ctx, false);
+                    }
+                });
+            });
+        });
     }
     fn start(&mut self, ctx: &egui::Context, reconnect: bool) {
         if self.command.is_some() {
@@ -404,180 +456,212 @@ impl eframe::App for App {
             self.capture(ctx, false);
         }
         if !(self.fullscreen && self.input.captured) {
-            egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.image((self.brand.id(), egui::vec2(112., 27.)));
-                    ui.separator();
-                    ui.label(&self.status);
-                    if self.command.is_some() {
-                        if ui.button("Disconnect").clicked() {
-                            self.capture(ctx, false);
-                            self.send(Command::Stop);
-                        }
-                        if self.texture.is_some()
-                            && ui
-                                .button(if self.input.captured {
-                                    "Release · Ctrl+F12"
-                                } else {
-                                    "Capture · Ctrl+F12"
-                                })
-                                .clicked()
-                        {
-                            self.capture(ctx, !self.input.captured);
-                        }
-                        if ui
-                            .button(if self.fullscreen {
-                                "Window"
-                            } else {
-                                "Fullscreen"
-                            })
-                            .clicked()
-                        {
-                            self.fullscreen = !self.fullscreen;
-                            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
-                        }
-                        if self.displays.len() > 1 {
-                            let mut selected = self.display.clone();
-                            egui::ComboBox::from_id_salt("display")
-                                .selected_text("Display")
-                                .show_ui(ui, |ui| {
-                                    for (id, name) in &self.displays {
-                                        ui.selectable_value(&mut selected, id.clone(), name);
-                                    }
-                                });
-                            if selected != self.display {
-                                self.send(Command::Display(selected.clone()));
-                                self.display = selected;
-                            }
-                        }
-                    }
-                });
-            });
-        }
-        if self.command.is_none() {
-            egui::TopBottomPanel::top("navigation").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.page, Page::Computers, "Computers");
-                    ui.selectable_value(&mut self.page, Page::Friends, "Friends");
-                });
-            });
-        }
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(texture) = &self.texture {
-                let available = ui.available_size();
-                let size = egui::vec2(self.dimensions[0] as f32, self.dimensions[1] as f32);
-                let scale = (available.x / size.x).min(available.y / size.y);
-                let display = size * scale;
-                let (_, rect) = ui.allocate_space(available);
-                let picture = egui::Rect::from_center_size(rect.center(), display);
-                ui.painter().rect_filled(rect, 0., Color32::BLACK);
-                ui.painter().image(
-                    texture.id(),
-                    picture,
-                    egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-                    Color32::WHITE,
-                );
-                if self.cursor.2 {
-                    let p = picture.min
-                        + egui::vec2(self.cursor.0 as f32, self.cursor.1 as f32) * scale;
-                    if picture.contains(p) {
-                        if let Some((texture, hotspot)) = &self.cursor_shape {
-                            let min = p - egui::vec2(hotspot[0] as f32, hotspot[1] as f32) * scale;
-                            let rect = egui::Rect::from_min_size(min, texture.size_vec2() * scale);
-                            ui.painter().with_clip_rect(picture).image(
-                                texture.id(),
-                                rect,
-                                egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-                                Color32::WHITE,
+            egui::TopBottomPanel::top("toolbar")
+                .frame(
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(22, 27, 35))
+                        .inner_margin(egui::Margin::symmetric(20, 8)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.image((self.brand.id(), egui::vec2(112., 27.)));
+                        if self.command.is_none() {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(&self.status)
+                                            .size(12.)
+                                            .color(design::MUTED),
+                                    );
+                                    design::dot(ui, design::ACCENT);
+                                },
                             );
                         } else {
-                            ui.painter().circle_filled(p, 4., Color32::WHITE);
-                            ui.painter().circle_stroke(
-                                p,
-                                4.,
-                                egui::Stroke::new(1_f32, Color32::BLACK),
-                            );
+                            ui.label(&self.status);
                         }
-                    }
-                }
-            } else if self.command.is_none() {
-                if self.page == Page::Friends {
-                    self.account.ui(ui);
-                } else {
-                    ui.heading("Computers");
-                    ui.add_space(12.);
-                    if let Some(computer) = &self.computer {
-                        let name = computer.name.clone();
-                        ui.horizontal(|ui| {
-                            ui.label(name);
-                            if ui.button("Connect").clicked() {
-                                self.start(ctx, true);
+                        if self.command.is_some() {
+                            if ui.button("Disconnect").clicked() {
+                                self.capture(ctx, false);
+                                self.send(Command::Stop);
                             }
-                            ui.menu_button("…", |ui| {
-                                if ui.button("Forget on this device").clicked() {
-                                    self.account.forget_computer();
-                                    ui.close();
-                                }
-                            });
-                        });
-                        ui.separator();
-                    }
-                    ui.label("Pair a computer");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.pair_link)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("Paste a Secpar Host pairing link")
-                            .password(true),
-                    );
-                    ui.horizontal_wrapped(|ui| {
-                        if ui
-                            .add_enabled(
-                                !self.pair_link.trim().is_empty(),
-                                egui::Button::new("Pair and connect"),
-                            )
-                            .clicked()
-                        {
-                            self.start(ctx, false);
-                        }
-                        egui::ComboBox::from_id_salt("resolution")
-                            .selected_text(if self.options.width == 0 {
-                                "Host native".into()
-                            } else {
-                                format!("{} × {}", self.options.width, self.options.height)
-                            })
-                            .show_ui(ui, |ui| {
-                                for (w, h) in [
-                                    (0, 0),
-                                    (1280, 720),
-                                    (1920, 1080),
-                                    (2560, 1440),
-                                    (3840, 2160),
-                                ] {
-                                    let label = if w == 0 {
-                                        "Host native".into()
+                            if self.texture.is_some()
+                                && ui
+                                    .button(if self.input.captured {
+                                        "Release · Ctrl+F12"
                                     } else {
-                                        format!("{w} × {h}")
-                                    };
-                                    if ui
-                                        .selectable_label(self.options.width == w, label)
-                                        .clicked()
-                                    {
-                                        self.options.width = w;
-                                        self.options.height = h;
-                                    }
+                                        "Capture · Ctrl+F12"
+                                    })
+                                    .clicked()
+                            {
+                                self.capture(ctx, !self.input.captured);
+                            }
+                            if ui
+                                .button(if self.fullscreen {
+                                    "Window"
+                                } else {
+                                    "Fullscreen"
+                                })
+                                .clicked()
+                            {
+                                self.fullscreen = !self.fullscreen;
+                                ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
+                            }
+                            if self.displays.len() > 1 {
+                                let mut selected = self.display.clone();
+                                egui::ComboBox::from_id_salt("display")
+                                    .selected_text("Display")
+                                    .show_ui(ui, |ui| {
+                                        for (id, name) in &self.displays {
+                                            ui.selectable_value(&mut selected, id.clone(), name);
+                                        }
+                                    });
+                                if selected != self.display {
+                                    self.send(Command::Display(selected.clone()));
+                                    self.display = selected;
                                 }
-                            });
+                            }
+                        }
                     });
-                    ui.add_space(16.);
-                    ui.separator();
-                    self.account.host_ui(ui);
-                }
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.label("Connecting to the remote desktop…");
                 });
-            }
-        });
+        }
+        if self.command.is_none() {
+            egui::TopBottomPanel::top("navigation")
+                .frame(
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(22, 27, 35))
+                        .inner_margin(egui::Margin::symmetric(20, 0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        for (page, label) in
+                            [(Page::Computers, "Computers"), (Page::Friends, "Friends")]
+                        {
+                            let selected = self.page == page;
+                            let response = ui.add_sized(
+                                [100., 36.],
+                                egui::Button::new(egui::RichText::new(label).color(if selected {
+                                    Color32::WHITE
+                                } else {
+                                    design::MUTED
+                                }))
+                                .frame(false),
+                            );
+                            if selected {
+                                let r = response.rect;
+                                ui.painter().line_segment(
+                                    [egui::pos2(r.left(), r.bottom()), r.right_bottom()],
+                                    egui::Stroke::new(2_f32, design::ACCENT),
+                                );
+                            }
+                            if response.clicked() {
+                                self.page = page;
+                            }
+                        }
+                    });
+                });
+        }
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(17, 21, 28))
+                    .inner_margin(if self.command.is_none() {
+                        egui::Margin::symmetric(20, 16)
+                    } else {
+                        egui::Margin::same(0)
+                    }),
+            )
+            .show(ctx, |ui| {
+                if let Some(texture) = &self.texture {
+                    let available = ui.available_size();
+                    let size = egui::vec2(self.dimensions[0] as f32, self.dimensions[1] as f32);
+                    let scale = (available.x / size.x).min(available.y / size.y);
+                    let display = size * scale;
+                    let (_, rect) = ui.allocate_space(available);
+                    let picture = egui::Rect::from_center_size(rect.center(), display);
+                    ui.painter().rect_filled(rect, 0., Color32::BLACK);
+                    ui.painter().image(
+                        texture.id(),
+                        picture,
+                        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+                        Color32::WHITE,
+                    );
+                    if self.cursor.2 {
+                        let p = picture.min
+                            + egui::vec2(self.cursor.0 as f32, self.cursor.1 as f32) * scale;
+                        if picture.contains(p) {
+                            if let Some((texture, hotspot)) = &self.cursor_shape {
+                                let min =
+                                    p - egui::vec2(hotspot[0] as f32, hotspot[1] as f32) * scale;
+                                let rect =
+                                    egui::Rect::from_min_size(min, texture.size_vec2() * scale);
+                                ui.painter().with_clip_rect(picture).image(
+                                    texture.id(),
+                                    rect,
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(0., 0.),
+                                        egui::pos2(1., 1.),
+                                    ),
+                                    Color32::WHITE,
+                                );
+                            } else {
+                                ui.painter().circle_filled(p, 4., Color32::WHITE);
+                                ui.painter().circle_stroke(
+                                    p,
+                                    4.,
+                                    egui::Stroke::new(1_f32, Color32::BLACK),
+                                );
+                            }
+                        }
+                    }
+                } else if self.command.is_none() {
+                    if self.page == Page::Friends {
+                        self.account.ui(ui);
+                    } else {
+                        ui.heading("Computers");
+                        ui.add_space(8.);
+                        if let Some(computer) = &self.computer {
+                            let name = computer.name.clone();
+                            design::surface().show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    design::dot(ui, design::ACCENT);
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(name).strong())
+                                            .truncate(),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.menu_button("…", |ui| {
+                                                if ui.button("Forget on this device").clicked() {
+                                                    self.account.forget_computer();
+                                                    ui.close();
+                                                }
+                                            });
+                                            if ui.add(design::primary("Connect")).clicked() {
+                                                self.start(ctx, true);
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                            ui.add_space(8.);
+                            egui::CollapsingHeader::new("Pair another computer")
+                                .show(ui, |ui| self.pairing_ui(ui, ctx));
+                        } else {
+                            self.pairing_ui(ui, ctx);
+                        }
+                        ui.add_space(12.);
+                        self.account.host_ui(ui);
+                    }
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("Connecting to the remote desktop…");
+                    });
+                }
+            });
         if self.command.is_some() {
             ctx.request_repaint_after(Duration::from_millis(8));
         }

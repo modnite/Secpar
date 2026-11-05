@@ -66,6 +66,13 @@
   host enrollment needs a real-user check with backup access available; do not
   interrupt the user's sole remote connection to perform that check.
 
+- Visual polish pass in progress: desktop uses a shared control height, deliberate
+  page insets, flat navigation underline, tonal/bordered sections and compact friend
+  rows. Rendered at 640×400 and 800×600; 14 desktop tests passed. Android now has a
+  two-column home layout for wide docked windows, denser mode controls, matching
+  48dp Material buttons and consistent mint/orange accents. Android debug/release
+  builds and 177 unit tests passed; emulator layout review is in progress.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.
@@ -83,7 +90,7 @@ yet admit guests. The remaining security boundary is recorded in
 ## Still required
 
 - Full saved-computer list, real host/client validation and packaged updates.
-- Native account integration on host and Android, cryptographically proven computer enrollment and presence.
+- Android account/friend integration. Windows host enrollment/presence are implemented but still need an installed-host user check.
 - Android built-in QR scanner still needs physical validation on the Galaxy S23; external Camera pairing was confirmed.
 - Physical high-DPI reviews on Windows, Linux and macOS; current compact layout checks use controlled logical viewport sizes.
 - Guest admission enforced by host (separate from owner tokens), permissions and live revocation.

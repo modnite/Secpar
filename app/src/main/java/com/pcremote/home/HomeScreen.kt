@@ -154,31 +154,46 @@ private fun PcPage(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, 
     val conn = a.connection(card)
     val unlock = rememberUnlocker(card.id, { m -> conn?.sendIfOnline(m) == true }, conn?.incoming)
     val modes = card.modes.filter { it in implemented }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp, 12.dp, 20.dp, 32.dp)) {
-        Monitor(thumb, card.online && !card.locked,
-            Modifier.fillMaxWidth().combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() })) {
-            StatusChip(card, Modifier.align(Alignment.TopStart).padding(12.dp))
-            if (card.locked) Icon(Icons.Rounded.Lock, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(40.dp))
-        }
-        Spacer(Modifier.height(22.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(card.name, color = c.text, style = MaterialTheme.typography.displaySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (card.os.isNotEmpty()) Text(card.os, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+    @Composable fun overview(modifier: Modifier) {
+        Column(modifier) {
+            Monitor(thumb, card.online && !card.locked,
+                Modifier.fillMaxWidth().combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() })) {
+                StatusChip(card, Modifier.align(Alignment.TopStart).padding(12.dp))
+                if (card.locked) Icon(Icons.Rounded.Lock, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(40.dp))
             }
-            GlassIconButton(Icons.Rounded.MoreHoriz, stringResource(R.string.pcr_more), onMore)
-        }
-        Spacer(Modifier.height(20.dp))
-        PrimaryRow(card, a, unlock)
-        AnimatedVisibility(card.online && modes.isNotEmpty()) {
-            Column {
-                Spacer(Modifier.height(28.dp))
-                modes.chunked(2).forEach { row ->
-                    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        row.forEach { m -> ModeTile(m, Modifier.weight(1f)) { a.open(card, m) } }
-                        if (row.size == 1) Spacer(Modifier.weight(1f))
-                    }
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(card.name, color = c.text, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (card.os.isNotEmpty()) Text(card.os, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
                 }
+                GlassIconButton(Icons.Rounded.MoreHoriz, stringResource(R.string.pcr_more), onMore)
+            }
+            Spacer(Modifier.height(16.dp))
+            PrimaryRow(card, a, unlock)
+        }
+    }
+    @Composable fun controls(modifier: Modifier) {
+        if (card.online && modes.isNotEmpty()) Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            modes.chunked(2).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { m -> ModeTile(m, Modifier.weight(1f)) { a.open(card, m) } }
+                    if (row.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        if (maxWidth >= 700.dp && maxWidth > maxHeight) {
+            Row(Modifier.fillMaxSize().padding(20.dp, 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                overview(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
+                controls(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
+            }
+        } else {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp, 16.dp, 20.dp, 24.dp)) {
+                overview(Modifier.fillMaxWidth())
+                Spacer(Modifier.height(20.dp))
+                controls(Modifier.fillMaxWidth())
             }
         }
     }
@@ -222,12 +237,12 @@ private fun PrimaryRow(card: PcCardUi, a: HomeActions, unlock: () -> Unit) {
 private fun ModeTile(m: Mode, modifier: Modifier, onClick: () -> Unit) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
-    Column(modifier.glass(MidnightShapes.control).clickable { haptics.tick(); onClick() }.padding(16.dp)) {
-        Box(Modifier.size(38.dp).clip(MidnightShapes.small).background(c.accent.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
-            Icon(m.icon(), null, tint = c.accent, modifier = Modifier.size(20.dp))
-        }
-        Spacer(Modifier.height(14.dp))
-        Text(stringResource(m.label()), color = c.text, style = MaterialTheme.typography.titleMedium)
+    Row(modifier.heightIn(min = 64.dp).glass(MidnightShapes.control)
+        .border(1.dp, c.border, MidnightShapes.control)
+        .clickable { haptics.tick(); onClick() }.padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Icon(m.icon(), null, tint = c.accent, modifier = Modifier.size(24.dp))
+        Text(stringResource(m.label()), color = c.text, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 

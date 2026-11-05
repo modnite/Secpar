@@ -207,98 +207,135 @@ impl Panel {
         }
     }
     pub fn host_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use crate::design;
         use eframe::egui;
-        ui.horizontal(|ui| {
-            ui.strong("This computer");
-            if cfg!(windows)
-                && ui
-                    .add_enabled(!self.busy, egui::Button::new("Refresh"))
-                    .clicked()
-            {
-                self.send(Command::HostRefresh);
+        design::surface().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("This computer").size(15.).strong());
+                ui.label(
+                    egui::RichText::new("Sharing off")
+                        .size(12.)
+                        .color(design::MUTED),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if cfg!(windows)
+                        && ui
+                            .add_enabled(
+                                !self.busy,
+                                egui::Button::new(egui::RichText::new("Refresh").size(12.))
+                                    .frame(false),
+                            )
+                            .clicked()
+                    {
+                        self.send(Command::HostRefresh);
+                    }
+                });
+            });
+            match self.host.clone() {
+                Some(Ok(state)) if state.computer.is_some() => {
+                    let own = self
+                        .user
+                        .as_ref()
+                        .is_some_and(|u| Some(&u.id) == state.owner.as_ref());
+                    ui.horizontal(|ui| {
+                        design::dot(
+                            ui,
+                            if state.online {
+                                design::ACCENT
+                            } else {
+                                design::MUTED
+                            },
+                        );
+                        ui.label(if own {
+                            "Linked to your account"
+                        } else {
+                            "Host account linked"
+                        });
+                        ui.label(
+                            egui::RichText::new(if state.online { "Online" } else { "Offline" })
+                                .size(12.)
+                                .color(design::MUTED),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(
+                                    !self.busy,
+                                    egui::Button::new("Unlink host")
+                                        .min_size(egui::vec2(116., design::CONTROL)),
+                                )
+                                .clicked()
+                            {
+                                self.send(Command::UnlinkHost);
+                            }
+                        });
+                    });
+                    if !state.note.is_empty() {
+                        ui.label(state.note);
+                    }
+                }
+                Some(Ok(_)) => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Account not linked").color(design::MUTED));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(
+                                    !self.busy && self.user.is_some(),
+                                    egui::Button::new("Link my account"),
+                                )
+                                .on_disabled_hover_text("Sign in under Friends to link this host.")
+                                .clicked()
+                            {
+                                self.send(Command::LinkHost);
+                            }
+                        });
+                    });
+                }
+                Some(Err(_)) => {
+                    ui.horizontal_wrapped(|ui| {
+                        if cfg!(windows) {
+                            ui.label(
+                                egui::RichText::new("Host unavailable or needs an update")
+                                    .color(design::MUTED),
+                            );
+                            ui.hyperlink_to(
+                                "Host downloads",
+                                "https://github.com/modnite/Secpar/releases",
+                            );
+                        } else {
+                            ui.label(
+                                egui::RichText::new(
+                                    "Hosting on this platform is still in development.",
+                                )
+                                .color(design::MUTED),
+                            );
+                        }
+                    });
+                }
+                None => {
+                    ui.label(egui::RichText::new("Checking Secpar Host…").color(design::MUTED));
+                }
+            }
+            if !self.note.is_empty() {
+                ui.label(&self.note);
             }
         });
-        match self.host.clone() {
-            Some(Ok(state)) if state.computer.is_some() => {
-                let own = self
-                    .user
-                    .as_ref()
-                    .is_some_and(|u| Some(&u.id) == state.owner.as_ref());
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(if own {
-                        "Linked to your account"
-                    } else {
-                        "Host account linked"
-                    });
-                    ui.weak(if state.online { "Online" } else { "Offline" });
-                    if ui
-                        .add_enabled(!self.busy, egui::Button::new("Unlink host"))
-                        .clicked()
-                    {
-                        self.send(Command::UnlinkHost);
-                    }
-                });
-                ui.weak("Friend access is off.");
-                if !state.note.is_empty() {
-                    ui.label(state.note);
-                }
-            }
-            Some(Ok(_)) => {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Host account not linked");
-                    if ui
-                        .add_enabled(
-                            !self.busy && self.user.is_some(),
-                            egui::Button::new("Link to my account"),
-                        )
-                        .clicked()
-                    {
-                        self.send(Command::LinkHost);
-                    }
-                });
-                if self.user.is_none() {
-                    ui.weak("Sign in under Friends to link this host.");
-                }
-            }
-            Some(Err(_)) => {
-                ui.horizontal_wrapped(|ui| {
-                    if cfg!(windows) {
-                        ui.label("Host unavailable or needs an update");
-                        ui.hyperlink_to(
-                            "Host downloads",
-                            "https://github.com/modnite/Secpar/releases",
-                        );
-                    } else {
-                        ui.weak("Hosting on this platform is still in development.");
-                    }
-                });
-            }
-            None => {
-                ui.weak("Checking Secpar Host…");
-            }
-        }
-        if !self.note.is_empty() {
-            ui.label(&self.note);
-        }
     }
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
         use eframe::egui;
-        ui.horizontal(|ui| {
-            ui.heading("Friends");
+        crate::design::page_header(ui, "Friends", |ui| {
             if let Some(user) = &self.user {
                 let handle = user.handle.clone();
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(!self.busy, egui::Button::new("Sign out"))
-                        .clicked()
-                    {
-                        self.send(Command::SignOut);
-                    }
-                    ui.add(egui::Label::new(handle).truncate());
-                });
+                if ui
+                    .add_enabled(!self.busy, egui::Button::new("Sign out"))
+                    .clicked()
+                {
+                    self.send(Command::SignOut);
+                }
+                ui.add(egui::Label::new(handle).truncate());
             }
         });
-        ui.add_space(12.);
+        ui.add_space(8.);
         if self.user.is_none() {
             if let Some((code, url)) = self.waiting.clone() {
                 ui.label("Confirm this code in your browser");
@@ -345,16 +382,17 @@ impl Panel {
             });
             ui.add_space(8.);
             ui.horizontal(|ui| {
-                let width = (ui.available_width() - 58.).max(80.);
-                ui.add(
+                let width = (ui.available_width() - 80.).max(80.);
+                ui.add_sized(
+                    [width, crate::design::CONTROL],
                     egui::TextEdit::singleline(&mut self.code)
-                        .desired_width(width)
-                        .hint_text("Paste a friend code"),
+                        .hint_text("Paste a friend code")
+                        .margin(egui::vec2(10., 7.)),
                 );
                 if ui
                     .add_enabled(
                         !self.busy && !self.code.trim().is_empty(),
-                        egui::Button::new("Add"),
+                        egui::Button::new("Add").min_size(egui::vec2(72., crate::design::CONTROL)),
                     )
                     .clicked()
                 {
@@ -370,11 +408,42 @@ impl Panel {
             // Only the friend list scrolls; navigation and primary actions stay visible.
             egui::ScrollArea::vertical()
                 .id_salt("friends-list")
-                .max_height((ui.available_height() - 48.).max(60.))
+                .max_height(
+                    (ui.available_height()
+                        - if self.blocked.is_empty() && self.note.is_empty() {
+                            0.
+                        } else {
+                            48.
+                        })
+                    .max(60.),
+                )
                 .show(ui, |ui| {
-                    for friend in friends {
-                        ui.separator();
+                    ui.spacing_mut().item_spacing.y = 4.;
+                    for (index, friend) in friends.into_iter().enumerate() {
+                        if index > 0 {
+                            ui.separator();
+                        }
                         ui.horizontal(|ui| {
+                            let (avatar, _) =
+                                ui.allocate_exact_size(egui::vec2(32., 32.), egui::Sense::hover());
+                            ui.painter().rect_filled(
+                                avatar,
+                                6,
+                                egui::Color32::from_rgb(32, 48, 54),
+                            );
+                            ui.painter().text(
+                                avatar.center(),
+                                egui::Align2::CENTER_CENTER,
+                                friend
+                                    .handle
+                                    .chars()
+                                    .next()
+                                    .unwrap_or('?')
+                                    .to_uppercase()
+                                    .to_string(),
+                                egui::FontId::proportional(14.),
+                                crate::design::ACCENT,
+                            );
                             ui.add(egui::Label::new(&friend.handle).truncate());
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -400,6 +469,13 @@ impl Panel {
                                             ui.close();
                                         }
                                     });
+                                    if friend.state == "accepted" {
+                                        ui.label(
+                                            egui::RichText::new("Friend")
+                                                .size(12.)
+                                                .color(crate::design::MUTED),
+                                        );
+                                    }
                                     if friend.state == "pending" {
                                         if friend.requester != own {
                                             if ui
