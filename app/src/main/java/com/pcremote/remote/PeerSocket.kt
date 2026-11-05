@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
 class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport {
     private val sock = DatagramSocket().apply { receiveBufferSize = 4 shl 20; sendBufferSize = 1 shl 20 }
     private val prs = ArrayBlockingQueue<Pair<ByteArray, InetSocketAddress>>(1024)
+    private val discarded = java.util.concurrent.atomic.AtomicInteger()
     private val pending = ConcurrentHashMap<String, CompletableFuture<StunMsg>>()
     @Volatile private var targets: List<InetSocketAddress> = emptyList()
     @Volatile private var peer: InetSocketAddress? = null
@@ -55,7 +56,11 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
         }
     }
 
-    private fun offer(b: ByteArray, from: InetSocketAddress) { if (!prs.offer(b to from)) { prs.poll(); prs.offer(b to from) } }
+    private fun offer(b: ByteArray, from: InetSocketAddress) {
+        if (!prs.offer(b to from)) { if (prs.poll() != null) discarded.incrementAndGet(); prs.offer(b to from) }
+    }
+    override fun backlog() = prs.size
+    override fun droppedPackets() = discarded.get()
 
     private fun key(t: ByteArray) = t.joinToString("") { "%02x".format(it) }
 

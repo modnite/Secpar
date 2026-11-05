@@ -46,9 +46,13 @@ class PrsPipeline(
         sock.setTargets(listOfNotNull(direct) + ready.cands.mapNotNull(StunMsg::parseHostPort))
         Log.i(TAG, "host candidates ${ready.cands}, direct $direct")
         val listener = object : ReceiverListener {
+            private var reports = 0
             override fun onFrame(f: Frame) = decoder.submit(f)
             override fun onAudio(a: AudioPacket) = audio.play(a)
             override fun onBye() = onEnded()
+            override fun onStats(stats: Stats) {
+                if (++reports % 5 == 0) Log.i("PcrReceive", "fps=${stats.fps} kbps=${stats.kbps} loss=${stats.lossPct} rttMs=${stats.rttMs} assemblyDrops=${stats.dropped} invalid=${stats.invalidPackets} processPeakMs=${stats.processPeakMs} backlog=${stats.packetBacklog} socketDrops=${stats.socketDrops}")
+            }
         }
         receiver = Receiver(sock, Crypt(Base64.decode(ready.key, Base64.DEFAULT), ready.session.toInt()), listener)
         decoder = newDecoder(ready)

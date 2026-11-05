@@ -36,3 +36,28 @@ The test asset is generated locally, not captured from a user's screen:
 ```
 ffmpeg -f lavfi -i color=c=0x2070b0:s=320x180:r=120 -frames:v 240 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 15 -x264-params aud=1:repeat-headers=1:scenecut=0 -f h264 video-pacing.h264
 ```
+
+
+## Preview 15: packet integrity and upstream measurements
+
+The user reported Preview 14 unchanged or worse. Phone logs showed low presented
+fps during the bad interval while local decode/submission stayed around 12ms,
+with no growing output drops or input recovery count. Pacing alone did not solve
+the reported symptom; upstream delivery and frame assembly need measurement.
+
+A separate full-duplex defect was reproduced: Crypt had independent encrypt/decrypt
+Cipher instances but shared their mutable nonce scratch buffer. The receive thread
+and sender could overwrite that array concurrently, invalidating authenticated
+packets. Separate per-direction buffers preserve the same wire format and avoid
+serializing video reception behind input sends. The sender's existing lock and
+single receive thread still serialize calls within each direction.
+
+The JVM regression failed 29 of 40,000 packet checks before the fix and zero after.
+Android's actual crypto provider also passed 12,000 simultaneous video/input packet
+checks on the isolated emulator. These tests demonstrate the defect/fix, not a
+measured real-world loss percentage or proof that all video stutters are resolved.
+
+PcrReceive now logs receive fps/bitrate, packet loss, cumulative frame-assembly
+losses, invalid packet count, maximum per-packet processing wall time and socket
+backlog/drop counts every five seconds. The measurements distinguish missing input
+frames from decoder backlog without recording screen content, keys or credentials.

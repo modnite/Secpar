@@ -174,6 +174,27 @@
   real decoder/SurfaceView/PixelCopy test passed again after diagnostics were added.
   No physical phone installation or installed PC service change was performed.
 
+- Preview 14 physical result: user reports unchanged or worse video slowdowns.
+  S23 logs show 8–59 presented fps, stable 11–14ms local decode/submission time,
+  almost no output drops and only one startup input resync. This does not support
+  decoder queue buildup as the main reported failure. Direct UDP was confirmed.
+- Preview 15 work: found that Receiver shares a Crypt instance between its receive
+  thread and synchronized sender, but both cipher directions reused ONE nonce
+  scratch array. A full-duplex regression reproduced 29 authentication failures
+  in 40,000 packet checks before the fix; independent send/receive buffers give
+  zero failures. All 188 unit tests pass. A device-provider instrumented test on
+  the isolated emulator also passed all 12,000 video/input packet checks. This is
+  a proven transport defect; its contribution to the S23 slowdown still needs a
+  real-stream comparison. Added receive diagnostics for frame rate, throughput,
+  loss, frame-assembly drops, invalid packets, processing wall-time peak and socket
+  backlog/drop counts. Audio code and the PC host engine remain unchanged.
+- Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
+  worktree work/secpar-linux-host. Shared host protocol/control code passes eight
+  portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
+  capture/input and Linux runtime checks are still pending. Merge main's subsequent
+  Android hotfixes before integrating this branch. No Linux/Mac client-only package
+  was published. Work was set aside for the unsuccessful Preview 14 playback test.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.
