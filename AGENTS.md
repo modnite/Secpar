@@ -27,3 +27,6 @@ Flat and clean must still look deliberately designed: align control heights,
 baselines, shared column edges and section spacing. Use restrained surface contrast,
 borders and typography rather than leaving the default toolkit appearance. Apply
 layout attention to Android phone and docked/wide windows as well as desktop.
+
+The desktop/Android visual direction in docs/ui-review.md was approved by the user
+on 2026-11-05. Preserve it while completing the remaining app-family features.

@@ -2,13 +2,13 @@
 
 A fork of [PC Remote](https://github.com/SadikTD/pc-remote) for docked Android use and a growing desktop app family. Secpar focuses on physical keyboard/mouse input, resolution handling and compact, plain interfaces. Android stays client-only. Desktop hosting and connecting on Windows, Linux and macOS is the target; the current platform limits are listed below.
 
-## Desktop Development 3
+## Desktop Development 4
 
 Native development clients for the existing Windows Secpar Host:
 
-[Windows x64](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.3/Secpar-Desktop-dev3-windows-x64.exe) · [Linux x64](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.3/Secpar-Desktop-dev3-linux-x64.tar.gz) · [Mac Apple Silicon](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.3/Secpar-Desktop-dev3-macos-arm64.tar.gz) · [Mac Intel](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.3/Secpar-Desktop-dev3-macos-x64.tar.gz)
+[Windows x64](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.4/Secpar-Desktop-dev4-windows-x64.exe) · [Linux x64](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.4/Secpar-Desktop-dev4-linux-x64.tar.gz) · [Mac Apple Silicon](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.4/Secpar-Desktop-dev4-macos-arm64.tar.gz) · [Mac Intel](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.4/Secpar-Desktop-dev4-macos-x64.tar.gz)
 
-Development 3 adds local Windows host account linking/unlinking with proof of the host’s existing certificate, a separate DPAPI-protected machine credential and presence reporting. Account sign-in, friend requests/acceptance, blocking/unblocking and secure last-paired-computer storage are retained. Video uses software H.264 decoding, with Opus audio, physical keyboard/mouse capture and Ctrl+F12 release. Friend access to a PC, Linux/macOS hosting and multiplayer are still unfinished. See the [release notes](https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.3) and [desktop implementation/validation limits](desktop/README.md).
+Development 4 adds consistent control heights and center lines, aligned page/panel keylines, flat navigation, restrained tonal surfaces and a more structured Friends list. Account/friend management, secure saved pairing and local host account linking from the previous build are retained. Video uses software H.264 decoding, with Opus audio, physical keyboard/mouse capture and Ctrl+F12 release. Friend access to a PC, Linux/macOS hosting and multiplayer are still unfinished. See the [release notes](https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4) and [desktop implementation/validation limits](desktop/README.md).
 
 The optional [compact Windows Host installer](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.3/Secpar-Host-desktop-dev3-setup.exe) keeps pairing and navigation visible with long device lists, supports the new account-link flow and correctly links to development downloads. Pairing and settings fit at 640×400, with resizing and QR enlargement. It updates Secpar Host and can interrupt an existing Secpar stream; do not install it through your only remote connection. It does not replace PC Remote.
 
@@ -16,15 +16,15 @@ Apple Silicon is cross-compiled on an Intel Mac because GitHub's native ARM pool
 could not supply a runner. Its ARM64 executable, bundle metadata and ad-hoc signature
 were checked; native execution and hardware streaming are still unverified.
 
-![Compact desktop host linking, using sample account state](docs/screenshots/desktop-host-linked-640x400.png)
+![Refined desktop at 640×400, using sample account state](docs/screenshots/desktop-polish-640x400.png)
 
 Screenshots show rendered interfaces. This image is explicitly a layout sample, not a live user session. [More screenshots and review details](docs/ui-review.md).
 
-## Android Preview 10
+## Android Preview 11
 
-[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-preview10.apk) · [Previous Windows host installer](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-Host-preview10-triangle-setup.exe) · [Preview 10 release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.10)
+[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.11/Secpar-preview11.apk) · [Previous Windows host installer](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.10/Secpar-Host-preview10-triangle-setup.exe) · [Preview 11 release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.11)
 
-Android supports docked keyboard/mouse, cursor capture/release, trackpad fallback, remote pairing links and revised resolution handling. It uses the approved rounded mint/orange triangle. The Android package identity remains compatible with this fork's earlier previews. Desktop Development 3 does not change the Android APK. See [Android fork changes](docs/dock-input.md).
+Android supports docked keyboard/mouse, cursor capture/release, trackpad fallback, remote pairing links and revised resolution handling. It uses the approved rounded mint/orange triangle. The Android package identity remains compatible with this fork's earlier previews. Preview 11 adds a docked/wide two-column Home layout, compact mode controls, matching Material button heights and consistent mint/orange accents. Phone and wide-window layouts were reviewed in the emulator. Account/friend integration and physical Galaxy S23 scanner validation remain unfinished. See [Android fork changes](docs/dock-input.md).
 
 These are prereleases, installed manually. Android is debug-signed; Windows builds are unsigned; Mac development bundles are ad hoc signed and not notarized. GitHub's latest-stable endpoint excludes prereleases, so use these direct download links or the repository's Releases page.
 

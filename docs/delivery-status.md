@@ -66,14 +66,28 @@
   host enrollment needs a real-user check with backup access available; do not
   interrupt the user's sole remote connection to perform that check.
 
-- Visual polish pass in progress: desktop uses a shared control height, deliberate
+- Visual polish pass completed and user-approved on 2026-11-05: desktop uses a shared control height, deliberate
   page insets, flat navigation underline, tonal/bordered sections and compact friend
   rows. Rendered at 640×400 and 800×600; 14 desktop tests passed. Android now has a
   two-column home layout for wide docked windows, denser mode controls, matching
   48dp Material buttons and consistent mint/orange accents. Android debug/release
-  builds and 177 unit tests passed; wide emulator layout review passed after reducing the preview height to keep
+  builds and 177 unit tests passed; portrait and wide emulator layout review passed after reducing the preview height to keep
   the primary action visible. Preview 11 retains the Preview 10 signing certificate;
   the debug-only sample activity is excluded from the release APK.
+
+- Desktop Development 4 and Android Preview 11 are published. Desktop CI run
+  42087534176 passed all four build/package targets. All seven public downloads
+  returned 200; asset sizes/GitHub hashes match local files. Windows icon/static
+  CRT, Linux/Mac archive/architecture, Mac bundle version 4 and signature-resource
+  checks passed. Android 177 unit tests, release/debug builds and vital lint passed;
+  the release certificate matches Preview 10 and the debug fixture is excluded.
+- Android portrait, paired wide landscape and unpaired wide landscape samples were
+  visually checked. Open screen, Scan code and normal mode controls remain visible.
+  A separate Secpar-UI-Review emulator was created on D: (port 5556) after another
+  app took over the shared emulator. The isolated emulator is stopped after review.
+  No connected physical phone or installed PC host was updated/restarted.
+- This UI release requires no PC host update. Android account/friend integration
+  and physical Galaxy S23/DeX/QR validation remain pending.
 
 ## Active implementation
 
@@ -110,7 +124,9 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 ## Delivery links
 
 - Repository: https://github.com/modnite/Secpar
-- Desktop development 3: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.3
+- Desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
+- Android Preview 11: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.11
+- Previous desktop development 3: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.3
 - Previous desktop development 2: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.2
 - Android/host Preview 10: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.10
 - Account sign-in: https://accounts.secpar.win/auth/sign-in

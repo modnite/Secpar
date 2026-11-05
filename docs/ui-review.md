@@ -62,3 +62,16 @@ minimum height. The debug-only fixture uses a sample PC and no network or pairin
 store. It is excluded from the release APK.
 
 ![Android wide-window layout with sample PC](screenshots/android-polish-wide.png)
+
+
+Portrait and the unpaired landscape state were also checked on the isolated
+Secpar-UI-Review emulator. Primary actions fit without scrolling in these sample
+states. The sample marker belongs only to the debug fixture.
+
+![Android portrait sample](screenshots/android-polish-phone.png)
+
+![Android unpaired wide-window sample](screenshots/android-polish-empty-wide.png)
+
+The current desktop direction was approved by the user on 2026-11-05. Retain its
+shared control heights, restrained surface contrast and aligned section/action
+edges when adding features. Flat should not mean the unstyled toolkit defaults.
