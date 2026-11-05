@@ -80,7 +80,7 @@ impl Panel {
     pub fn new(ctx: eframe::egui::Context) -> Self {
         let (tx, events) = {
             #[cfg(feature = "ui-review")]
-            if std::env::var_os("EFRAME_SCREENSHOT_TO").is_some() {
+            if std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO").is_some() {
                 let (tx, _rx) = mpsc::channel(1);
                 let (_events, rx) = mpsc::channel(1);
                 let sample =
@@ -214,7 +214,7 @@ impl Panel {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("This computer").size(15.).strong());
                 ui.label(
-                    egui::RichText::new("Sharing off")
+                    egui::RichText::new("Friend sharing off")
                         .size(12.)
                         .color(design::MUTED),
                 );
@@ -295,11 +295,13 @@ impl Panel {
                     ui.horizontal_wrapped(|ui| {
                         if cfg!(windows) {
                             ui.label(
-                                egui::RichText::new("Host unavailable or needs an update")
-                                    .color(design::MUTED),
+                                egui::RichText::new(
+                                    "Hosting service unavailable or needs an update",
+                                )
+                                .color(design::MUTED),
                             );
                             ui.hyperlink_to(
-                                "Host downloads",
+                                "Secpar downloads",
                                 "https://github.com/modnite/Secpar/releases",
                             );
                         } else {
@@ -592,7 +594,7 @@ impl Api {
                 "host_already_linked" => "This host is linked to another account. Unlink it first.",
                 "host_challenge_expired_or_used" => "Host linking expired. Please try again.",
                 "invalid_host_proof" => {
-                    "The host identity could not be verified. Update Secpar Host and try again."
+                    "The host identity could not be verified. Update Secpar and try again."
                 }
                 "account_unavailable" => "Friend code was not found or is unavailable.",
                 "cannot_friend_yourself" => "That is your own friend code.",
@@ -628,7 +630,7 @@ impl Api {
         serde_json::from_value::<local_host::State>(state).map_err(|_| {
             (
                 StatusCode::BAD_GATEWAY,
-                "Update Secpar Host to use account linking".into(),
+                "Update Secpar to use account linking".into(),
             )
         })?;
         let challenge = self

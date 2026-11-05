@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[cfg(any(windows, test))]
 use serde_json::json;
 use serde_json::Value;
+const MAX_RESPONSE: usize = 512 * 1024;
 #[cfg(any(windows, test))]
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
@@ -16,7 +17,7 @@ pub struct State {
 }
 pub async fn state() -> Result<State, String> {
     serde_json::from_value(call("host_account_state", Value::Null).await?)
-        .map_err(|_| "Update Secpar Host to use account linking".into())
+        .map_err(|_| "Update Secpar to use account linking".into())
 }
 #[cfg(windows)]
 pub async fn call(command: &str, args: Value) -> Result<Value, String> {
@@ -31,13 +32,17 @@ pub async fn call(command: &str, args: Value) -> Result<Value, String> {
                 {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
-                Err(_) => return Err("Secpar Host is not available on this computer".into()),
+                Err(_) => {
+                    return Err(
+                        "The Secpar hosting service is not available on this computer".into(),
+                    )
+                }
             }
         };
         exchange(pipe, command, args).await
     })
     .await
-    .map_err(|_| "Secpar Host did not respond in time".to_string())?
+    .map_err(|_| "The Secpar hosting service did not respond in time".to_string())?
 }
 #[cfg(not(windows))]
 pub async fn call(_command: &str, _args: Value) -> Result<Value, String> {
@@ -63,12 +68,12 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     loop {
         let mut line = Vec::new();
         let n = (&mut reader)
-            .take(16385)
+            .take((MAX_RESPONSE + 1) as u64)
             .read_until(b'\n', &mut line)
             .await
             .map_err(|_| "Incomplete host response")?;
         total += n;
-        if n == 0 || n > 16384 || total > 65536 || line.last() != Some(&b'\n') {
+        if n == 0 || n > MAX_RESPONSE || total > MAX_RESPONSE * 2 || line.last() != Some(&b'\n') {
             return Err("Invalid host response".into());
         }
         let value: Value = serde_json::from_slice(&line).map_err(|_| "Invalid host response")?;
@@ -77,7 +82,7 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         }
         if value.get("err").is_some() {
             // Never surface arbitrary local-server strings containing credentials.
-            return Err("Secpar Host could not complete this request. Check that it is updated and linked to your account.".into());
+            return Err("The Secpar hosting service could not complete this request. Check that it is updated and linked to your account.".into());
         }
         return value
             .get("ok")
@@ -89,6 +94,24 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn accepts_the_hosts_large_qr_svg_without_truncating_the_link() {
+        let (client, mut server) = tokio::io::duplex(65536);
+        tokio::spawn(async move {
+            let mut request = [0; 512];
+            let n = server.read(&mut request).await.unwrap();
+            let request: Value = serde_json::from_slice(&request[..n]).unwrap();
+            assert_eq!(request["cmd"], "new_qr");
+            let reply = format!(
+                "{}\n",
+                json!({"id":1,"ok":{"link":"secpar://pair?fixture=not-a-credential","svg":"x".repeat(100_000)}})
+            );
+            server.write_all(reply.as_bytes()).await.unwrap();
+        });
+        let response = exchange(client, "new_qr", Value::Null).await.unwrap();
+        assert_eq!(response["link"], "secpar://pair?fixture=not-a-credential");
+        assert_eq!(response["svg"].as_str().unwrap().len(), 100_000);
+    }
     #[tokio::test]
     async fn waits_for_the_matching_reply_and_bounds_unterminated_input() {
         let (client, mut server) = tokio::io::duplex(65536);
@@ -113,7 +136,8 @@ mod tests {
         tokio::spawn(async move {
             let mut request = [0; 512];
             server.read(&mut request).await.unwrap();
-            server.write_all(&vec![b'a'; 20000]).await.unwrap();
+            // A QR SVG can exceed 16KB; still bound malformed/unterminated data.
+            let _ = server.write_all(&vec![b'a'; MAX_RESPONSE + 1]).await;
         });
         assert!(exchange(client, "host_account_state", Value::Null)
             .await

@@ -48,9 +48,13 @@ crates/**/target/
 desktop/target/
 
 dist-desktop/
+host/src-tauri/unified/
 
 __pycache__/
 *.pyc
 
 # Local Cloudflare runtime state
 .wrangler/
+
+# Kotlin compiler session cache
+.kotlin/

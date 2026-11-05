@@ -1,8 +1,11 @@
 mod account;
 mod audio;
 mod design;
+mod hosting;
 mod input;
 mod local_host;
+#[cfg(windows)]
+mod tray;
 mod vault;
 use eframe::egui::{
     self, Color32, CursorGrab, Event as UiEvent, Key, TextureHandle, TextureOptions,
@@ -17,6 +20,16 @@ use secpar_client::{
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
+/// Explorer file offers use the same hosting service without opening a second UI.
+pub fn offer_file(path: String) -> Result<(), String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "Could not start the file request")?
+        .block_on(local_host::call("offer", serde_json::json!({"path":path})))?;
+    Ok(())
+}
+
 pub fn run() -> eframe::Result {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let rgba = image::load_from_memory(include_bytes!("../../assets/branding/secpar-icon.png"))
@@ -30,6 +43,7 @@ pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Secpar Desktop · Development")
+            .with_visible(!std::env::args().any(|arg| arg == "--hidden"))
             .with_app_id("com.secpar.desktop")
             .with_inner_size(review_size())
             .with_min_inner_size([480., 360.])
@@ -61,6 +75,10 @@ fn initial_status() -> String {
 }
 fn initial_page() -> Page {
     #[cfg(feature = "ui-review")]
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|page| page.starts_with("hosting")) {
+        return Page::Hosting;
+    }
+    #[cfg(feature = "ui-review")]
     if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|page| page.starts_with("friends")) {
         return Page::Friends;
     }
@@ -69,9 +87,15 @@ fn initial_page() -> Page {
 #[derive(PartialEq)]
 enum Page {
     Computers,
+    Hosting,
     Friends,
 }
 struct App {
+    #[cfg(feature = "ui-review")]
+    review_frames: u32,
+    #[cfg(windows)]
+    tray: Option<tray::Tray>,
+    hosting: hosting::Panel,
     account: account::Panel,
     page: Page,
     pair_link: String,
@@ -111,6 +135,11 @@ impl App {
             TextureOptions::LINEAR,
         );
         Self {
+            #[cfg(feature = "ui-review")]
+            review_frames: 0,
+            #[cfg(windows)]
+            tray: tray::Tray::new(&cc.egui_ctx),
+            hosting: hosting::Panel::new(cc.egui_ctx.clone()),
             account: account::Panel::new(cc.egui_ctx.clone()),
             page: initial_page(),
             pair_link: String::new(),
@@ -439,6 +468,14 @@ impl eframe::App for App {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        #[cfg(windows)]
+        if self
+            .tray
+            .as_ref()
+            .is_some_and(|tray| tray.hide_on_close(ctx))
+        {
+            self.capture(ctx, false);
+        }
         self.poll(ctx);
         self.account.poll();
         if std::mem::take(&mut self.account.forgot_computer) {
@@ -534,9 +571,14 @@ impl eframe::App for App {
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        for (page, label) in
-                            [(Page::Computers, "Computers"), (Page::Friends, "Friends")]
-                        {
+                        for (page, label) in [
+                            (Page::Computers, "Computers"),
+                            (Page::Hosting, "Hosting"),
+                            (Page::Friends, "Friends"),
+                        ] {
+                            if page == Page::Hosting && !cfg!(windows) {
+                                continue;
+                            }
                             let selected = self.page == page;
                             let response = ui.add_sized(
                                 [100., 36.],
@@ -616,7 +658,9 @@ impl eframe::App for App {
                         }
                     }
                 } else if self.command.is_none() {
-                    if self.page == Page::Friends {
+                    if self.page == Page::Hosting {
+                        self.hosting.ui(ui, ctx, &mut self.account);
+                    } else if self.page == Page::Friends {
                         self.account.ui(ui);
                     } else {
                         ui.heading("Computers");
@@ -653,8 +697,6 @@ impl eframe::App for App {
                         } else {
                             self.pairing_ui(ui, ctx);
                         }
-                        ui.add_space(12.);
-                        self.account.host_ui(ui);
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
@@ -664,6 +706,28 @@ impl eframe::App for App {
             });
         if self.command.is_some() {
             ctx.request_repaint_after(Duration::from_millis(8));
+        }
+        #[cfg(feature = "ui-review")]
+        if let Some(path) = std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO") {
+            self.review_frames += 1;
+            if self.review_frames == 12 {
+                ctx.send_viewport_cmd(ViewportCommand::Screenshot(Default::default()));
+            }
+            for event in ctx.input(|i| i.events.clone()) {
+                if let UiEvent::Screenshot { image, .. } = event {
+                    let bytes: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_array()).collect();
+                    image::save_buffer(
+                        &path,
+                        &bytes,
+                        image.size[0] as u32,
+                        image.size[1] as u32,
+                        image::ColorType::Rgba8,
+                    )
+                    .expect("Review screenshot");
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+            }
+            ctx.request_repaint_after(Duration::from_millis(30));
         }
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {

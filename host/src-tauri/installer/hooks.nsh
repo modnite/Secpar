@@ -9,6 +9,16 @@
 ; Stop the service (it ends its server) and the tray before the files are replaced. Runs before
 ; Tauri's own "app is running" check, so that check finds nothing to kill.
 !macro NSIS_HOOK_PREINSTALL
+  !if "${PRODUCTNAME}" == "Secpar"
+    ; Reuse the previous Secpar Host location; its data/service identity is retained.
+    ReadRegStr $0 HKLM "Software\modnite\Secpar Host" ""
+    ${If} $0 != ""
+    ${AndIf} ${FileExists} "$0\secpar-host.exe"
+      StrCpy $INSTDIR $0
+      SetOutPath $INSTDIR
+    ${EndIf}
+    nsExec::Exec 'taskkill.exe /F /IM secpar-desktop.exe'
+  !endif
   nsExec::Exec 'sc.exe stop "${PCR_SVC}"'
   ; up to ~10 s for the service to reach STOPPED (skipped when it isn't installed yet)
   StrCpy $1 0
@@ -29,6 +39,13 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  !if "${PRODUCTNAME}" == "Secpar"
+    ; The replacement is installed before removing the superseded app listing.
+    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Secpar Host"
+    DeleteRegKey HKLM "Software\modnite\Secpar Host"
+    Delete "$DESKTOP\Secpar Host.lnk"
+    Delete "$SMPROGRAMS\Secpar Host.lnk"
+  !endif
   ; Reuse an existing gamepad driver. Side-by-side setup never installs shared drivers.
 
   ; Phones reach the agent on TCP 48999 (TLS, token-authenticated) and stream over UDP (48998 when free).
@@ -53,6 +70,9 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  !if "${PRODUCTNAME}" == "Secpar"
+    nsExec::Exec 'taskkill.exe /F /IM secpar-desktop.exe'
+  !endif
   nsExec::Exec 'sc.exe stop "${PCR_SVC}"'
   Sleep 2000
   nsExec::Exec 'sc.exe delete "${PCR_SVC}"'

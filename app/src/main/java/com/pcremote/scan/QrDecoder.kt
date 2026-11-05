@@ -10,12 +10,21 @@ import com.google.zxing.qrcode.QRCodeReader
 
 /** Finds a QR code in a camera luminance (Y) plane. */
 object QrDecoder {
+    data class Region(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+        /** ML Kit reports bounds in the rotated image; CameraX Y rows are unrotated. */
+        fun unrotate(width: Int, height: Int, degrees: Int): Region = when (degrees) {
+            90 -> Region(top, height - right, bottom, height - left)
+            180 -> Region(width - right, height - bottom, width - left, height - top)
+            270 -> Region(width - bottom, left, width - top, right)
+            else -> this
+        }
+    }
     private val hints = mapOf(
         DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
         DecodeHintType.TRY_HARDER to true,
     )
 
-    fun decode(y: ByteArray, width: Int, height: Int, rowStride: Int, pixelStride: Int = 1): String? {
+    fun decode(y: ByteArray, width: Int, height: Int, rowStride: Int, pixelStride: Int = 1, regions: List<Region> = emptyList()): String? {
         if (width <= 0 || height <= 0 || pixelStride <= 0 || rowStride < (width - 1) * pixelStride + 1) return null
         if ((height - 1).toLong() * rowStride + (width - 1).toLong() * pixelStride >= y.size) return null
         // Camera buffers may omit padding after the final row or interleave luminance samples.
@@ -28,6 +37,16 @@ object QrDecoder {
                 try { return QRCodeReader().decode(bitmap, hints + (DecodeHintType.PURE_BARCODE to true)).text } catch (_: com.google.zxing.ReaderException) { }
             }
             return null
+        }
+        // A monitor bezel or dark UI can defeat PURE_BARCODE over the whole frame.
+        // Use the native detector's potential boxes even when it cannot decode text.
+        for (region in regions.take(8)) {
+            val margin = (maxOf(region.right - region.left, region.bottom - region.top) / 10).coerceAtLeast(4)
+            val left = (region.left - margin).coerceIn(0, width - 1)
+            val top = (region.top - margin).coerceIn(0, height - 1)
+            val right = (region.right + margin).coerceIn(left + 1, width)
+            val bottom = (region.bottom + margin).coerceIn(top + 1, height)
+            read(src.crop(left, top, right - left, bottom - top))?.let { return it }
         }
         read(src)?.let { return it }
         // Screen-scaled QR modules can be only 3-4 camera pixels wide. Upscaling changes

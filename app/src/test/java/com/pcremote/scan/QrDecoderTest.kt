@@ -36,6 +36,24 @@ class QrDecoderTest {
         assertNull(QrDecoder.decode(ByteArray(320 * 240) { 0x80.toByte() }, 320, 240, 320))
     }
 
+    @Test fun `native potential bounds exclude the dark monitor surround`() {
+        val (qr, w, h) = frame(url, scale = 3, border = 20)
+        val width = w * 3; val height = h * 2
+        val monitor = ByteArray(width * height) { 0x20.toByte() }
+        val x = w; val y = h / 2
+        for (row in 0 until h) System.arraycopy(qr, row * w, monitor, (y + row) * width + x, w)
+        val region = QrDecoder.Region(x + 20, y + 20, x + w - 20, y + h - 20)
+        assertEquals(url, QrDecoder.decode(monitor, width, height, width, regions = listOf(region)))
+    }
+
+    @Test fun `detector bounds map back to camera rows in every rotation`() {
+        val expected = QrDecoder.Region(100, 80, 300, 280)
+        assertEquals(expected, expected.unrotate(640, 480, 0))
+        assertEquals(expected, QrDecoder.Region(200, 100, 400, 300).unrotate(640, 480, 90))
+        assertEquals(expected, QrDecoder.Region(340, 200, 540, 400).unrotate(640, 480, 180))
+        assertEquals(expected, QrDecoder.Region(80, 340, 280, 540).unrotate(640, 480, 270))
+    }
+
     @Test fun `decodes dense remote Secpar code and parses its signed relay URL`() {
         val relay = "wss://pcr-rendezvous.example.workers.dev/v1/phone?pc=12345678-1234-1234-1234-123456789012&dev=pair_abcdefghijklmnopqrstuv&ts=1700000000&sig=" + "ab".repeat(32)
         val link = url.replace("pcremote://", "secpar://").replace("47999", "48999") +

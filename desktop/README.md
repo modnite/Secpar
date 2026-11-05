@@ -1,6 +1,6 @@
-# Secpar Desktop development client
+# Secpar desktop application
 
-Native Rust client for the existing Secpar Windows host. Android remains client-only. The eventual desktop app will also host, but this implementation currently provides the client side only. Do not install this over Secpar Host or PC Remote.
+The desktop application hosts and connects through one interface on Windows. Hosting → Pair a device pairs Android and desktop clients with the same Windows service. The combined Windows installer includes that service and the desktop UI, preserving existing Secpar owner pairings and TLS identity. Android stays client-only. Linux/macOS builds currently connect only; their hosting backends remain unfinished. PC Remote stays separate.
 
 Implemented: pairing links for pinned direct TLS and signed relay bootstrap, OS credential-store persistence for the last paired computer, encrypted UDP video, bounded frame assembly/FEC, duplicate rejection, direct candidate probing, STUN discovery, TURN allocation/channel/permission refresh, Opus audio playback, H.264 software decode to a GPU-rendered window, host-native/720p/1080p/1440p/4K resolution choice, native cursor images, display switching, fullscreen, relative mouse/keyboard, Ctrl+F12 cursor capture/release and held-input cleanup on focus loss/disconnect.
 
@@ -43,8 +43,8 @@ Build the separate `secpar-desktop-review` binary with `--features ui-review`. S
 
 ## Linking the local Windows host
 
-Under Computers → This computer, choose Link to my account after signing in under
-Friends. An updated Secpar Host must already be running in the same Windows session.
+Under Hosting → Settings → Account link, choose Link my account after signing in
+under Friends. The Secpar hosting service must be running in the same Windows session.
 The host proves possession of its existing TLS key using an account-bound one-use
 challenge. The account session stays in the desktop worker. Only a separate,
 machine-scoped credential is sent to the host service and protected with Windows
@@ -58,3 +58,24 @@ the only working remote connection as part of a development test.
 
 The native screenshot fixture `SECPAR_REVIEW_PAGE=host-sample` shows fictional
 linked state without accessing the account service or local host.
+
+
+## Combined Windows package
+
+Build the desktop Windows binary with `-C target-feature=+crt-static`, copy it to
+`host/src-tauri/unified/secpar-desktop.exe`, then run `npm run tauri build --
+--debug --config src-tauri/tauri.unified.conf.json` from `host`. The one Secpar
+installer contains the desktop UI and background service. Normal shortcuts and
+sign-in autostart launch the desktop UI. `--service` and `--server` retain the
+existing engine; Explorer file offers go through that same service.
+
+Upgrading the host package restarts the service. Do not install through the only
+active remote connection. Closing the desktop window hides it in the Windows
+tray; Quit Secpar exits the UI while hosting continues in the background.
+
+The standalone desktop executable can also manage an already-installed Secpar
+service, allowing UI updates without replacing the active hosting engine.
+Hosting settings currently expose display/quality, autostart, clipboard/files and
+UPnP; native file/folder picker controls and network diagnostics still need migration
+from the legacy frontend. The legacy frontend remains a fallback if the desktop
+binary is absent. It is not a separate host for Android.

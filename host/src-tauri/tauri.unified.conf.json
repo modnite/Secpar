@@ -1,0 +1,7 @@
+{
+  "productName": "Secpar",
+  "bundle": {
+    "shortDescription": "Host and connect to your computers",
+    "resources": {"unified/secpar-desktop.exe": "secpar-desktop.exe"}
+  }
+}

@@ -1,6 +1,7 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 pub const ACCENT: Color32 = Color32::from_rgb(10, 255, 182);
+pub const BG: Color32 = Color32::from_rgb(17, 21, 28);
 pub const MUTED: Color32 = Color32::from_rgb(150, 162, 181);
 pub const LINE: Color32 = Color32::from_rgb(49, 59, 73);
 pub const CONTROL: f32 = 32.;

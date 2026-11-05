@@ -30,3 +30,8 @@ layout attention to Android phone and docked/wide windows as well as desktop.
 
 The desktop/Android visual direction in docs/ui-review.md was approved by the user
 on 2026-11-05. Preserve it while completing the remaining app-family features.
+
+The desktop product must be ONE application that can host and connect on Windows,
+Linux and macOS. Android stays client-only and must connect to the same desktop
+hosting engines; there must not be a separate Android-specific host product.
+Background services are implementation details inside the desktop installation.

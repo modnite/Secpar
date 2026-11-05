@@ -111,6 +111,28 @@
   returned HTTP 200 with matching local/GitHub sizes and SHA-256 digests. The
   Android certificate matches Preview 11. The isolated emulator is stopped.
 
+- Desktop unification milestone in progress: Windows now has a Hosting tab
+  controlling the same installed Secpar engine for Android and desktop clients.
+  Pairing QR/link, paired-device removal, display/quality, autostart, file/clipboard
+  toggles and direct-access settings are in the desktop UI. Account linking moves
+  under Hosting → Settings. A combined installer embeds the desktop binary; the
+  existing service/server modes, data directory and TLS identity are retained.
+  Windows close-to-tray, Open/Quit and single-instance reopening are implemented.
+  The native file/folder pickers and network diagnostics still need migration.
+- Android Preview 13 scanner changes: use native potential-code bounds for cropped
+  fallback decoding (including camera rotation), remove frame-count-driven zoom
+  jumps, and request a focused full-resolution still when preview detection cannot
+  decode text. Cameras unable to bind three streams retain preview scanning.
+  On the isolated emulator, a real CameraX camera-image fixture was decoded and
+  its exact 437-byte link returned to the caller (camera handoff test passed).
+  The test intercepts the result and never connects to the fixture host. Earlier
+  attempts failed because the emulator image was clipped at the right edge;
+  correcting the fixture framing made the camera handoff pass. Native still
+  capture callbacks were exercised, but physical S23 decoding remains unverified.
+  179 Android unit tests and 15 desktop tests passed (credential-store test ignored).
+  Read-only get_state/get_config calls against the installed host succeeded; no
+  OTP was generated, configuration changed, or service restarted by these checks.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.
@@ -132,7 +154,7 @@ yet admit guests. The remaining security boundary is recorded in
 - Android built-in QR scanner still needs physical validation on the Galaxy S23; external Camera pairing was confirmed.
 - Physical high-DPI reviews on Windows, Linux and macOS; current compact layout checks use controlled logical viewport sizes.
 - Guest admission enforced by host (separate from owner tokens), permissions and live revocation.
-- Unified desktop host/client interface without enabling hosting implicitly.
+- Complete desktop unification on all platforms; Windows UI/service packaging is in progress.
 - Linux capture/input/encoding host; macOS capture/input/encoding host.
 - Hardware decoding, audio/video timing, IME/full keyboard handling and routing benchmarks.
 - Concurrent streams, encode fan-out, independent keys/permissions, controller seats.

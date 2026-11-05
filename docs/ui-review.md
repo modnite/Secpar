@@ -75,3 +75,23 @@ states. The sample marker belongs only to the debug fixture.
 The current desktop direction was approved by the user on 2026-11-05. Retain its
 shared control heights, restrained surface contrast and aligned section/action
 edges when adding features. Flat should not mean the unstyled toolkit defaults.
+
+
+## Desktop Development 5 hosting consolidation
+
+The Windows desktop application now manages the same host engine used by Android
+and desktop clients. Hosting includes pairing, paired devices and settings; account
+linking is under Hosting → Settings. These screenshots are fictional layout states,
+with the pairing image deliberately hidden. No real QR credentials are displayed.
+
+![Hosting at 640×400](screenshots/desktop-hosting-640x400.png)
+![Pairing at 640×400, code hidden](screenshots/desktop-hosting-pair-640x400.png)
+![Hosting settings at 640×400](screenshots/desktop-hosting-settings-640x400.png)
+
+The renderer now requests its screenshot after twelve frames instead of relying
+on eframe's two-pass export, which could capture an unsettled frame or an icon
+viewport. Normal app builds contain no screenshot fixtures or test networking.
+Read-only state/settings calls to the installed Windows service passed. Installing
+the combined package, tray interactions and real Android pairing need user checks
+with backup remote access; no installed service was restarted for this review.
+Linux/macOS hosting and friend sessions are still unfinished.

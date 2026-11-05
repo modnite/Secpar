@@ -12,6 +12,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -74,6 +77,9 @@ class ScanActivity : ComponentActivity() {
     private val analyzer = Executors.newSingleThreadExecutor()
     private val done = AtomicBoolean(false)
     @Volatile private var boundCamera: Camera? = null
+    private var detailCapture: ImageCapture? = null
+    private val capturingDetail = AtomicBoolean(false)
+    private var lastDetailAt = 0L
     private val scanner = CameraQrScanner(analyzer) { ratio ->
         boundCamera?.let { cam ->
             val state = cam.cameraInfo.zoomState.value
@@ -95,6 +101,7 @@ class ScanActivity : ComponentActivity() {
         super.onDestroy()
         analyzer.shutdown()
         boundCamera = null
+        detailCapture = null
         scanner.close()
     }
 
@@ -124,6 +131,11 @@ class ScanActivity : ComponentActivity() {
                       try {
                         val provider = providerFuture.get()
                         val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
+                        // Analysis previews can locate a dense code without retaining
+                        // enough pixels to decode it. Take a real full-resolution still.
+                        val detail = ImageCapture.Builder()
+                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                            .build()
                         val analysis = ImageAnalysis.Builder()
                             .setTargetResolution(android.util.Size(1920, 1080))
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -136,18 +148,23 @@ class ScanActivity : ComponentActivity() {
                               try {
                                 // Keep ImageProxy open until asynchronous scanning completes.
                                 val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-                                scanner.process(image) {
+                                scanner.process(image) { candidates ->
                                     val plane = proxy.planes[0]
                                     val buffer = plane.buffer.duplicate()
                                     val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
-                                    QrDecoder.decode(bytes, proxy.width, proxy.height, plane.rowStride, plane.pixelStride)
+                                    val regions = candidates.mapNotNull { it.boundingBox }.map {
+                                        QrDecoder.Region(it.left, it.top, it.right, it.bottom)
+                                            .unrotate(proxy.width, proxy.height, proxy.imageInfo.rotationDegrees)
+                                    }
+                                    QrDecoder.decode(bytes, proxy.width, proxy.height, plane.rowStride, plane.pixelStride, regions)
                                 }
                                     .addOnSuccessListener { result ->
                                         frames++
                                         val text = result.text
                                         scanStatus = when {
                                             text != null -> "Code read"
-                                            result.potential -> "QR detected. Tap the code to focus, or increase zoom."
+                                            capturingDetail.get() -> "Reading code… Hold steady."
+                                            result.potential -> "QR detected. Reading details…"
                                             android.os.SystemClock.elapsedRealtime() - openedAt > 8_000 ->
                                                 "No QR detected. Tap to focus, increase zoom, or paste a pairing link."
                                             else -> "Scanning…"
@@ -156,6 +173,14 @@ class ScanActivity : ComponentActivity() {
                                             haptics.click()
                                             QrScan.deliver(text)
                                             finish()
+                                        } else if (result.potential && !done.get()) {
+                                            readDetail(view) { decoded ->
+                                                if (done.compareAndSet(false, true)) {
+                                                    haptics.click()
+                                                    QrScan.deliver(decoded)
+                                                    finish()
+                                                }
+                                            }
                                         }
                                     }
                                     .addOnFailureListener { error ->
@@ -171,7 +196,14 @@ class ScanActivity : ComponentActivity() {
                             }
                         }
                         provider.unbindAll()
-                        camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                        camera = try {
+                            provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, detail)
+                                .also { detailCapture = detail }
+                        } catch (_: IllegalArgumentException) {
+                            // Older cameras may not support all three streams together.
+                            provider.unbindAll()
+                            provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                        }
                         boundCamera = camera
                         view.setOnTouchListener { _, event ->
                             if (event.action == android.view.MotionEvent.ACTION_UP) {
@@ -233,6 +265,66 @@ class ScanActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxWidth())
             }
         }
+    }
+
+    private fun readDetail(view: PreviewView, deliver: (String) -> Unit) {
+        val capture = detailCapture ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastDetailAt < 4000 || !capturingDetail.compareAndSet(false, true)) return
+        lastDetailAt = now
+        scanStatus = "Reading code… Hold steady."
+        val center = view.meteringPointFactory.createPoint(view.width / 2f, view.height / 2f)
+        val focus = boundCamera?.cameraControl?.startFocusAndMetering(
+            androidx.camera.core.FocusMeteringAction.Builder(center)
+                .setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS).build())
+        val take = Runnable {
+            if (isDestroyed || done.get()) { capturingDetail.set(false); return@Runnable }
+            capture.takePicture(analyzer, object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    try {
+                        // CameraX stills are JPEG. Decode the original pixels rather
+                        // than interpreting compressed bytes as a camera Y plane.
+                        val buffer = image.planes[0].buffer.duplicate()
+                        val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+                        val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            ?: throw IllegalStateException("Invalid camera photo")
+                        android.util.Log.d("SecparScan", "Detailed camera frame ${bitmap.width}x${bitmap.height}")
+                        scanner.process(InputImage.fromBitmap(bitmap, image.imageInfo.rotationDegrees)) { candidates ->
+                            val pixels = IntArray(bitmap.width * bitmap.height)
+                            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                            val luminance = ByteArray(pixels.size) { i ->
+                                val rgb = pixels[i]
+                                (((rgb shr 16 and 255) * 299 + (rgb shr 8 and 255) * 587 + (rgb and 255) * 114) / 1000).toByte()
+                            }
+                            val regions = candidates.mapNotNull { it.boundingBox }.map {
+                                QrDecoder.Region(it.left, it.top, it.right, it.bottom)
+                                    .unrotate(bitmap.width, bitmap.height, image.imageInfo.rotationDegrees)
+                            }
+                            QrDecoder.decode(luminance, bitmap.width, bitmap.height, bitmap.width, regions = regions)
+                        }.addOnSuccessListener { result ->
+                            if (result.text != null) android.util.Log.d("SecparScan", "Detailed QR decoded")
+                            if (!isDestroyed && result.text != null) deliver(result.text)
+                        }.addOnFailureListener {
+                            if (!isDestroyed) scanStatus = "Move closer to the code and hold steady."
+                        }.addOnCompleteListener {
+                            bitmap.recycle()
+                            image.close()
+                            capturingDetail.set(false)
+                        }
+                    } catch (error: Exception) {
+                        image.close()
+                        capturingDetail.set(false)
+                        android.util.Log.w("SecparScan", "Detailed scan failed", error)
+                    }
+                }
+                override fun onError(exception: ImageCaptureException) {
+                    capturingDetail.set(false)
+                    runOnUiThread { if (!isDestroyed) scanStatus = "Move closer to the code and hold steady." }
+                }
+            })
+        }
+        if (focus != null) focus.addListener(take, ContextCompat.getMainExecutor(this))
+        else take.run()
     }
 
     /** Dimmed surround with a clear rounded window and an accent outline. */

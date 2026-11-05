@@ -1,5 +1,10 @@
 # PC Remote Agent Protocol v1
 
+Secpar uses this same protocol for Android and desktop clients. Its pairing
+links use `secpar://pair`, control port 48999 and stream port 48998. The legacy
+`pcremote://pair` links remain readable by clients. The upstream examples below
+retain their original ports; there is no Android-specific hosting engine.
+
 The contract between the Android app (`app/`) and PC Remote Host (`host/`). Both sides must match this file exactly; change it first, then both sides.
 
 ## Transport
