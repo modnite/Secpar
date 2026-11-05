@@ -25,8 +25,10 @@ jobs:
       matrix:
         include:
           - platform: Windows
+            shell: powershell
             runner: [self-hosted, Windows, X64, secpar]
           - platform: Linux
+            shell: bash
             runner: [self-hosted, Linux, X64, secpar]
     runs-on: ${{ matrix.runner }}
     steps:
@@ -42,7 +44,7 @@ jobs:
           $gitBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --locked --manifest-path crates/secpar-stream/Cargo.toml
-        shell: ${{ runner.os == 'Windows' && 'powershell' || 'bash' }}
+        shell: ${{ matrix.shell }}
   macos:
     name: protocol (macOS, GitHub-hosted)
     runs-on: macos-latest
