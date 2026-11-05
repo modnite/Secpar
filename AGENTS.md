@@ -35,3 +35,9 @@ The desktop product must be ONE application that can host and connect on Windows
 Linux and macOS. Android stays client-only and must connect to the same desktop
 hosting engines; there must not be a separate Android-specific host product.
 Background services are implementation details inside the desktop installation.
+
+Publish ONE application/package per desktop OS, with both host and client roles.
+Do not offer a separate desktop client download alongside a "combined" installer,
+or promote client-only Linux/macOS builds as the requested finished applications.
+Internal UI/service binaries and CI artifacts are implementation details; the user
+must see one Secpar app per OS. Android has one client-only APK.

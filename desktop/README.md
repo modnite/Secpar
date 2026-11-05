@@ -60,7 +60,7 @@ The native screenshot fixture `SECPAR_REVIEW_PAGE=host-sample` shows fictional
 linked state without accessing the account service or local host.
 
 
-## Combined Windows package
+## Single Windows application package
 
 Build the desktop Windows binary with `-C target-feature=+crt-static`, copy it to
 `host/src-tauri/unified/secpar-desktop.exe`, then run `npm run tauri build --
@@ -73,8 +73,8 @@ Upgrading the host package restarts the service. Do not install through the only
 active remote connection. Closing the desktop window hides it in the Windows
 tray; Quit Secpar exits the UI while hosting continues in the background.
 
-The standalone desktop executable can also manage an already-installed Secpar
-service, allowing UI updates without replacing the active hosting engine.
+The desktop executable is an internal component of the single Secpar installation;
+it is not published as a separate client application.
 Hosting settings currently expose display/quality, autostart, clipboard/files and
 UPnP; native file/folder picker controls and network diagnostics still need migration
 from the legacy frontend. The legacy frontend remains a fallback if the desktop

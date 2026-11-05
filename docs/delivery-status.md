@@ -133,13 +133,17 @@
   Read-only get_state/get_config calls against the installed host succeeded; no
   OTP was generated, configuration changed, or service restarted by these checks.
 
-- Desktop Development 5 is public with Windows standalone UI, combined installer,
-  Linux client and checksums. All four asset HEADs return 200, with matching local
-  and GitHub SHA-256 digests/sizes. Windows/Linux CI passed in run 42105758113;
-  the two Mac jobs are still running. The installer was unpacked: both engine and
-  desktop binaries are present, and its desktop hash matches the standalone app.
-  Static CRT and x64 PE checks passed. Seven host command tests passed. Installer
-  build passed; it was not installed and the active service was never restarted.
+- Desktop Development 5 now publishes ONLY Secpar-Windows-x64-setup.exe plus its
+  checksum. The separate standalone Windows download and client-only Linux/Mac
+  downloads were removed from this release after the user's clarification.
+  There must be ONE application/package per desktop OS with both roles; Android
+  stays client-only and connects to those same desktop hosts. Background service
+  binaries are internal implementation details, not separate user-facing apps.
+  Windows/Linux/Mac Intel CI passed in run 42105758113; ARM cross-build was still
+  running at the last check. Those role-limited Linux/Mac artifacts stay internal
+  until their hosting implementations are available. The Windows installer was
+  unpacked and checked, never installed; no active service was restarted. Static
+  CRT/x64 PE checks and seven host command tests passed.
 - Android Preview 13 is public; both assets return HTTP 200 with matching digests.
   Release certificate matches Preview 12; debug layout activity is excluded. The
   camera handoff and original/rotated host-QR instrumented tests both passed on the
