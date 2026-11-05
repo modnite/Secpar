@@ -1,6 +1,7 @@
 name: Portable stream protocol
 on:
   push:
+    branches: [main]
     paths:
       - 'crates/secpar-stream/**'
       - 'docs/prs-vectors.json'
