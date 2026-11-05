@@ -127,11 +127,11 @@ private fun EmptyState(addPc: () -> Unit) {
 
 /** The PC's screen in a glass bezel: the live thumbnail, or a dark panel while it's away. */
 @Composable
-private fun Monitor(thumb: ImageBitmap?, online: Boolean, modifier: Modifier, badge: @Composable BoxScope.() -> Unit = {}) {
+private fun Monitor(thumb: ImageBitmap?, online: Boolean, modifier: Modifier, ratio: Float = 16f / 9f, badge: @Composable BoxScope.() -> Unit = {}) {
     val c = LocalMidnight.current
-    val shape = RoundedCornerShape(22.dp)
+    val shape = RoundedCornerShape(16.dp)
     Box(
-        modifier.aspectRatio(16f / 9f).clip(shape).background(Color.Black)
+        modifier.aspectRatio(ratio).clip(shape).background(Color.Black)
             .border(1.dp, c.border, shape),
     ) {
         AnimatedContent(thumb, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "thumb") { t ->
@@ -154,10 +154,10 @@ private fun PcPage(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, 
     val conn = a.connection(card)
     val unlock = rememberUnlocker(card.id, { m -> conn?.sendIfOnline(m) == true }, conn?.incoming)
     val modes = card.modes.filter { it in implemented }
-    @Composable fun overview(modifier: Modifier) {
+    @Composable fun overview(modifier: Modifier, previewRatio: Float = 16f / 9f) {
         Column(modifier) {
             Monitor(thumb, card.online && !card.locked,
-                Modifier.fillMaxWidth().combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() })) {
+                Modifier.fillMaxWidth().combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() }), ratio = previewRatio) {
                 StatusChip(card, Modifier.align(Alignment.TopStart).padding(12.dp))
                 if (card.locked) Icon(Icons.Rounded.Lock, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(40.dp))
             }
@@ -185,8 +185,12 @@ private fun PcPage(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, 
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         if (maxWidth >= 700.dp && maxWidth > maxHeight) {
+            // Reserve room for identity and the primary action before sizing the preview.
+            val previewWidth = (maxWidth - 64.dp) / 2
+            val previewHeight = (maxHeight - 176.dp).coerceAtLeast(80.dp)
+            val previewRatio = maxOf(16f / 9f, previewWidth.value / previewHeight.value)
             Row(Modifier.fillMaxSize().padding(20.dp, 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                overview(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
+                overview(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), previewRatio)
                 controls(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
             }
         } else {

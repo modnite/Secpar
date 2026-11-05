@@ -71,7 +71,9 @@
   rows. Rendered at 640×400 and 800×600; 14 desktop tests passed. Android now has a
   two-column home layout for wide docked windows, denser mode controls, matching
   48dp Material buttons and consistent mint/orange accents. Android debug/release
-  builds and 177 unit tests passed; emulator layout review is in progress.
+  builds and 177 unit tests passed; wide emulator layout review passed after reducing the preview height to keep
+  the primary action visible. Preview 11 retains the Preview 10 signing certificate;
+  the debug-only sample activity is excluded from the release APK.
 
 ## Active implementation
 

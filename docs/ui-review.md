@@ -52,3 +52,13 @@ local list scrolling. These are native-rendered sample states.
 ![Polished desktop at 800×600](screenshots/desktop-polish-800x600.png)
 
 ![Polished Friends at 640×400](screenshots/desktop-polish-friends-640x400.png)
+
+
+Android Home now places the PC preview/primary action and the mode grid in two
+columns when the window is at least 700dp wide and landscape. Preview height
+reserves room for the identity and Open screen action in short windows. Mode
+controls use compact rows; shared Material primary/secondary buttons have a 48dp
+minimum height. The debug-only fixture uses a sample PC and no network or pairing
+store. It is excluded from the release APK.
+
+![Android wide-window layout with sample PC](screenshots/android-polish-wide.png)
