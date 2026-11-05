@@ -16,11 +16,11 @@ Linux and macOS applications must also host and connect through one interface. T
 
 The image is a rendered layout sample. [More screenshots and review details](docs/ui-review.md).
 
-## Android Preview 14
+## Android Preview 15
 
-[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.14/Secpar-preview14.apk) · [Release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14)
+[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.15/Secpar-preview15.apk) · [Release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15)
 
-Android supports docked keyboard/mouse, cursor capture/release, trackpad fallback, remote pairing links and revised resolution handling. It stays client-only. Preview 12 fixed release scanner initialization; Preview 13 adds cropped decoding and focused still capture for dense QR codes, and directs setup to the desktop Hosting page. The exact host QR link was read through the isolated emulator camera and returned to the app in an instrumented test. The user confirmed built-in scanning and pairing on the Galaxy S23 with Preview 13 on November 5, 2026. Account/friend integration remains unfinished. Preview 14 adds bounded, display-paced video presentation and keyframe recovery after decoder backlog. Audio processing is unchanged; real S23 smoothness still needs comparison. Install over existing previews to preserve pairings. See [Android fork changes](docs/dock-input.md).
+Android supports docked keyboard/mouse, cursor capture/release, trackpad fallback, remote pairing links and revised resolution handling. It stays client-only. Preview 12 fixed release scanner initialization; Preview 13 adds cropped decoding and focused still capture for dense QR codes, and directs setup to the desktop Hosting page. The exact host QR link was read through the isolated emulator camera and returned to the app in an instrumented test. The user confirmed built-in scanning and pairing on the Galaxy S23 with Preview 13 on November 5, 2026. Account/friend integration remains unfinished. Preview 14 added bounded, display-paced video presentation but did not improve the user’s S23 slowdown. Preview 15 fixes concurrent send/receive nonce-buffer corruption reproduced by a packet integrity regression, and adds receive diagnostics. All 188 unit tests and 12,000 Android-provider packet checks pass. Audio processing is unchanged; the physical S23 performance result remains unverified. Install over existing previews to preserve pairings. See [Android fork changes](docs/dock-input.md).
 
 These are prereleases, installed manually. Android is debug-signed; Windows builds are unsigned; Mac development bundles are ad hoc signed and not notarized. GitHub's latest-stable endpoint excludes prereleases, so use these direct download links or the repository's Releases page.
 

@@ -188,6 +188,11 @@
   real-stream comparison. Added receive diagnostics for frame rate, throughput,
   loss, frame-assembly drops, invalid packets, processing wall-time peak and socket
   backlog/drop counts. Audio code and the PC host engine remain unchanged.
+- Android Preview 15 published from e489fc6: APK 24,008,327 bytes, SHA-256
+  95f92d9cc1c8b92b25c008e2e1170724f2b75f3c34a9f3c58b216b4b621652bf,
+  matching GitHub asset digest. The isolated Secpar emulator was stopped after
+  verification; the unrelated emulator and physical phone were left untouched.
+  Physical S23 streaming confirmation is pending. No PC update is required.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
@@ -231,7 +236,8 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 
 - Repository: https://github.com/modnite/Secpar
 - Desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
-- Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
+- Android Preview 15: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15
+- Previous Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
 - Previous Android Preview 13: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.13
 - Previous desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
 - Android Preview 12: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.12
