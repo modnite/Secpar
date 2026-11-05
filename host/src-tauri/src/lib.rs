@@ -30,7 +30,7 @@ pub mod win;
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter as _, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
@@ -138,14 +138,16 @@ pub fn run_with(extra: impl FnOnce(tauri::Builder<tauri::Wry>) -> tauri::Builder
         .setup(move |app| {
             let _ = win::sys::register_send_verb();
             let open = MenuItem::with_id(app, "open", "Open Secpar", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Hide from tray", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Secpar", true, None::<&str>)?;
             let tray = TrayIconBuilder::with_id("tray")
                 .icon(app.default_window_icon().cloned().expect("icon"))
                 .tooltip("Secpar")
-                .menu(&Menu::with_items(app, &[&open, &quit])?)
+                .menu(&Menu::with_items(app, &[&open, &PredefinedMenuItem::separator(app)?, &quit])?)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, e| match e.id.as_ref() {
                     "open" => show_window(app),
+                    // Explicit exit carries Some(0), so the close-to-tray guard
+                    // below does not intercept it. The hosting service is separate.
                     "quit" => app.exit(0),
                     _ => {}
                 })

@@ -89,6 +89,12 @@
 - This UI release requires no PC host update. Android account/friend integration
   and physical Galaxy S23/DeX/QR validation remain pending.
 
+- Tray exit discoverability fix: the misleading "Hide from tray" action is now
+  "Quit Secpar", separated from Open Secpar. Explicit app.exit(0) bypasses the
+  close-window exit guard; the separate Windows hosting service keeps running.
+  Build/package verification is in progress. No installed process/service is
+  stopped to test this change.
+
 ## Active implementation
 
 1. Native Windows desktop sign-in **confirmed by the user on 2026-11-05**: the account appears after browser approval in Desktop Development 2. Friend actions with another real account and restart reconnect are still unverified.

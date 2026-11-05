@@ -4,13 +4,23 @@ Windows tray app and background service for the Secpar Android and development d
 
 Secpar installs alongside PC Remote with its own identity: service `Secpar`, executable `secpar-host.exe`, TLS port 48999, stream UDP port 48998 and protected data under `%PROGRAMDATA%\Secpar`. Existing PC Remote pairings and services are not migrated or replaced.
 
-The host supports signed, expiring pairing links/QR codes, physical keyboard/mouse, trackpad input, display/resolution negotiation, audio, clipboard/files and direct/relay routing. Owner pairings have broader privileges than friend admission grants. Account login and permission-enforced friend hosting are not integrated yet; the current streaming engine still has one active stream.
+The host supports signed, expiring pairing links/QR codes, physical keyboard/mouse, trackpad input, display/resolution negotiation, audio, clipboard/files and direct/relay routing. Owner pairings have broader privileges than friend admission grants. Local Windows host account linking is available through Secpar Desktop; permission-enforced friend hosting is not integrated yet; the current streaming engine still has one active stream.
 
 ## Compact interface
 
 The window opens at 640×480, can resize to 480×400 and adapts settings into two columns at widths of at least 560. Pairing actions sit beside the QR code; click the code to enlarge it, and press Escape to close. The enlarged code follows normal QR refreshes. Home and Settings were reviewed at 640×400 with zero main-panel scrolling and sample state; see [screenshots and validation limits](../docs/ui-review.md).
 
 For a frontend-only review, run `npm run dev` and open `/layout-review.html`. That page supplies sample state with the pairing QR hidden and does not connect to the installed service. It is not the production Vite entry point.
+
+## Tray and closing
+
+Closing the window keeps the tray app running. Right-click the Secpar tray icon
+and choose **Quit Secpar** to exit the tray/window app. The separate Windows
+hosting service continues running, so remote access stays available.
+
+Earlier previews call this same exit action **Hide from tray**. It exits the UI;
+it is not just a minimize action. Stopping hosting is separate from exiting the UI
+and disconnects clients; do not stop the service through your only remote session.
 
 ## Build
 
