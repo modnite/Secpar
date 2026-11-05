@@ -51,9 +51,10 @@ pub fn show_window(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
         .title("Secpar")
-        .inner_size(440.0, 680.0)
-        .resizable(false)
-        .maximizable(false)
+        .inner_size(640.0, 480.0)
+        .min_inner_size(480.0, 400.0)
+        .resizable(true)
+        .maximizable(true)
         .decorations(false)
         .transparent(false)
         .center()

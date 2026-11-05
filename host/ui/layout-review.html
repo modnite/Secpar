@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Secpar Host layout review · sample state</title><link rel="stylesheet" href="/src/theme.css"><div id="app"></div><script>
+window.__TAURI__={core:{invoke:async(name,args)=>{
+const cmd=name==='call'?args.cmd:name;
+if(cmd==='get_state')return {name:'This computer',devices:[],locked:false};
+if(cmd==='new_qr')return {link:'',svg:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 224 224"><rect width="224" height="224" fill="white"/><rect x="20" y="20" width="184" height="184" rx="4" fill="none" stroke="#777"/><text x="112" y="106" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#333">Pairing code hidden</text><text x="112" y="124" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#777">Layout review</text></svg>'};
+if(cmd==='get_config')return {config:{autostart:true,display:'',max_quality:'auto',allow_files:true,allow_clip:true,anywhere:false,files_dir:'Downloads'},displays:[{id:'1',name:'Display 1',primary:true}]};
+if(cmd==='get_net')return {upnp:false,public:null,manual:false,lan:[]};
+if(cmd==='set_config')return null;
+throw Error('Unavailable in layout review');
+}},event:{listen:async()=>()=>{}},window:{getCurrentWindow:()=>({minimize:async()=>{},close:async()=>{}})}};
+</script><script type="module" src="/src/main.ts"></script></html>

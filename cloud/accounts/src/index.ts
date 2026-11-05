@@ -639,6 +639,17 @@ export async function handle(
         return response({ removed: true });
       }
     }
+    if (path === "/v1/blocks" && method === "GET") {
+      return response(
+        (
+          await q(
+            env,
+            "SELECT a.id,a.handle,a.name FROM blocks b JOIN accounts a ON a.id=b.blocked WHERE b.owner=? ORDER BY a.handle",
+            me.id,
+          ).all()
+        ).results,
+      );
+    }
     const block = path.match(/^\/v1\/blocks\/([^/]+)$/);
     if (block && method === "DELETE") {
       await q(

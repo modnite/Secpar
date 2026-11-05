@@ -8,7 +8,7 @@ Every cell is a target, not an assertion that it works today:
 
 | Host → client | Windows | Linux | macOS | Android |
 | --- | --- | --- | --- | --- |
-| Windows | Planned | Planned | Planned | Existing |
+| Windows | Development client | Development client | Development client | Existing |
 | Linux | Planned | Planned | Planned | Planned |
 | macOS | Planned | Planned | Planned | Planned |
 
@@ -22,7 +22,7 @@ The library has no Tauri, Windows service, capture, decoder or input dependency.
 
 `crates/secpar-network` now also owns the existing portable STUN and TURN implementation, consumed by both the Windows host and new client. `crates/secpar-client` implements pinned control pairing/reconnect, the PRS receiver/session loop and remote route setup. `desktop/` contains a native development client with software H.264 decode, Opus playback and keyboard/mouse capture. See its [current implementation and limits](../desktop/README.md).
 
-Next, finish desktop client validation and separate the remaining control/identity protocol from the Windows service. Desktop clients need connection/pairing storage, direct UDP/TURN transport, packet reassembly, hardware video decoding/presentation, audio playback, input capture, cursor release and display/resolution negotiation. A webview alone must not become the video or mouse transport.
+Next, finish desktop client validation and separate the remaining control/identity protocol from the Windows service. Desktop clients need a full saved-computer list, hardware video decoding/presentation, audio playback, input capture, cursor release and display/resolution negotiation. A webview alone must not become the video or mouse transport.
 
 The desktop UI should present Computers, Friends and This computer. Hosting is an explicit setting; opening the client does not automatically enable inbound control. Do not add active-looking UI for unavailable features.
 
@@ -42,7 +42,7 @@ Official platform references: [Apple ScreenCaptureKit](https://developer.apple.c
 
 Personal device pairing and friend access are different trust relationships. Keep existing paired-device access working, but never turn a friend relationship into an owner token.
 
-`cloud/accounts` now implements a development account API for email/password verification and reset, optional GitHub OAuth/PKCE, native device approval, hashed account sessions, friend consent/blocking, computer metadata, guest requests and signed limited admission grants. The API is deployed at https://accounts.secpar.win, and the email sender has passed provider simulation; real inbox delivery and host/client UI integration remain unverified or incomplete; cryptographic host enrollment, presence and host grant enforcement remain unfinished. See its [configuration and limits](../cloud/accounts/README.md). Connection invitations must be short-lived, single-use and bound to the intended host, authenticated guest and requested permissions. The host remains responsible for accepting a session and enforcing the grant. Revocation must also terminate an already-open session.
+`cloud/accounts` now implements a development account API for email/password verification and reset, optional GitHub OAuth/PKCE, native device approval, hashed account sessions, friend consent/blocking, computer metadata, guest requests and signed limited admission grants. The API is deployed at https://accounts.secpar.win, and the email sender has passed provider simulation; the user confirmed inbox verification and browser sign-in. Desktop friend UI and secure storage are implemented in development source; native approval still needs user validation; cryptographic host enrollment, presence and host grant enforcement remain unfinished. See its [configuration and limits](../cloud/accounts/README.md). Connection invitations must be short-lived, single-use and bound to the intended host, authenticated guest and requested permissions. The host remains responsible for accepting a session and enforcing the grant. Revocation must also terminate an already-open session.
 
 Start with host approval for each guest connection. Permissions should separately cover viewing/audio, gamepad input, keyboard/mouse, clipboard and files. Windows unlock, power controls, unrestricted file browsing and unattended access are owner functions unless explicitly implemented as separately approved permissions. A friend request alone grants none of them.
 
@@ -60,7 +60,7 @@ Accounts require a Secpar-controlled backend. The original project's public rend
 
 Do not label a platform supported until a real host/client session has passed end-to-end tests on that OS. For each combination test LAN and remote routing, resize/multi-monitor behavior, keyboard/mouse capture and escape, audio, reconnect, disconnect cleanup and permissions. Multiplayer additionally needs simultaneous physical controllers, guest revocation and packet loss tests. Native platform testing and signed distribution remain required before public stable releases.
 
-The portable libraries and development desktop client are implemented in source. They do not change the Preview 10 downloads. Linux/macOS hosting, production desktop-client support, unified hosting/client UI, accounts/friends and simultaneous multiplayer remain unfinished.
+The portable libraries and development desktop client are implemented in source. They do not change the Preview 10 downloads. Linux/macOS hosting, production desktop-client support, unified hosting/client UI, host/Android account integration, guest admission and simultaneous multiplayer remain unfinished.
 
 ## CI runners
 

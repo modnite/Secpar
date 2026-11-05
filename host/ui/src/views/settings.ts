@@ -41,22 +41,22 @@ export async function settings(): Promise<HTMLElement> {
     }
   };
   return h(
-    "section.view",
+    "section.view.settings",
     {},
     h("h2", {}, "Settings"),
     h(
       "div.group",
       {},
-      toggle("Show in the tray", "Start the tray app at sign-in", config.autostart, (v) => save({ autostart: v })),
+      toggle("Start at sign-in", "", config.autostart, (v) => save({ autostart: v })),
       select("Display", config.display, [["", "Primary display"], ...displays.map((d): [string, string] => [d.id, d.primary ? `${d.name} (primary)` : d.name])], (v) => save({ display: v })),
       select("Maximum quality", config.max_quality, [["auto", "Auto"], ["smooth", "Smooth"], ["sharp", "Sharp"], ["battery", "Battery saver"]], (v) => save({ max_quality: v })),
     ),
     h(
       "div.group",
       {},
-      toggle("Receive files", "Phones can send files to this PC", config.allow_files, (v) => save({ allow_files: v })),
-      toggle("Share clipboard", "Sync with connected devices", config.allow_clip, (v) => save({ allow_clip: v })),
-      toggle("Direct connection from anywhere", "Allow automatic port mapping (UPnP)", config.anywhere, async (v) => {
+      toggle("Receive files", "", config.allow_files, (v) => save({ allow_files: v })),
+      toggle("Share clipboard", "", config.allow_clip, (v) => save({ allow_clip: v })),
+      toggle("Direct remote access", "Automatic port mapping (UPnP)", config.anywhere, async (v) => {
         netNote.textContent = v ? "Asking your router…" : "";
         await save({ anywhere: v });
         showNet();

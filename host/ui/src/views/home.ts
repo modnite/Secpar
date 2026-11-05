@@ -13,6 +13,14 @@ function status(s: State): [string, string] {
 export function home(state: State): HTMLElement {
   const [tone, text] = status(state);
   const qr = h("div.qr", { "aria-label": "Pairing code" });
+  const enlarge = () => {
+    const dialog = h("dialog.pairing-dialog");
+    const close = h("button.ghost", { onclick: () => (dialog as HTMLDialogElement).close() }, "Close");
+    dialog.append(h("div.dialog-heading", {}, h("strong", {}, "Pair a device"), close), qr.cloneNode(true));
+    dialog.addEventListener("close", () => dialog.remove());
+    document.body.append(dialog);
+    (dialog as HTMLDialogElement).showModal();
+  };
   const left = h("span.countdown");
   let link = "";
   const copy = h("button.ghost", {
@@ -32,6 +40,8 @@ export function home(state: State): HTMLElement {
   const refresh = async () => {
     const code = await invoke<{ svg: string; link: string }>("new_qr");
     qr.innerHTML = code.svg;
+    const expanded = document.querySelector(".pairing-dialog .qr");
+    if (expanded) expanded.innerHTML = code.svg;
     link = code.link;
     expires = Date.now() + TTL * 1000;
     tick();
@@ -48,9 +58,12 @@ export function home(state: State): HTMLElement {
     h("div.hero", {},
       h(`span.pill.${tone}`, {}, h("i.dot"), text),
       h("h1.pc", {}, state.name)),
-    h("div.code", {}, qr),
-    h("p.lead", {}, "Scan in Secpar, or copy the pairing link."),
-    h("div.under", {}, left, copy),
+    h("div.pairing", {},
+      h("button.code.qr-zoom", { "aria-label": "Enlarge pairing code", onclick: enlarge }, qr),
+      h("div.pairing-actions", {},
+        h("h2", {}, "Pair a device"),
+        h("p.lead", {}, "Scan with Secpar"),
+        copy, left)),
     connected.length
       ? h("ul.list.compact", {}, ...connected.map((d) => h("li.row", {}, h("i.dot.live"), h("span.grow.label", {}, d.name),
           h("button.ghost", { onclick: () => send(d.id, false) }, "Send a file"),

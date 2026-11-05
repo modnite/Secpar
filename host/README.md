@@ -1,37 +1,29 @@
-# PC Remote Host (Windows)
+# Secpar Host for Windows
 
-The Windows side of PC Remote: a small tray app (Rust + Tauri 2) that pairs phones by QR code, runs the agent from [`docs/protocol.md`](../docs/protocol.md) on TLS port 47999, and drives a hidden Sunshine for screen sharing.
+Windows tray app and background service for the Secpar Android and development desktop clients. It uses the existing native PRS capture/encode/input engine; Sunshine is not required for streaming.
 
-The agent serves mouse and keyboard, media (now playing and volume), gamepads (virtual Xbox 360 via ViGEmBus), files both ways with resume, two-way clipboard, power, live thumbnails and access from anywhere (UPnP). Send a file to your phone from Home, or right-click it in Explorer and choose **Send to phone**.
+Secpar installs alongside PC Remote with its own identity: service `Secpar`, executable `secpar-host.exe`, TLS port 48999, stream UDP port 48998 and protected data under `%PROGRAMDATA%\Secpar`. Existing PC Remote pairings and services are not migrated or replaced.
 
-| Home | Devices | Settings | About |
-|---|---|---|---|
-| ![Home](docs/screens/home.jpg) | ![Devices](docs/screens/devices.jpg) | ![Settings](docs/screens/settings.jpg) | ![About](docs/screens/about.jpg) |
+The host supports signed, expiring pairing links/QR codes, physical keyboard/mouse, trackpad input, display/resolution negotiation, audio, clipboard/files and direct/relay routing. Owner pairings have broader privileges than friend admission grants. Account login and permission-enforced friend hosting are not integrated yet; the current streaming engine still has one active stream.
+
+## Compact interface
+
+The window opens at 640×480, can resize to 480×400 and adapts settings into two columns at widths of at least 560. Pairing actions sit beside the QR code; click the code to enlarge it, and press Escape to close. The enlarged code follows normal QR refreshes. Home and Settings were reviewed at 640×400 with zero main-panel scrolling and sample state; see [screenshots and validation limits](../docs/ui-review.md).
+
+For a frontend-only review, run `npm run dev` and open `/layout-review.html`. That page supplies sample state with the pairing QR hidden and does not connect to the installed service. It is not the production Vite entry point.
 
 ## Build
 
-Needs Rust (MSVC), Node 20+ and the Visual Studio C++ build tools.
+Requires Windows, Rust/MSVC, Node and the Visual Studio C++ build tools.
 
-```bash
-npm install
-powershell -File scripts/fetch-deps.ps1   # Sunshine MSI + ViGEmBus into src-tauri/installer/deps
-npm run tauri build                       # installer in src-tauri/target/release/bundle/nsis
+```sh
+npm ci
+npm run build
+npm run tauri build
 ```
 
-Tests and lint: `cd src-tauri && cargo test && cargo clippy -- -D warnings`.
+For a development installer use `npm run tauri build -- --debug`. Building does not install or restart the running service. Installers are under `src-tauri/target/{debug,release}/bundle/nsis`.
 
-## What the installer does
+The installer requires administrator access, registers/updates the Secpar service and its firewall rules, and preserves the independent PC Remote installation. Updating an installed Secpar service can interrupt its current stream: do not install a development build over your only remote connection. No installer should run automatically as a build or visual-test step.
 
-Installs per machine, then: installs Sunshine and the ViGEmBus driver if they are missing, opens TCP 47999 in the firewall for the app, lets the tray app restart the Sunshine service, creates hidden Sunshine admin credentials (DPAPI-protected), and starts the app with Windows. Uninstall removes the firewall rule and autostart and asks whether to remove Sunshine.
-
-Data lives in `%APPDATA%\PC Remote`: `store.json` (paired phones as token hashes, settings), `tls.cer`/`tls.key` (the pinned certificate; key DPAPI-encrypted), `sunshine.cred` (DPAPI).
-
-## Measured (v1.0.0, release build)
-
-| | |
-|---|---|
-| `pc-remote-host.exe` | 5.4 MiB (5,711,360 bytes) |
-| Installer (with Sunshine MSI and ViGEmBus) | 37.3 MiB (39,132,399 bytes) |
-| Tray idle, 60 s after start | 2.5 MB private working set (18 MB incl. shared DLLs), 0.000 s CPU |
-| After opening and closing the window | 4.0 MB private working set, webview processes gone |
-| UI script | 3.5 KB gzipped |
+The existing installer no longer installs/uninstalls Sunshine or changes shared display adapters and power settings. Keep existing virtual-controller drivers intact. Legacy upstream size/performance figures do not describe current Secpar builds.

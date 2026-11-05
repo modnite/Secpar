@@ -664,3 +664,15 @@ describe("browser form regression", () => {
     ).toBe(1);
   });
 });
+
+describe("blocked people", () => {
+  it("lists only the current account's blocks and supports unblocking", async () => {
+    expect((await call("/v1/blocks/bob", "alice", "PUT")).status).toBe(200);
+    const blocked = await (await call("/v1/blocks")).json();
+    expect(blocked.map((user: { id: string }) => user.id)).toEqual(["bob"]);
+    expect(await (await call("/v1/blocks", "mallory")).json()).toEqual([]);
+    expect((await call("/v1/blocks", null)).status).toBe(401);
+    expect((await call("/v1/blocks/bob", "alice", "DELETE")).status).toBe(200);
+    expect(await (await call("/v1/blocks")).json()).toEqual([]);
+  });
+});
