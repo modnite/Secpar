@@ -17,7 +17,8 @@ the QR code is hidden. No installed host/service was changed or restarted.
 
 The main host panel measured zero overflow at 640×400 on Home and Settings, compared
 with 138px of settings overflow before the two-column layout. Primary controls remain
-visible; longer lists scroll locally. At widths below 560px host settings falls back to
+visible. Desktop friend lists scroll locally; long host device lists currently use the
+main scroller and need another layout pass when concurrent hosting is added. At widths below 560px host settings falls back to
 one column and may scroll. Readable text is preserved rather than uniformly shrinking
 controls. Actual high-DPI hardware/macOS/Linux reviews remain required.
 
