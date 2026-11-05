@@ -1,3 +1,4 @@
+import { passwordRoutes, accountPage } from "./passwords";
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
 
 export interface Env {
@@ -6,6 +7,8 @@ export interface Env {
   GITHUB_CLIENT_ID: string;
   GITHUB_CLIENT_SECRET: string;
   GRANT_PRIVATE_JWK: string;
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
 }
 type Account = { id: string; handle: string; name: string };
 type Grant = {
@@ -270,7 +273,23 @@ export async function handle(
       const key = await signing(env);
       return response({ keys: [key.publicKey] });
     }
-    if (path === "/auth/start" && method === "GET") {
+    const passwordResponse = await passwordRoutes(request, env, providerFetch);
+    if (passwordResponse) return passwordResponse;
+    if (path === "/auth/start" && method === "GET")
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location:
+            base +
+            "/auth/sign-in" +
+            (url.searchParams.has("activate_code")
+              ? "?activate_code=" +
+                encodeURIComponent(url.searchParams.get("activate_code")!)
+              : ""),
+          "cache-control": "no-store",
+        },
+      });
+    if (path === "/auth/github" && method === "GET") {
       await limit(request, env, "login", 10);
       if (
         !env.GITHUB_CLIENT_ID ||
@@ -534,6 +553,7 @@ export async function handle(
       );
     }
 
+    if (path === "/account" && method === "GET") return accountPage(me.handle);
     if (path === "/v1/me" && method === "GET") return response(me);
     if (path === "/auth/logout" && method === "POST") {
       const token =
@@ -548,8 +568,13 @@ export async function handle(
         await hash(token),
       ).run();
       return new Response(null, {
-        status: 204,
+        status: request.headers.get("accept")?.includes("text/html")
+          ? 303
+          : 204,
         headers: {
+          ...(request.headers.get("accept")?.includes("text/html")
+            ? { location: "/auth/sign-in" }
+            : {}),
           "set-cookie": setCookie(SESSION, "", 0),
           "cache-control": "no-store",
         },
@@ -795,6 +820,7 @@ export async function handle(
 export async function cleanup(env: Env) {
   const now = seconds();
   await env.DB.batch([
+    q(env, "DELETE FROM email_tokens WHERE expires<=?", now),
     q(env, "DELETE FROM oauth_states WHERE expires<=?", now),
     q(env, "DELETE FROM sessions WHERE expires<=?", now),
     q(env, "DELETE FROM device_auth WHERE expires<=?", now),

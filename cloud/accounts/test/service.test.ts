@@ -33,6 +33,12 @@ class Database {
         "utf8",
       ),
     );
+    this.db.exec(
+      readFileSync(
+        new URL("../migrations/0002_passwords.sql", import.meta.url),
+        "utf8",
+      ),
+    );
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -134,7 +140,7 @@ describe("authentication", () => {
     expect((await call("/v1/me")).status).toBe(401);
   });
   it("uses browser-bound one-use OAuth state and PKCE and stores only session hashes", async () => {
-    const begin = await handle(new Request(base + "/auth/start"), env);
+    const begin = await handle(new Request(base + "/auth/github"), env);
     const location = new URL(begin.headers.get("location")!);
     const state = location.searchParams.get("state")!;
     expect(location.searchParams.get("code_challenge_method")).toBe("S256");
@@ -396,9 +402,9 @@ describe("configuration and resource limits", () => {
   it("limits unauthenticated login creation and bounds streamed request bodies", async () => {
     for (let n = 0; n < 10; n++)
       expect(
-        (await handle(new Request(base + "/auth/start"), env)).status,
+        (await handle(new Request(base + "/auth/github"), env)).status,
       ).toBe(302);
-    expect((await handle(new Request(base + "/auth/start"), env)).status).toBe(
+    expect((await handle(new Request(base + "/auth/github"), env)).status).toBe(
       429,
     );
     const request = new Request(base + "/v1/computers", {
@@ -411,5 +417,189 @@ describe("configuration and resource limits", () => {
       body: JSON.stringify({ name: "x".repeat(9000), platform: "windows" }),
     });
     expect((await handle(request, env)).status).toBe(413);
+  });
+});
+
+describe("email and password accounts", () => {
+  const pass = "correct horse battery staple";
+  const nextPass = "a different long password phrase";
+  async function form(
+    path: string,
+    fields: Record<string, string>,
+    send?: typeof fetch,
+    requestOrigin = base,
+  ) {
+    return handle(
+      new Request(base + path, {
+        method: "POST",
+        headers: {
+          origin: requestOrigin,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(fields),
+      }),
+      env,
+      send,
+    );
+  }
+  function mailCapture(messages: { to: string; text: string }[]): typeof fetch {
+    return async (_input, init) => {
+      const message = JSON.parse(String(init?.body));
+      expect(message.text).not.toContain(pass);
+      messages.push({ to: message.to[0], text: message.text });
+      return Response.json({ id: "email-id" });
+    };
+  }
+  function link(message: { text: string }) {
+    return new URL(message.text.split("\n")[1]);
+  }
+  it("keeps registration and reset closed without configured email delivery", async () => {
+    expect((await call("/auth/register", null)).status).toBe(503);
+    expect(
+      (
+        await form("/auth/register", {
+          email: "friend@example.com",
+          handle: "friend",
+          password: pass,
+        })
+      ).status,
+    ).toBe(503);
+    expect(
+      (await form("/auth/forgot", { email: "friend@example.com" })).status,
+    ).toBe(503);
+    expect(
+      db.db.prepare("SELECT count(*) AS n FROM password_accounts").get()?.n,
+    ).toBe(0);
+  });
+  it("verifies email, signs in, resets once and revokes old sessions", async () => {
+    env.RESEND_API_KEY = "test-mail-key";
+    env.EMAIL_FROM = "Secpar <accounts@secpar.win>";
+    const messages: { to: string; text: string }[] = [];
+    const send = mailCapture(messages);
+    const fields = {
+      email: "Friend@Example.com",
+      handle: "friend",
+      password: pass,
+    };
+    expect((await form("/auth/register", fields, send)).status).toBe(200);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].to).toBe("friend@example.com");
+    const stored = db.db.prepare("SELECT * FROM password_accounts").get()!;
+    expect(stored.password_hash).not.toContain(pass);
+    expect(stored.password_hash).toMatch(/^scrypt-16384-8-5/);
+    expect((await form("/auth/sign-in", fields)).status).toBe(401);
+    const verify = link(messages[0]);
+    const token = verify.searchParams.get("token")!;
+    expect(db.db.prepare("SELECT hash FROM email_tokens").get()?.hash).not.toBe(
+      token,
+    );
+    // Mail scanners cannot consume the link with GET.
+    expect((await handle(new Request(verify), env)).status).toBe(200);
+    expect(
+      (await form("/auth/verify", { token }, send, "https://evil.test")).status,
+    ).toBe(403);
+    expect((await form("/auth/verify", { token })).status).toBe(200);
+    expect((await form("/auth/verify", { token })).status).toBe(400);
+    const login = await form("/auth/sign-in", {
+      ...fields,
+      activate_code: "ABCDEFGH",
+    });
+    expect(login.status).toBe(303);
+    expect(login.headers.get("location")).toBe("/activate?code=ABCDEFGH");
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    expect(login.headers.get("set-cookie")).toContain(
+      "Secure; HttpOnly; SameSite=Lax",
+    );
+    expect(
+      (await call("/v1/me", null, "GET", undefined, { cookie })).status,
+    ).toBe(200);
+    // Existing signup cannot overwrite an account's credentials.
+    expect(
+      (await form("/auth/register", { ...fields, password: nextPass }, send))
+        .status,
+    ).toBe(200);
+    expect(messages).toHaveLength(1);
+    expect(
+      (await form("/auth/forgot", { email: fields.email }, send)).status,
+    ).toBe(200);
+    const resetToken = link(messages[1]).searchParams.get("token")!;
+    const results = await Promise.all([
+      form("/auth/reset", { token: resetToken, password: nextPass }),
+      form("/auth/reset", { token: resetToken, password: nextPass }),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 400]);
+    expect(
+      (await call("/v1/me", null, "GET", undefined, { cookie })).status,
+    ).toBe(401);
+    expect((await form("/auth/sign-in", fields)).status).toBe(401);
+    // Use another IP to avoid the intended 5-attempt account bucket in this test.
+    db.db.exec("DELETE FROM rate_limits");
+    expect(
+      (await form("/auth/sign-in", { ...fields, password: nextPass })).status,
+    ).toBe(303);
+  });
+  it("bounds input, requires origin, rejects weak passwords and limits login attempts", async () => {
+    expect(
+      (
+        await form(
+          "/auth/sign-in",
+          { email: "x@example.com", password: pass },
+          undefined,
+          "https://evil.test",
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await form("/auth/sign-in", {
+          email: "x@example.com",
+          password: "short",
+        })
+      ).status,
+    ).toBe(400);
+    for (let i = 0; i < 5; i++)
+      expect(
+        (
+          await form("/auth/sign-in", {
+            email: "missing@example.com",
+            password: pass,
+          })
+        ).status,
+      ).toBe(401);
+    expect(
+      (
+        await form("/auth/sign-in", {
+          email: "missing@example.com",
+          password: pass,
+        })
+      ).status,
+    ).toBe(429);
+    const huge = new Request(base + "/auth/sign-in", {
+      method: "POST",
+      headers: { origin: base, "content-type": "application/json" },
+      body: JSON.stringify({ password: "x".repeat(9000) }),
+    });
+    expect((await handle(huge, env)).status).toBe(413);
+  });
+  it("does not log in after expiry and does not change credentials with expired reset tokens", async () => {
+    env.RESEND_API_KEY = "key";
+    env.EMAIL_FROM = "accounts@secpar.win";
+    const messages: { to: string; text: string }[] = [];
+    await form(
+      "/auth/register",
+      { email: "new@example.com", handle: "friend", password: pass },
+      mailCapture(messages),
+    );
+    const token = link(messages[0]).searchParams.get("token")!;
+    db.db.exec("UPDATE email_tokens SET expires=0");
+    expect((await form("/auth/verify", { token })).status).toBe(400);
+    expect(
+      (
+        await form("/auth/sign-in", {
+          email: "new@example.com",
+          password: pass,
+        })
+      ).status,
+    ).toBe(401);
   });
 });

@@ -1,12 +1,14 @@
 {
   "name": "secpar-accounts",
   "main": "src/index.ts",
+  "compatibility_flags": ["nodejs_compat"],
   "compatibility_date": "2026-11-04",
   "triggers": {
     "crons": ["0 * * * *"],
   },
   "vars": {
     "PUBLIC_ORIGIN": "https://accounts.secpar.win",
+    "EMAIL_FROM": "Secpar <accounts@mail.secpar.win>",
   },
   "d1_databases": [
     {

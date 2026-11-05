@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: "24"
       - run: npm ci --ignore-scripts
         working-directory: cloud/accounts
       - run: npm run check && npm test
@@ -44,6 +44,11 @@ jobs:
       - name: Seed the admission signing key once
         if: inputs.service == 'accounts' || inputs.service == 'both'
         run: node cloud/scripts/cloudflare.mjs signing-key
+      - name: Configure account email when its secret is available
+        if: inputs.service == 'accounts' || inputs.service == 'both'
+        env:
+          SECPAR_RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: node cloud/scripts/cloudflare.mjs email-key
       - name: Install the rendezvous build dependencies
         if: inputs.service == 'relay' || inputs.service == 'both'
         working-directory: cloud/rendezvous
@@ -54,4 +59,8 @@ jobs:
         run: npm test && npx wrangler deploy --config "${{ steps.config.outputs.relay }}"
       - name: Check the deployed account service
         if: inputs.service == 'accounts' || inputs.service == 'both'
-        run: curl --fail --retry 5 --retry-delay 5 https://accounts.secpar.win/health
+        run: |
+          # A new public record may precede the local resolver cache.
+          # This request-only fallback keeps HTTPS verification.
+          curl --fail --max-time 20 --retry 2 --retry-delay 5 https://accounts.secpar.win/health ||
+            curl --doh-url https://cloudflare-dns.com/dns-query --fail --max-time 20 https://accounts.secpar.win/health

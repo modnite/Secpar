@@ -137,10 +137,29 @@ async function signingKey() {
     "Created the Secpar admission signing key in Cloudflare's secret store.",
   );
 }
+async function emailKey() {
+  const key = process.env.SECPAR_RESEND_API_KEY;
+  if (!key) {
+    console.log(
+      "Email delivery is not configured; registration stays disabled.",
+    );
+    return;
+  }
+  const id = await account();
+  await api(`/accounts/${id}/workers/scripts/secpar-accounts/secrets`, "PUT", {
+    name: "RESEND_API_KEY",
+    type: "secret_text",
+    text: key,
+  });
+  console.log(
+    "Configured the email API credential in Cloudflare's secret store.",
+  );
+}
 try {
   if (process.argv[2] === "prepare") await prepare();
   else if (process.argv[2] === "signing-key") await signingKey();
-  else throw new Error("Expected prepare or signing-key.");
+  else if (process.argv[2] === "email-key") await emailKey();
+  else throw new Error("Expected prepare, signing-key or email-key.");
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
