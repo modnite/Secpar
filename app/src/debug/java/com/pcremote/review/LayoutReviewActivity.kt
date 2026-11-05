@@ -22,7 +22,7 @@ class LayoutReviewActivity : ComponentActivity() {
         setContent {
             MidnightTheme(dark = !intent.getBooleanExtra("light", false)) {
                 Box(Modifier.fillMaxSize()) {
-                    HomeScreen(listOf(PcCardUi("fixture", "Studio PC", true, false, Mode.entries.toList(), PrimaryAction.OPEN, os = "Windows 11")), emptyMap(), Mode.entries.toSet(),
+                    HomeScreen(if (intent.getBooleanExtra("empty", false)) emptyList() else listOf(PcCardUi("fixture", "Studio PC", true, false, Mode.entries.toList(), PrimaryAction.OPEN, os = "Windows 11")), emptyMap(), Mode.entries.toSet(),
                         HomeActions(open = { _, _ -> }, primary = {}, addPc = {}, settings = {}, refresh = {}, rename = { _, _ -> }, remove = {}))
                     Text("Layout sample", color = LocalMidnight.current.textDim,
                         modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp).background(LocalMidnight.current.bg))

@@ -114,14 +114,13 @@ fun HomeScreen(cards: List<PcCardUi>, thumbs: Map<String, ImageBitmap>, implemen
 @Composable
 private fun EmptyState(addPc: () -> Unit) {
     val c = LocalMidnight.current
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
-        Monitor(null, online = false, Modifier.fillMaxWidth())
-        Spacer(Modifier.height(32.dp))
-        Text(stringResource(R.string.pcr_no_pcs_title), color = c.text, style = MaterialTheme.typography.displaySmall)
-        Spacer(Modifier.height(10.dp))
-        Text(stringResource(R.string.pcr_no_pcs_body), color = c.textDim, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(28.dp))
-        PrimaryButton(stringResource(R.string.pcr_ob_scan), addPc, icon = Icons.Rounded.QrCodeScanner, modifier = Modifier.fillMaxWidth())
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(Modifier.widthIn(max = 480.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Icon(Icons.Rounded.DesktopWindows, null, tint = c.accent, modifier = Modifier.size(36.dp))
+            Text(stringResource(R.string.pcr_no_pcs_title), color = c.text, style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.pcr_no_pcs_body), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+            PrimaryButton(stringResource(R.string.pcr_ob_scan), addPc, icon = Icons.Rounded.QrCodeScanner, modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 
