@@ -27,6 +27,7 @@ pub enum Event {
     Status(String),
     Video(VideoFrame),
     Audio(Vec<u8>),
+    CursorShape { png: Vec<u8>, hotspot: [i32; 2] },
     Displays(Value),
     Cursor { x: i16, y: i16, visible: bool },
     Ended(String),
@@ -324,6 +325,11 @@ pub async fn run(
                     }
                     "stream.cand"=>if let Some(c)=v["c"].as_str().and_then(|s|s.parse::<SocketAddr>().ok()).filter(SocketAddr::is_ipv4){if peer.targets.len()<32 && !peer.targets.contains(&c){peer.targets.push(c);peer.permit();}},
                     "stream.displays"=>notify(&events,Event::Displays(v)).await?,
+                    "cursor.shape"=>{
+                        if let(Some(encoded),Some(hx),Some(hy))=(v["png"].as_str().filter(|s|s.len()<=350_000),v["hx"].as_i64().and_then(|n|i32::try_from(n).ok()),v["hy"].as_i64().and_then(|n|i32::try_from(n).ok())) {
+                            if let Ok(png)=base64::engine::general_purpose::STANDARD.decode(encoded){notify(&events,Event::CursorShape{png,hotspot:[hx,hy]}).await?;}
+                        }
+                    },
                     "stream.error"|"error"=>return Err(v["msg"].as_str().unwrap_or("Host refused the stream").to_string()),
                     _=>{},
                 }

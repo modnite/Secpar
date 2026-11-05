@@ -50,7 +50,10 @@ struct App {
     displays: Vec<(String, String)>,
     display: String,
     cursor: (i16, i16, bool),
+    cursor_shape: Option<(TextureHandle, [i32; 2])>,
     fullscreen: bool,
+    focused: bool,
+    auto_capture_pending: bool,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -93,7 +96,10 @@ impl App {
             displays: vec![],
             display: String::new(),
             cursor: (0, 0, false),
+            cursor_shape: None,
             fullscreen: false,
+            focused: true,
+            auto_capture_pending: false,
         }
     }
     fn start(&mut self, ctx: &egui::Context, reconnect: bool) {
@@ -123,9 +129,11 @@ impl App {
         self.command = Some(tx);
         self.events = Some(ev_rx);
         self.status = "Connecting".into();
+        self.auto_capture_pending = true;
         self.decoder = None;
         self.texture = None;
         self.displays.clear();
+        self.cursor_shape = None;
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -171,6 +179,7 @@ impl App {
         }
     }
     fn capture(&mut self, ctx: &egui::Context, on: bool) {
+        self.auto_capture_pending = false;
         if on && self.texture.is_some() && self.command.is_some() {
             self.input.capture();
             ctx.send_viewport_cmd(ViewportCommand::CursorGrab(CursorGrab::Locked));
@@ -224,6 +233,33 @@ impl App {
                         })
                         .unwrap_or_default();
                 }
+                Event::CursorShape { png, hotspot } => {
+                    if let Ok(mut reader) =
+                        image::ImageReader::new(std::io::Cursor::new(png)).with_guessed_format()
+                    {
+                        let mut limits = image::Limits::default();
+                        limits.max_image_width = Some(512);
+                        limits.max_image_height = Some(512);
+                        limits.max_alloc = Some(4 * 1024 * 1024);
+                        reader.limits(limits);
+                        if let Ok(image) = reader.decode() {
+                            let rgba = image.to_rgba8();
+                            let (w, h) = (rgba.width(), rgba.height());
+                            let texture = ctx.load_texture(
+                                "Remote cursor",
+                                egui::ColorImage::from_rgba_unmultiplied(
+                                    [w as usize, h as usize],
+                                    rgba.as_raw(),
+                                ),
+                                TextureOptions::LINEAR,
+                            );
+                            self.cursor_shape = Some((
+                                texture,
+                                [hotspot[0].clamp(0, w as i32), hotspot[1].clamp(0, h as i32)],
+                            ));
+                        }
+                    }
+                }
                 Event::Cursor { x, y, visible } => self.cursor = (x, y, visible),
                 Event::Ended(s) => {
                     self.capture(ctx, false);
@@ -234,6 +270,7 @@ impl App {
                     self.audio = None;
                     self.texture = None;
                     self.cursor = (0, 0, false);
+                    self.cursor_shape = None;
                 }
                 Event::Video(frame) => {
                     if self.decoder.is_none() {
@@ -247,7 +284,7 @@ impl App {
                     match decoder.decode(&frame.data) {
                         Ok(Some(yuv)) => {
                             let (w, h) = yuv.dimensions();
-                            if w == 0 || h == 0 || w > 4096 || h > 4096 || w * h > 4096 * 2160 {
+                            if w == 0 || h == 0 || w > 8192 || h > 8192 || w * h > 4096 * 2160 {
                                 self.status =
                                     "Video dimensions exceed this preview's decoder limit".into();
                                 self.send(Command::Stop);
@@ -272,6 +309,9 @@ impl App {
                             self.send(Command::Keyframe);
                         }
                     }
+                    if self.auto_capture_pending && self.focused && self.texture.is_some() {
+                        self.capture(ctx, true);
+                    }
                 }
             }
         }
@@ -279,6 +319,7 @@ impl App {
 }
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.focused = raw.focused;
         if !raw.focused {
             self.capture(ctx, false);
             return;
@@ -305,55 +346,57 @@ impl eframe::App for App {
         if self.command.is_none() && self.input.captured {
             self.capture(ctx, false);
         }
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.image((self.brand.id(), egui::vec2(112., 27.)));
-                ui.separator();
-                ui.label(&self.status);
-                if self.command.is_some() {
-                    if ui.button("Disconnect").clicked() {
-                        self.capture(ctx, false);
-                        self.send(Command::Stop);
-                    }
-                    if self.texture.is_some()
-                        && ui
-                            .button(if self.input.captured {
-                                "Release · Ctrl+F12"
+        if !(self.fullscreen && self.input.captured) {
+            egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.image((self.brand.id(), egui::vec2(112., 27.)));
+                    ui.separator();
+                    ui.label(&self.status);
+                    if self.command.is_some() {
+                        if ui.button("Disconnect").clicked() {
+                            self.capture(ctx, false);
+                            self.send(Command::Stop);
+                        }
+                        if self.texture.is_some()
+                            && ui
+                                .button(if self.input.captured {
+                                    "Release · Ctrl+F12"
+                                } else {
+                                    "Capture · Ctrl+F12"
+                                })
+                                .clicked()
+                        {
+                            self.capture(ctx, !self.input.captured);
+                        }
+                        if ui
+                            .button(if self.fullscreen {
+                                "Window"
                             } else {
-                                "Capture · Ctrl+F12"
+                                "Fullscreen"
                             })
                             .clicked()
-                    {
-                        self.capture(ctx, !self.input.captured);
-                    }
-                    if ui
-                        .button(if self.fullscreen {
-                            "Window"
-                        } else {
-                            "Fullscreen"
-                        })
-                        .clicked()
-                    {
-                        self.fullscreen = !self.fullscreen;
-                        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
-                    }
-                    if self.displays.len() > 1 {
-                        let mut selected = self.display.clone();
-                        egui::ComboBox::from_id_salt("display")
-                            .selected_text("Display")
-                            .show_ui(ui, |ui| {
-                                for (id, name) in &self.displays {
-                                    ui.selectable_value(&mut selected, id.clone(), name);
-                                }
-                            });
-                        if selected != self.display {
-                            self.send(Command::Display(selected.clone()));
-                            self.display = selected;
+                        {
+                            self.fullscreen = !self.fullscreen;
+                            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
+                        }
+                        if self.displays.len() > 1 {
+                            let mut selected = self.display.clone();
+                            egui::ComboBox::from_id_salt("display")
+                                .selected_text("Display")
+                                .show_ui(ui, |ui| {
+                                    for (id, name) in &self.displays {
+                                        ui.selectable_value(&mut selected, id.clone(), name);
+                                    }
+                                });
+                            if selected != self.display {
+                                self.send(Command::Display(selected.clone()));
+                                self.display = selected;
+                            }
                         }
                     }
-                }
+                });
             });
-        });
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(texture) = &self.texture {
                 let available = ui.available_size();
@@ -373,9 +416,23 @@ impl eframe::App for App {
                     let p = picture.min
                         + egui::vec2(self.cursor.0 as f32, self.cursor.1 as f32) * scale;
                     if picture.contains(p) {
-                        ui.painter().circle_filled(p, 4., Color32::WHITE);
-                        ui.painter()
-                            .circle_stroke(p, 4., egui::Stroke::new(1_f32, Color32::BLACK));
+                        if let Some((texture, hotspot)) = &self.cursor_shape {
+                            let min = p - egui::vec2(hotspot[0] as f32, hotspot[1] as f32) * scale;
+                            let rect = egui::Rect::from_min_size(min, texture.size_vec2() * scale);
+                            ui.painter().with_clip_rect(picture).image(
+                                texture.id(),
+                                rect,
+                                egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+                                Color32::WHITE,
+                            );
+                        } else {
+                            ui.painter().circle_filled(p, 4., Color32::WHITE);
+                            ui.painter().circle_stroke(
+                                p,
+                                4.,
+                                egui::Stroke::new(1_f32, Color32::BLACK),
+                            );
+                        }
                     }
                 }
             } else if self.command.is_none() {
@@ -399,12 +456,29 @@ impl eframe::App for App {
                 });
                 ui.add_space(12.);
                 egui::ComboBox::from_label("Resolution")
-                    .selected_text(format!("{} × {}", self.options.width, self.options.height))
+                    .selected_text(if self.options.width == 0 {
+                        "Host native".to_string()
+                    } else {
+                        format!("{} × {}", self.options.width, self.options.height)
+                    })
                     .show_ui(ui, |ui| {
-                        for (w, h) in [(1280, 720), (1920, 1080), (2560, 1440)] {
+                        for (w, h) in [
+                            (0, 0),
+                            (1280, 720),
+                            (1920, 1080),
+                            (2560, 1440),
+                            (3840, 2160),
+                        ] {
                             let selected = self.options.width == w;
                             if ui
-                                .selectable_label(selected, format!("{w} × {h}"))
+                                .selectable_label(
+                                    selected,
+                                    if w == 0 {
+                                        "Host native".to_string()
+                                    } else {
+                                        format!("{w} × {h}")
+                                    },
+                                )
                                 .clicked()
                             {
                                 self.options.width = w;

@@ -93,7 +93,11 @@ fn build<T: cpal::SizedSample + cpal::FromSample<f32>>(
                     let value = if channels == 1 {
                         (stereo[0] + stereo[1]) * 0.5
                     } else {
-                        stereo[ch.min(1)]
+                        match ch {
+                            0 => stereo[0],
+                            1 => stereo[1],
+                            _ => 0.0,
+                        }
                     };
                     *sample = T::from_sample(value);
                 }
