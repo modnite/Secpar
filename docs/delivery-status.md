@@ -111,7 +111,7 @@
   returned HTTP 200 with matching local/GitHub sizes and SHA-256 digests. The
   Android certificate matches Preview 11. The isolated emulator is stopped.
 
-- Desktop unification milestone in progress: Windows now has a Hosting tab
+- Desktop unification milestone: Windows now has a Hosting tab
   controlling the same installed Secpar engine for Android and desktop clients.
   Pairing QR/link, paired-device removal, display/quality, autostart, file/clipboard
   toggles and direct-access settings are in the desktop UI. Account linking moves
@@ -132,6 +132,18 @@
   179 Android unit tests and 15 desktop tests passed (credential-store test ignored).
   Read-only get_state/get_config calls against the installed host succeeded; no
   OTP was generated, configuration changed, or service restarted by these checks.
+
+- Desktop Development 5 is public with Windows standalone UI, combined installer,
+  Linux client and checksums. All four asset HEADs return 200, with matching local
+  and GitHub SHA-256 digests/sizes. Windows/Linux CI passed in run 42105758113;
+  the two Mac jobs are still running. The installer was unpacked: both engine and
+  desktop binaries are present, and its desktop hash matches the standalone app.
+  Static CRT and x64 PE checks passed. Seven host command tests passed. Installer
+  build passed; it was not installed and the active service was never restarted.
+- Android Preview 13 is public; both assets return HTTP 200 with matching digests.
+  Release certificate matches Preview 12; debug layout activity is excluded. The
+  camera handoff and original/rotated host-QR instrumented tests both passed on the
+  isolated emulator. The physical S23 result is pending user feedback.
 
 ## Active implementation
 
@@ -154,7 +166,7 @@ yet admit guests. The remaining security boundary is recorded in
 - Android built-in QR scanner still needs physical validation on the Galaxy S23; external Camera pairing was confirmed.
 - Physical high-DPI reviews on Windows, Linux and macOS; current compact layout checks use controlled logical viewport sizes.
 - Guest admission enforced by host (separate from owner tokens), permissions and live revocation.
-- Complete desktop unification on all platforms; Windows UI/service packaging is in progress.
+- Complete desktop unification on all platforms; Windows UI/service package is built and published; native installation remains unverified.
 - Linux capture/input/encoding host; macOS capture/input/encoding host.
 - Hardware decoding, audio/video timing, IME/full keyboard handling and routing benchmarks.
 - Concurrent streams, encode fan-out, independent keys/permissions, controller seats.
@@ -168,7 +180,9 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 ## Delivery links
 
 - Repository: https://github.com/modnite/Secpar
-- Desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
+- Desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
+- Android Preview 13: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.13
+- Previous desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
 - Android Preview 12: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.12
 - Host Preview 12 (tray Quit): https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-host-preview.12
 - Previous desktop development 3: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.3
