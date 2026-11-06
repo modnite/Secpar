@@ -240,12 +240,26 @@
 - Desktop Development 7 work places Check for updates / Download update on one row.
   Download remains visible and greyed out without an available update, while busy,
   or once downloaded. Both states reviewed at 640×400 with native screenshots.
+- Published Android Preview 17 and Desktop Development 7 from 22f9fff. APK:
+  24,024,539 bytes, SHA-256
+  49938d047f2760672a5134b46d18bbdbf4fd510528d7b40390faef4749cac485.
+  Windows single installer: 9,829,835 bytes, SHA-256
+  00be8f68b5baff14e8a61619a5b2d501fe85fdf11ee5f31801eb606201a7f9e4.
+  Both GitHub digests match local files; direct APK/installer links return 200.
+  APK retains the signing certificate; synthetic audio/video test assets excluded.
+  Packaged desktop matches the built UI, and the host matches with the expected
+  Tauri installer marker. All 195 unit tests and vital release lint pass. Final
+  Android Opus/AudioTrack smoke again preserves all 144,000 sample frames. Desktop
+  tests: 19 passed. Windows/Linux CI pass in run 42142493406; Mac jobs pending.
+  User asked to test Preview 17 via the new in-app updater. The physical phone and
+  installed Windows service have not been modified by tools.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
   capture/input and Linux runtime checks are still pending. Merge main's subsequent
   Android hotfixes before integrating this branch. No Linux/Mac client-only package
-  was published. Work was set aside for the unsuccessful Preview 14 playback test.
+  was published. Main’s later video, updater and audio fixes must be merged before
+  integration; work was set aside for Android streaming/audio fixes.
 
 ## Active implementation
 
@@ -282,9 +296,11 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 ## Delivery links
 
 - Repository: https://github.com/modnite/Secpar
-- Desktop development 6: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.6
+- Desktop development 7: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.7
+- Previous desktop development 6: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.6
 - Previous desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
-- Android Preview 16: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.16
+- Android Preview 17: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.17
+- Previous Android Preview 16: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.16
 - Previous Android Preview 15: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15
 - Previous Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
 - Previous Android Preview 13: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.13

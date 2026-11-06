@@ -24,6 +24,9 @@ service, and restarts that service. Review the warning and keep another route to
 the PC available before updating remotely. The bundled legacy service's silent
 update timer is disabled when the unified desktop UI is present.
 
+Development 7 keeps Check for updates and Download update on one row. Download
+stays greyed out when no eligible update exists, while busy, or once downloaded.
+
 Downloads use public HTTPS GitHub release metadata and its asset digest. This
 provides transport/integrity verification, not independent publisher signing for
 the current unsigned Windows installer. Android additionally requires its existing
@@ -41,7 +44,7 @@ Windows asset: Secpar-Windows-x64-setup.exe. Android asset: Secpar-previewN.apk
 clients can offer a release. Verify release assets after upload. Never publish
 an installer that updates only an internal desktop component.
 
-Validation: 190 Android unit tests; the Updates activity launches in the isolated
+Validation: 195 Android unit tests; the Updates activity launches in the isolated
 emulator. Desktop tests cover product/channel/architecture asset filtering and
 rejection of invalid or corrupted downloads using a loopback HTTP server. Native
 system installation/relaunch still requires user validation; development work does

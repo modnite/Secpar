@@ -2,13 +2,13 @@
 
 A fork of [PC Remote](https://github.com/SadikTD/pc-remote) for docked Android use and a growing desktop app family. Secpar focuses on physical keyboard/mouse input, resolution handling and compact, plain interfaces. Android stays client-only. Desktop hosting and connecting on Windows, Linux and macOS is the target; the current platform limits are listed below.
 
-## Secpar for Windows — Development 6
+## Secpar for Windows — Development 7
 
-[Download Secpar for Windows](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.6/Secpar-Windows-x64-setup.exe) · [Release notes and checksum](https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.6)
+[Download Secpar for Windows](https://github.com/modnite/Secpar/releases/download/v0.1.0-secpar-desktop-dev.7/Secpar-Windows-x64-setup.exe) · [Release notes and checksum](https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.7)
 
 One application hosts and connects. Open **Computers** to connect to another computer, or **Hosting → Pair a device** to let Android or another desktop connect to this computer. Android uses the same hosting engine as desktop clients.
 
-Development 6 fixes a measured host packetization bottleneck and adds preview-aware update checks with verified downloads. Synthetic Windows packetization averages fell from 71.466 to 1.631 ms per 64 KiB frame; physical stream performance remains unverified. See [streaming measurements](docs/video-pacing.md).
+Development 7 places update actions side by side and keeps Download update visible but disabled when no download is available. It retains Development 6’s host packetization fix and preview-aware updater. Synthetic Windows packetization averages fell from 71.466 to 1.631 ms per 64 KiB frame; the user confirms video and cursor performance is now perfect on the Galaxy S23. See [streaming measurements](docs/video-pacing.md).
 
 The installer includes the application and its background hosting service. It preserves existing Secpar pairings and replaces the older Secpar Host listing. **Installing restarts the service; wait until you have backup access if this is your only remote connection.** PC Remote remains separate.
 
@@ -18,11 +18,11 @@ Linux and macOS applications must also host and connect through one interface. T
 
 The image is a rendered layout sample. [More screenshots and review details](docs/ui-review.md).
 
-## Android Preview 16
+## Android Preview 17
 
-[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.16/Secpar-preview16.apk) · [Release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.16)
+[Android APK](https://github.com/modnite/Secpar/releases/download/v3.0.3-secpar-preview.17/Secpar-preview17.apk) · [Release notes](https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.17)
 
-Android supports docked keyboard/mouse, cursor capture/release, trackpad fallback, remote pairing links and revised resolution handling. It stays client-only. Preview 12 fixed release scanner initialization; Preview 13 adds cropped decoding and focused still capture for dense QR codes, and directs setup to the desktop Hosting page. The exact host QR link was read through the isolated emulator camera and returned to the app in an instrumented test. The user confirmed built-in scanning and pairing on the Galaxy S23 with Preview 13 on November 5, 2026. Account/friend integration remains unfinished. Preview 14’s pacing changes and Preview 15’s packet-integrity fix did not improve the user’s S23 playback slowdown. Logs confirm direct LAN UDP with low received frame rates and no measured packet/assembly drops. Windows Development 6 contains the measured host packetization fix; Android Preview 16 adds the in-app updater. All 190 Android unit tests pass, the release build/vital lint pass, and the update screen was reviewed on phone and 800×600 emulator layouts. Audio processing is unchanged; physical streaming and native update completion still need confirmation. Install over existing previews to preserve pairings. See [Android fork changes](docs/dock-input.md).
+Android supports docked keyboard/mouse, cursor capture/release, trackpad fallback, remote pairing links and revised resolution handling. It stays client-only. Preview 12 fixed release scanner initialization; Preview 13 adds cropped decoding and focused still capture for dense QR codes, and directs setup to the desktop Hosting page. The exact host QR link was read through the isolated emulator camera and returned to the app in an instrumented test. The user confirmed built-in scanning and pairing on the Galaxy S23 with Preview 13 on November 5, 2026. Account/friend integration remains unfinished. Preview 14’s pacing changes and Preview 15’s packet-integrity fix did not improve the user’s S23 playback slowdown. Logs confirm direct LAN UDP with low received frame rates and no measured packet/assembly drops. Windows Development 6’s host fix is user-confirmed: video and cursor are perfect. Preview 16 added the updater. Preview 17 corrects partial audio writes, decoder-input drops and startup buffering to address remaining rare audio crackles. All 195 Android unit tests pass, as does a real decoder/AudioTrack test preserving 144,000 synthetic sample frames. Physical S23 audio improvement still needs confirmation. See [audio playback](docs/audio-playback.md). Install over existing previews to preserve pairings. See [Android fork changes](docs/dock-input.md).
 
 Older versions need one manual upgrade to obtain these update flows. The apps then check automatically on launch and every six hours, including their own preview releases, and offer verified installation. Installing requires an explicit action; it does not interrupt a stream from a background check. See [updates](docs/updates.md). Android is debug-signed; Windows builds are unsigned; Mac development bundles are ad hoc signed and not notarized.
 
