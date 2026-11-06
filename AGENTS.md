@@ -2,6 +2,8 @@
 
 Read `docs/delivery-status.md` when continuing this project. Update it after a
 verified milestone so unfinished work survives chat/context changes.
+Read `docs/user-requirements.md` for the cumulative user preferences and latest
+corrections, including input scope, audio release gates and careful agent usage.
 
 The user wants completed, usable results, regular progress check-ins, and actual
 screenshots of the running interfaces. Continue authorized implementation after
