@@ -260,4 +260,28 @@ mod tests {
             None => eprintln!("no audio output device"),
         }
     }
+
+    #[test]
+    #[ignore = "Reads live loopback timing only; requires an active Windows audio output"]
+    fn live_loopback_timestamps_follow_the_host_clock() {
+        let _com = crate::engine::Com::init();
+        let mut source = Wasapi::open().expect("WASAPI output required");
+        let until = Instant::now() + Duration::from_secs(12);
+        let mut pcm = Vec::new();
+        let mut packets = 0;
+        let mut min_age = i128::MAX;
+        let mut max_age = i128::MIN;
+        while Instant::now() < until {
+            pcm.clear();
+            if let Some(capture) = source.read(&mut pcm).ok().flatten() {
+                let age = super::super::now_us() as i128 - capture as i128;
+                min_age = min_age.min(age);
+                max_age = max_age.max(age);
+                packets += 1;
+            }
+        }
+        eprintln!("WASAPI batches={packets} capture age range={min_age}..{max_age} us");
+        assert!(packets > 0, "No audio playing; timing check inconclusive");
+        assert!(max_age < 80_000 && min_age > -10_000, "Capture timestamps do not track the host clock");
+    }
 }

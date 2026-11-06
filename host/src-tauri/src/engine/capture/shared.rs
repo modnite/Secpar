@@ -105,6 +105,10 @@ impl SharedCapture {
             drop(source);
             let mut capture = Capture::new(Some(first), move || Dxgi::open(&dev, &ctx, &output));
             let mut buffers: Vec<Arc<FrameTexture>> = Vec::new();
+            #[cfg(test)]
+            let acquire_wait = Duration::from_millis(std::env::var("SECPAR_TEST_DXGI_WAIT_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(0));
+            #[cfg(not(test))]
+            let acquire_wait = Duration::ZERO;
             let _ = ready_tx.send(true);
             while let Some(source) = weak.upgrade() {
                 if source.stopped.load(Ordering::Acquire) {
@@ -124,7 +128,10 @@ impl SharedCapture {
                         continue;
                     }
                 }
-                let frame = capture.next(Duration::from_millis(8));
+                // Never wait inside DXGI while the encoders use this device.
+                // A coarse DXGI timeout both delays publication and can hold up
+                // work submitted through the shared immediate context.
+                let frame = capture.next(acquire_wait);
                 let reinit = std::mem::take(&mut capture.reinit);
                 if reinit || frame.is_some() {
                     let mut latest = source.latest.lock().unwrap();
@@ -156,6 +163,10 @@ impl SharedCapture {
                     latest.event += 1;
                     drop(latest);
                     source.changed.notify_all();
+                } else if acquire_wait.is_zero() {
+                    // Bound idle CPU usage without the blocking DXGI wait.
+                    drop(source);
+                    std::thread::sleep(Duration::from_millis(1));
                 }
             }
         });
