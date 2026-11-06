@@ -3,14 +3,14 @@ fn main() {
     println!(
         "cargo:rustc-env=SECPAR_RELEASE_TAG={}",
         std::env::var("SECPAR_RELEASE_TAG")
-            .unwrap_or_else(|_| "v3.6.0".into())
+            .unwrap_or_else(|_| format!("v{}", env!("CARGO_PKG_VERSION")))
     );
     println!("cargo:rerun-if-changed=../host/src-tauri/icons/icon.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         tauri_winres::WindowsResource::new()
             .set_icon("../host/src-tauri/icons/icon.ico")
             .set("ProductName", "Secpar")
-            .set("FileDescription", "Secpar — host and connect")
+            .set("FileDescription", "Secpar â€” host and connect")
             .compile()
             .expect("Embed the Secpar triangle icon");
     }
