@@ -59,8 +59,8 @@ class Receiver(
     private var lastStatsUs = 0L
     private var peerT = 0L
     private var rttUs = 0L
-    private var bestRttUs = Long.MAX_VALUE
-    private var bestRttAtUs = 0L
+    private data class ClockSample(val atUs: Long, val rttUs: Long, val offsetUs: Long)
+    private val clockSamples = java.util.ArrayDeque<ClockSample>()
     @Volatile private var clockReady = false
     @Volatile private var offsetUs = 0L // host clock − our clock
     private var maxSeq = -1
@@ -156,10 +156,12 @@ class Receiver(
                     // A lifetime minimum freezes the clock estimate after an
                     // unusually fast probe. Host/phone clock drift and changed
                     // routes must not make live audio permanently look stale.
-                    if (!clockReady || rttUs <= bestRttUs || nowUs - bestRttAtUs >= 10_000_000) {
-                        bestRttUs = rttUs; bestRttAtUs = nowUs
-                        offsetUs = peerT + rttUs / 2 - nowUs; clockReady = true
-                    }
+                    clockSamples.addLast(ClockSample(nowUs,rttUs,peerT + rttUs / 2 - nowUs))
+                    while (clockSamples.size > 16 || nowUs - clockSamples.first.atUs > 10_000_000) clockSamples.removeFirst()
+                    // Keep recent good samples when an old minimum expires;
+                    // one slow echo must not suddenly become the clock anchor.
+                    offsetUs = clockSamples.minWithOrNull(compareBy<ClockSample> { it.rttUs }.thenByDescending { it.atUs })!!.offsetUs
+                    clockReady = true
                 }
             }
             Prs.BYE -> listener.onBye()
