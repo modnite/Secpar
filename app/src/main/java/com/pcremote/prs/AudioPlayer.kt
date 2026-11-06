@@ -26,6 +26,7 @@ class AudioPlayer {
     private var statsAt = System.nanoTime()
     private var inputWaits = 0
     private val pending = java.util.concurrent.atomic.AtomicInteger()
+    private val overflowPackets = java.util.concurrent.atomic.AtomicInteger()
     @Volatile internal var acceptedFrames = 0L; private set
     private val info = MediaCodec.BufferInfo()
     private var pcm = ByteArray(0)
@@ -33,7 +34,10 @@ class AudioPlayer {
 
     fun play(a: AudioPacket) {
         if (dead) return
-        pending.incrementAndGet()
+        // Bound encoded backlog as well as the hardware queue after a network stall.
+        if (pending.incrementAndGet() > 12) {
+            pending.decrementAndGet(); overflowPackets.incrementAndGet(); return
+        }
         runCatching { exec.execute {
             try { runCatching { decode(a.opus) }.onFailure { Log.w(TAG, "audio", it); shutdown() } }
             finally { pending.decrementAndGet() }
@@ -96,7 +100,7 @@ class AudioPlayer {
         drain(c, t, 1_000)
         if (System.nanoTime() - statsAt >= 5_000_000_000) {
             val queued = (writer.writtenFrames - head.frames(t.playbackHeadPosition)).coerceAtLeast(0)
-            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()}")
+            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()}")
             statsAt = System.nanoTime()
         }
     }
