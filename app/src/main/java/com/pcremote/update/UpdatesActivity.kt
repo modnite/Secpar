@@ -30,6 +30,12 @@ class UpdatesActivity : ComponentActivity() {
                 ThemeChoice.LIGHT -> false
                 ThemeChoice.SYSTEM -> isSystemInDarkTheme()
             }
+            SideEffect {
+                androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
             MidnightTheme(dark = dark, dynamic = settings.dynamicColor) {
                 val state by Updater.state.collectAsState()
                 val confirmation by Updater.confirmation.collectAsState()
