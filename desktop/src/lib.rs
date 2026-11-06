@@ -582,7 +582,7 @@ impl eframe::App for App {
                             (Page::Hosting, "Hosting"),
                             (Page::Friends, "Friends"),
                         ] {
-                            if page == Page::Hosting && !cfg!(windows) {
+                            if page == Page::Hosting && !cfg!(any(windows, target_os = "linux")) {
                                 continue;
                             }
                             let selected = self.page == page;

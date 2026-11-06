@@ -1,0 +1,330 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use ring::rand::{SecureRandom, SystemRandom};
+use secpar_host_core::PairingStore;
+use serde::{Deserialize, Serialize};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+pub fn random<const N: usize>() -> [u8; N] {
+    let mut b = [0; N];
+    SystemRandom::new().fill(&mut b).expect("OS random source");
+    b
+}
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+fn hash(token: &str) -> String {
+    hex(ring::digest::digest(&ring::digest::SHA256, token.as_bytes()).as_ref())
+}
+
+pub fn private_directory(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        let meta = std::fs::symlink_metadata(dir)?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err(io::Error::other("Unsafe Secpar data directory"));
+        }
+        #[cfg(target_os = "linux")]
+        if meta.uid() != unsafe { libc::geteuid() } {
+            return Err(io::Error::other("Secpar directory belongs to another user"));
+        }
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)?;
+    Ok(())
+}
+pub(crate) fn read_private(path: &Path) -> io::Result<Vec<u8>> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1024 * 1024 {
+        return Err(io::Error::other("Invalid Secpar state file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::other(
+                "Secpar state file permissions must be 0600",
+            ));
+        }
+    }
+    std::fs::read(path)
+}
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::other("No parent directory"))?;
+    private_directory(directory)?;
+    let temporary = directory.join(format!(".secpar-{}.tmp", hex(&random::<12>())));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        #[cfg(windows)]
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        std::fs::rename(&temporary, path)?;
+        #[cfg(unix)]
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub autostart: bool,
+    pub display: String,
+    pub max_quality: String,
+    pub allow_files: bool,
+    pub allow_clip: bool,
+    pub anywhere: bool,
+    pub files_dir: String,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            autostart: false,
+            display: String::new(),
+            max_quality: "auto".into(),
+            allow_files: false,
+            allow_clip: false,
+            anywhere: false,
+            files_dir: String::new(),
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    token_sha256: String,
+    #[serde(default)]
+    revoked: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Data {
+    id: String,
+    devices: Vec<Device>,
+    config: Config,
+    master: String,
+    #[serde(default)]
+    portal_restore: Option<String>,
+}
+pub struct Store {
+    path: PathBuf,
+    data: Data,
+    otp: Option<(String, Instant)>,
+}
+impl Store {
+    pub fn open(dir: &Path) -> io::Result<Self> {
+        private_directory(dir)?;
+        let path = dir.join("owner-devices.json");
+        let data = match read_private(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Data {
+                id: hex(&random::<16>()),
+                devices: vec![],
+                config: Config::default(),
+                master: URL_SAFE_NO_PAD.encode(random::<32>()),
+                portal_restore: None,
+            },
+            Err(e) => return Err(e),
+        };
+        let s = Self {
+            path,
+            data,
+            otp: None,
+        };
+        s.save()?;
+        Ok(s)
+    }
+    fn save(&self) -> io::Result<()> {
+        write_private(&self.path, &serde_json::to_vec(&self.data)?)
+    }
+    pub fn id(&self) -> &str {
+        &self.data.id
+    }
+    pub fn devices(&self) -> Vec<Device> {
+        self.data
+            .devices
+            .iter()
+            .filter(|d| !d.revoked)
+            .cloned()
+            .collect()
+    }
+    pub fn config(&self) -> Config {
+        self.data.config.clone()
+    }
+    pub fn set_config(&mut self, config: Config) -> io::Result<()> {
+        if config.anywhere || config.allow_clip || config.allow_files {
+            return Err(io::Error::other(
+                "This Linux preview supports local owner streaming only",
+            ));
+        }
+        let old = self.data.config.clone();
+        self.data.config = config;
+        if let Err(e) = self.save() {
+            self.data.config = old;
+            return Err(e);
+        }
+        Ok(())
+    }
+    pub fn portal_token(&self) -> Option<String> {
+        self.data.portal_restore.clone()
+    }
+    pub fn set_portal_token(&mut self, token: Option<String>) -> io::Result<()> {
+        self.data.portal_restore = token;
+        self.save()
+    }
+    pub fn new_otp(&mut self) -> String {
+        self.new_otp_at(Instant::now())
+    }
+    fn new_otp_at(&mut self, now: Instant) -> String {
+        let s = URL_SAFE_NO_PAD.encode(random::<16>());
+        self.otp = Some((s.clone(), now));
+        s
+    }
+    fn take_at(&mut self, otp: &str, now: Instant) -> bool {
+        if self.otp.as_ref().is_some_and(|(s, at)| {
+            s == otp && now.saturating_duration_since(*at) < Duration::from_secs(120)
+        }) {
+            self.otp = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+impl PairingStore for Store {
+    fn take_otp(&mut self, otp: &str) -> bool {
+        self.take_at(otp, Instant::now())
+    }
+    fn add_device(&mut self, name: &str) -> io::Result<(String, String)> {
+        if self.data.devices.len() >= 128 {
+            return Err(io::Error::other("Device limit reached"));
+        }
+        let id = hex(&random::<8>());
+        let token = URL_SAFE_NO_PAD.encode(random::<32>());
+        self.data.devices.push(Device {
+            id: id.clone(),
+            name: name.chars().take(40).collect(),
+            token_sha256: hash(&token),
+            revoked: false,
+        });
+        if let Err(e) = self.save() {
+            self.data.devices.pop();
+            return Err(e);
+        }
+        Ok((id, token))
+    }
+    fn auth(&self, token: &str) -> Result<String, &'static str> {
+        let h = hash(token);
+        match self.data.devices.iter().find(|d| d.token_sha256 == h) {
+            Some(d) if d.revoked => Err("revoked"),
+            Some(d) => Ok(d.id.clone()),
+            None => Err("unauthorized"),
+        }
+    }
+    fn revoke(&mut self, id: &str) -> io::Result<()> {
+        let old = self.data.clone();
+        self.data
+            .devices
+            .iter_mut()
+            .filter(|d| d.id == id)
+            .for_each(|d| d.revoked = true);
+        if let Err(e) = self.save() {
+            self.data = old;
+            return Err(e);
+        }
+        Ok(())
+    }
+    fn ticket(&self, id: &str) -> [u8; 32] {
+        let key = URL_SAFE_NO_PAD
+            .decode(&self.data.master)
+            .expect("valid master key");
+        ring::hmac::sign(
+            &ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key),
+            id.as_bytes(),
+        )
+        .as_ref()
+        .try_into()
+        .unwrap()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn owner_credentials_survive_restart_without_plaintext_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        let (id, token) = s.add_device("Test").unwrap();
+        let pc = s.id().to_string();
+        let ticket = s.ticket(&id);
+        drop(s);
+        let mut s = Store::open(dir.path()).unwrap();
+        assert_eq!(s.id(), pc);
+        assert_eq!(s.auth(&token), Ok(id.clone()));
+        assert_eq!(s.ticket(&id), ticket);
+        assert!(
+            !String::from_utf8(std::fs::read(dir.path().join("owner-devices.json")).unwrap())
+                .unwrap()
+                .contains(&token)
+        );
+        s.revoke(&id).unwrap();
+        assert_eq!(s.auth(&token), Err("revoked"));
+    }
+    #[test]
+    fn otp_is_single_use_and_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        let now = Instant::now();
+        let otp = s.new_otp_at(now);
+        assert!(!s.take_at("wrong", now));
+        assert!(s.take_at(&otp, now));
+        assert!(!s.take_at(&otp, now));
+        let otp = s.new_otp_at(now);
+        assert!(!s.take_at(&otp, now + Duration::from_secs(121)));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn secrets_are_private_and_symlinks_rejected() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        s.add_device("Test").unwrap();
+        assert_eq!(
+            std::fs::metadata(dir.path().join("owner-devices.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let target = dir.path().join("other");
+        symlink(dir.path().join("owner-devices.json"), &target).unwrap();
+        assert!(read_private(&target).is_err());
+    }
+}
