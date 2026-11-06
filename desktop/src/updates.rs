@@ -366,6 +366,13 @@ mod tests {
         assert!(select(&json!([r]), name, "v0.1.0-secpar-desktop-dev.6").is_none());
     }
     #[test]
+    fn release_versions_upgrade_legacy_previews_and_follow_user_scheme() {
+        assert!(version("v3.1.0") > version("v0.1.0-secpar-desktop-dev.99"));
+        assert!(version("v3.1.1") > version("v3.1.0"));
+        assert!(version("v3.2.0") > version("v3.1.99"));
+        assert!(version("v4.0.0") > version("v3.99.99"));
+    }
+    #[test]
     fn stable_beats_same_version_preview() {
         assert!(version("v0.1.0") > version("v0.1.0-secpar-desktop-dev.999"));
     }

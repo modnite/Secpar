@@ -1,6 +1,8 @@
 """Render the approved SVG geometry into native platform icon assets."""
 from pathlib import Path
 import os
+import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
@@ -39,4 +41,10 @@ with tempfile.TemporaryDirectory(prefix="secpar-icons-") as temporary:
     assert desktop.getpixel((256,20))[3] == 0, "Desktop background must be transparent"
     assert android.getpixel((256,20)) == (255,255,255,255), "Legacy Android background must be white"
     assert foreground.getbbox()[3]-foreground.getbbox()[1] <= 250, "Adaptive foreground safe padding"
+    icon_name = "secpar-icon-" + hashlib.sha256((icons / "icon.ico").read_bytes()).hexdigest()[:12] + ".ico"
+    config = ROOT / "host/src-tauri/tauri.unified.conf.json"
+    data = json.loads(config.read_text(encoding="utf-8"))
+    data["bundle"]["resources"]["icons/icon.ico"] = icon_name
+    config.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    (ROOT / "host/src-tauri/installer/icon-resource.nsh").write_text('!define SECPAR_ICON_FILE "' + icon_name + '"\n', encoding="ascii")
     print("Native icons generated: transparent desktop, padded Android on white")

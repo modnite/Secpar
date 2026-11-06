@@ -48,3 +48,12 @@ The user has one Windows PC and a CachyOS laptop for testing. The OMV box is a
 build runner/server, not a streaming target. Prioritize Linux hosting next so
 Windows↔Linux and Linux↔Linux can be tested; macOS must also eventually support
 both roles in its one application. The laptop uses KDE Plasma on Wayland.
+
+Distribution: keep debug/test builds local; publish only optimized release-profile
+packages with no debug binaries or test fixtures. Use x.x.x versions: first number
+for major milestones, second for features and bug fixes, third for minor fixes and
+visual polish. Preserve updater compatibility from the old preview versions.
+The user explicitly permits root to install and launch new Windows releases on
+this PC. Preserve PC Remote/Sunshine and other independent connections; subagents
+must not modify running installations. Conserve agent usage; no more spawning
+without a new explicit need/authorization.

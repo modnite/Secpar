@@ -5,6 +5,12 @@ mod hosting;
 mod input;
 mod local_host;
 #[cfg(windows)]
+mod native_window;
+#[cfg(all(windows, feature="tray-review"))]
+mod tray_review;
+#[cfg(all(windows, feature="tray-review"))]
+pub use tray_review::run as run_tray_review;
+#[cfg(windows)]
 mod tray;
 mod updates;
 mod vault;
@@ -43,7 +49,7 @@ pub fn run() -> eframe::Result {
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Secpar Desktop · Development")
+            .with_title("Secpar")
             .with_visible(!std::env::args().any(|arg| arg == "--hidden"))
             .with_app_id("com.secpar.desktop")
             .with_inner_size(review_size())
@@ -140,7 +146,7 @@ impl App {
             #[cfg(feature = "ui-review")]
             review_frames: 0,
             #[cfg(windows)]
-            tray: tray::Tray::new(&cc.egui_ctx),
+            tray: tray::Tray::new(cc),
             updates: updates::Panel::new(),
             hosting: hosting::Panel::new(cc.egui_ctx.clone()),
             account: account::Panel::new(cc.egui_ctx.clone()),
