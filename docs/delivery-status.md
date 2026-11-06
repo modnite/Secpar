@@ -442,3 +442,12 @@ This list is a work record, not a claim that the app family is complete.
 - User requirements saved in docs/user-requirements.md, linked from AGENTS.md: new prompts accumulate; audio/video regression gates; Android-dock free pointer/cursor responsiveness; clipboard; compact loading state; responsible narrow subagents. Two fork-none subagents used, no fanout. Main account-owned foundation remains unreleased; Android accounts, Linux anywhere integration and macOS hosting still required. Awaiting S23 audio validation on3.8; do not claim project family complete.
 
 - User physically confirms Android3.8 audio stays live and recovers after pauses/video switches; free dock pointer and Android/PC text clipboard both work. Latest assessment: "This version is simply perfect so far". Record Android3.8 + Windows3.7 as approved baseline. Keep unfinished account/platform work separate and preserve regression gates. Linux testing remains pending; do not assume physical X250 validation.
+
+- Preserved the user's approved Android3.8.0 +Windows3.7.0 baseline. Continued
+  Android account work separately on main: fixed-origin typed API and encrypted
+  owner/session-bound credential store,19 focused tests passed (zero failures or
+  errors). Tests cover request/link validation, credential redaction, expiry,
+  sign-out/manual-pair preservation, cross-account isolation, late response writes,
+  corrupt storage and encrypted-grant relocation. No existing streaming/input/audio
+  sources changed. Not integrated into the UI or released; controller/home/session
+  integration and an actual account-to-host test remain required.

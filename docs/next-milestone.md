@@ -2,6 +2,21 @@
 
 ## CURRENT: supersedes historical statuses below
 
+- Android account SDK/storage foundation added on MAIN ONLY;19 focused JVM tests
+  pass (11 API +8 vault). Fixed accounts.secpar.win origin/system TLS/no redirects,
+  bounded responses, validated browser approval and owner-bootstrap links; encrypted
+  native session and owned grants separately from manual PcStore. Grants bound
+  internally to owner+session hash; stale writes/sign-out rejected; expiry and
+  corrupt ciphertext fail closed. No production adapter/controller/UI integration
+  yet, no account release or on-device account claim. Existing approved3.8 untouched.
+  Next: one application-scoped vault using KeystoreBox + excluded preferences,
+  controller with independent AccountApi PER generation (SDK poll installs bearer,
+  logout clears its own instance). Guard late login before saveSession; compare
+  bootstrap fp to expected cloud-computer fp; never log PairUri/PairedPc secrets.
+  Expose owned grants to Home/mode sessions without copying into manual PcStore;
+  sign-out must close cached account connections and clear access. Then test actual
+  signed-in Android -> enrolled host before publishing matching native foundation.
+
 - Read docs/user-requirements.md and AGENTS.md. New prompts accumulate; no scope
   abandonment. User permits a few narrow subagents, with extreme token care.
 - Windows 3.7.0 published AND installed, exit0, host/UI3.7.0, service running.
