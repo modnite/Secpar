@@ -1,5 +1,6 @@
 mod account;
 mod client_settings;
+mod video;
 mod audio;
 mod design;
 mod hosting;
@@ -19,6 +20,7 @@ use eframe::egui::{
     self, Color32, CursorGrab, Event as UiEvent, Key, TextureHandle, TextureOptions,
     ViewportCommand,
 };
+#[cfg(test)]
 use openh264::{decoder::Decoder, formats::YUVSource};
 use secpar_client::{
     control::{Computer, Connected},
@@ -117,7 +119,7 @@ struct App {
     command: Option<mpsc::Sender<Command>>,
     events: Option<mpsc::Receiver<Event>>,
     computer: Option<Computer>,
-    decoder: Option<Decoder>,
+    decoder: Option<video::Worker>,
     audio: Option<audio::Audio>,
     texture: Option<TextureHandle>,
     brand: TextureHandle,
@@ -136,6 +138,7 @@ struct App {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         design::configure(&cc.egui_ctx);
+        let _ = video::hardware_available(&cc.egui_ctx);
         let brand_scale = cc.egui_ctx.pixels_per_point();
         let image = image::load_from_memory(include_bytes!(
             "../../assets/branding/secpar-wordmark-light.png"
@@ -211,7 +214,7 @@ impl App {
                     .selected_text(if self.options.width == 0 {
                         "Host native".into()
                     } else {
-                        format!("{} × {}", self.options.width, self.options.height)
+                        format!("{} Ãƒâ€” {}", self.options.width, self.options.height)
                     })
                     .show_ui(ui, |ui| {
                         for (w, h) in [
@@ -224,7 +227,7 @@ impl App {
                             let label = if w == 0 {
                                 "Host native".into()
                             } else {
-                                format!("{w} × {h}")
+                                format!("{w} Ãƒâ€” {h}")
                             };
                             if ui
                                 .selectable_label(self.options.width == w, label)
@@ -278,6 +281,7 @@ impl App {
         self.status = "Connecting".into();
         self.auto_capture_pending = true;
         self.decoder = None;
+        self.client.active_decoder = None;
         self.texture = None;
         self.displays.clear();
         self.cursor_shape = None;
@@ -360,7 +364,7 @@ impl App {
                     self.status = if self.audio.is_some() {
                         s
                     } else {
-                        format!("{s} · no audio output")
+                        format!("{s} Ã‚Â· no audio output")
                     }
                 }
                 Event::Audio(packet) => {
@@ -421,47 +425,33 @@ impl App {
                     self.cursor_shape = None;
                 }
                 Event::Video(frame) => {
-                    if self.decoder.is_none() {
-                        self.decoder = Decoder::new().ok();
-                    }
-                    let Some(decoder) = self.decoder.as_mut() else {
-                        self.status = "H.264 decoder could not start".into();
-                        self.send(Command::Stop);
-                        continue;
-                    };
-                    match decoder.decode(&frame.data) {
-                        Ok(Some(yuv)) => {
-                            let (w, h) = yuv.dimensions();
-                            if w == 0 || h == 0 || w > 8192 || h > 8192 || w * h > 4096 * 2160 {
-                                self.status =
-                                    "Video dimensions exceed this preview's decoder limit".into();
-                                self.send(Command::Stop);
-                                continue;
-                            }
-                            let mut pixels = vec![0; w * h * 3];
-                            yuv.write_rgb8(&mut pixels);
-                            let image = egui::ColorImage::from_rgb([w, h], &pixels);
-                            self.dimensions = [w, h];
-                            if let Some(texture) = self.texture.as_mut() {
-                                texture.set(image, TextureOptions::LINEAR);
-                            } else {
-                                self.texture = Some(ctx.load_texture(
-                                    "Remote desktop",
-                                    image,
-                                    TextureOptions::LINEAR,
-                                ));
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(_) => {
-                            self.send(Command::Keyframe);
-                        }
-                    }
-                    if self.auto_capture_pending && self.focused && self.texture.is_some() {
-                        self.capture(ctx, true);
-                    }
+                    let preference = self.client.decoder;
+                    let decoder = self.decoder.get_or_insert_with(|| video::Worker::new(ctx.clone(),preference));
+                    decoder.submit(frame);
                 }
             }
+        }
+        if let Some(decoder) = &self.decoder {
+            let output = decoder.output();
+            if let Some(backend)=output.backend {
+                if self.client.active_decoder.as_deref()!=Some(backend) {self.client.active_decoder=Some(backend.into());}
+            }
+            if let Some(error) = output.error {
+                self.status = error;
+                self.send(Command::Stop);
+            }
+            if output.request_key { self.send(Command::Keyframe); }
+            if let Some(image) = output.image {
+                self.dimensions = image.size;
+                if let Some(texture) = self.texture.as_mut() {
+                    texture.set(image, TextureOptions::LINEAR);
+                } else {
+                    self.texture = Some(ctx.load_texture("Remote desktop", image, TextureOptions::LINEAR));
+                }
+            }
+        }
+        if self.auto_capture_pending && self.focused && self.texture.is_some() {
+            self.capture(ctx, true);
         }
     }
 }
@@ -571,9 +561,9 @@ impl eframe::App for App {
                             if self.texture.is_some()
                                 && ui
                                     .button(if self.input.captured {
-                                        format!("Release · {}",self.client.shortcut.label())
+                                        format!("Release Ã‚Â· {}",self.client.shortcut.label())
                                     } else {
-                                        format!("Capture · {}",self.client.shortcut.label())
+                                        format!("Capture Ã‚Â· {}",self.client.shortcut.label())
                                     })
                                     .clicked()
                             {
@@ -729,7 +719,7 @@ impl eframe::App for App {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            ui.menu_button("…", |ui| {
+                                            ui.menu_button("Ã¢â‚¬Â¦", |ui| {
                                                 if ui.button("Forget on this device").clicked() {
                                                     self.account.forget_computer();
                                                     ui.close();
@@ -751,7 +741,7 @@ impl eframe::App for App {
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label("Connecting to the remote desktop…");
+                        ui.label("Connecting to the remote desktopÃ¢â‚¬Â¦");
                     });
                 }
             });

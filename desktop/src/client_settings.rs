@@ -1,4 +1,4 @@
-use crate::design;
+use crate::{design,video};
 use eframe::egui::{self, Key, Modifiers};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -20,10 +20,12 @@ impl CaptureShortcut {
 pub struct Settings {
     pub width:u32, pub height:u32, pub fps:u32, pub kbps:u32,
     pub audio:bool, pub shortcut:CaptureShortcut,
+    pub decoder:video::Preference,
+    #[serde(skip)] pub active_decoder:Option<String>,
     #[serde(skip)] note:String,
 }
 impl Default for Settings {
-    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,shortcut:CaptureShortcut::default(),note:String::new()}}
+    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),active_decoder:None,note:String::new()}}
 }
 fn path()->Option<PathBuf> {
     #[cfg(windows)]
@@ -73,8 +75,16 @@ impl Settings {
             ui.columns(2,|c| {
                 c[0].label("Bitrate limit");
                 egui::ComboBox::from_id_salt("client-bitrate").width(c[0].available_width()).selected_text(format!("{} Mbps",self.kbps/1000)).show_ui(&mut c[0],|ui| {for kbps in [5000,10000,20000,30000,50000,80000] {ui.selectable_value(&mut self.kbps,kbps,format!("{} Mbps",kbps/1000));}});
-                c[1].label("Decoder");c[1].add_sized([c[1].available_width(),32.],egui::Label::new("H.264 · software"));
+                c[1].label("Decoder");
+                let hardware=video::hardware_available(c[1].ctx());
+                let selected=match self.decoder {video::Preference::Automatic=>"Automatic",video::Preference::Software=>"Software",video::Preference::Vaapi=>"VA-API"};
+                egui::ComboBox::from_id_salt("client-decoder").width(c[1].available_width()).selected_text(selected).show_ui(&mut c[1],|ui| {
+                    ui.selectable_value(&mut self.decoder,video::Preference::Automatic,"Automatic");
+                    if hardware==Some(true) {ui.selectable_value(&mut self.decoder,video::Preference::Vaapi,"VA-API");}
+                    ui.selectable_value(&mut self.decoder,video::Preference::Software,"Software");
+                }).response.on_hover_text(match hardware {Some(true)=>"H.264 VA-API decode verified on this computer",Some(false)=>"No working hardware H.264 decoder detected",None=>"Checking hardware decoding"});
             });
+            if let Some(active)=&self.active_decoder {ui.small(active);}
         });
         ui.add_space(4.);
         design::surface().inner_margin(10).show(ui,|ui| {

@@ -3706,6 +3706,9 @@ version = "3.7.0"
 dependencies = [
  "cpal",
  "eframe",
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-video",
  "image",
  "keyring",
  "open",
@@ -3717,6 +3720,7 @@ dependencies = [
  "rustls",
  "secpar-client",
  "secpar-host-linux",
+ "secpar-stream",
  "serde",
  "serde_json",
  "sha2",
