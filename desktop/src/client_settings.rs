@@ -82,7 +82,12 @@ impl Settings {
                     ui.selectable_value(&mut self.decoder,video::Preference::Automatic,"Automatic");
                     if hardware==Some(true) {ui.selectable_value(&mut self.decoder,video::Preference::Vaapi,"VA-API");}
                     ui.selectable_value(&mut self.decoder,video::Preference::Software,"Software");
-                }).response.on_hover_text(match hardware {Some(true)=>"H.264 VA-API decode verified on this computer",Some(false)=>"No working hardware H.264 decoder detected",None=>"Checking hardware decoding"});
+                }).response.on_hover_text(match hardware {
+                    Some(true)=>"H.264 VA-API decode verified on this computer",
+                    Some(false) if cfg!(target_os="linux")=>"No working VA-API H.264 decoder detected",
+                    Some(false)=>"Hardware decoding is currently implemented for Linux only",
+                    None=>"Checking hardware decoding",
+                });
             });
             if let Some(active)=&self.active_decoder {ui.small(active);}
         });
