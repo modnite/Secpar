@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="secpar-icons-") as temporary:
             pixels = round(dp*scale)
             image.resize((pixels,pixels),Image.Resampling.LANCZOS).save(folder/name)
     assert desktop.getpixel((256,20))[3] == 0, "Desktop background must be transparent"
-    assert android.getpixel((256,20)) == (255,255,255,255), "Legacy Android background must be white"
+    assert android.getpixel((256,20)) == (0,0,0,255), "Legacy Android background must be black"
     assert foreground.getbbox()[3]-foreground.getbbox()[1] <= 250, "Adaptive foreground safe padding"
     icon_name = "secpar-icon-" + hashlib.sha256((icons / "icon.ico").read_bytes()).hexdigest()[:12] + ".ico"
     config = ROOT / "host/src-tauri/tauri.unified.conf.json"
@@ -47,4 +47,4 @@ with tempfile.TemporaryDirectory(prefix="secpar-icons-") as temporary:
     data["bundle"]["resources"]["icons/icon.ico"] = icon_name
     config.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     (ROOT / "host/src-tauri/installer/icon-resource.nsh").write_text('!define SECPAR_ICON_FILE "' + icon_name + '"\n', encoding="ascii")
-    print("Native icons generated: transparent desktop, padded Android on white")
+    print("Native icons generated: transparent desktop, padded Android on black")
