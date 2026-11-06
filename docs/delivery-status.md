@@ -272,6 +272,10 @@
   ten stale packets and live recovery. Published P17 regression notice pointing to
   P18. Physical audio comparison requested asynchronously. The Secpar emulator was
   stopped after tests; physical phone and installed host left untouched.
+- Physical S23 confirmation: Preview 18 audio is "In sync and clean" after the
+  hiccup comparison. Windows Development 6 video/cursor and Android Preview 18
+  audio are now user-verified. Preserve these working paths while continuing
+  Linux/macOS hosting. This does not validate all devices or network conditions.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
