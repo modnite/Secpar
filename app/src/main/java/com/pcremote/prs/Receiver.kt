@@ -60,6 +60,7 @@ class Receiver(
     private var peerT = 0L
     private var rttUs = 0L
     private var bestRttUs = Long.MAX_VALUE
+    private var bestRttAtUs = 0L
     @Volatile private var clockReady = false
     @Volatile private var offsetUs = 0L // host clock − our clock
     private var maxSeq = -1
@@ -152,7 +153,13 @@ class Receiver(
                 val echo = b.getLong(8)
                 if (echo != 0L && nowUs - echo in 0..10_000_000) {
                     rttUs = nowUs - echo
-                    if (rttUs <= bestRttUs) { bestRttUs = rttUs; offsetUs = peerT + rttUs / 2 - nowUs; clockReady = true }
+                    // A lifetime minimum freezes the clock estimate after an
+                    // unusually fast probe. Host/phone clock drift and changed
+                    // routes must not make live audio permanently look stale.
+                    if (!clockReady || rttUs <= bestRttUs || nowUs - bestRttAtUs >= 10_000_000) {
+                        bestRttUs = rttUs; bestRttAtUs = nowUs
+                        offsetUs = peerT + rttUs / 2 - nowUs; clockReady = true
+                    }
                 }
             }
             Prs.BYE -> listener.onBye()

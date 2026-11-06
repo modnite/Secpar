@@ -151,6 +151,18 @@ class ReceiverTest {
         assertEquals("echoes the host's t", 50_000_000L, ByteBuffer.wrap(sentOf(Prs.PROBE).last().second).getLong(8))
     }
 
+    @Test fun refreshesAnOldClockEstimateEvenWhenTheNewPathHasSlightlyHigherRtt() {
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(50_000_000).putLong(1_000_000).array(),1_010_000)
+        assertEquals(1_005_000L,r.audioCaptureToLocalUs(50_000_000))
+        // The old lifetime minimum rejected this forever, making fresh audio
+        // appear 195 ms late after a changed clock/path until reconnection.
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(60_200_000).putLong(11_000_000).array(),11_020_000)
+        assertEquals(11_010_000L,r.audioCaptureToLocalUs(60_200_000))
+        // Preserve the best recent sample instead of following every slow echo.
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(60_210_000).putLong(11_030_000).array(),11_080_000)
+        assertEquals(11_010_000L,r.audioCaptureToLocalUs(60_200_000))
+    }
+
     @Test fun keepsProbingAfterAddressChange() {
         fun probesBetween(from: Long, to: Long, stepUs: Long = 10_000): Int {
             val before = sentOf(Prs.PROBE).size
