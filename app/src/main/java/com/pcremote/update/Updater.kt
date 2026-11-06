@@ -30,37 +30,56 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 
-data class Release(val version: String, val apkUrl: String)
+data class Release(val version: String, val apkUrl: String, val sha256: String = "", val size: Long = 0)
+data class UpdateState(val release: Release? = null, val message: String = "Checking for updates...", val busy: Boolean = false)
 
-/**
- * Self-updates from the latest GitHub release. Android checks that the new APK is signed with the
- * same key. From Android 12 the install is silent once PC Remote installed itself the first time;
- * until then (or when "Install unknown apps" is off) the user gets one tap via a notification.
- */
+/** Automatic discovery; installation always requires an explicit user action. */
 object Updater {
-    private const val LATEST = "https://api.github.com/repos/modnite/Secpar/releases/latest"
+    private const val LATEST = "https://api.github.com/repos/modnite/Secpar/releases?per_page=100"
     private const val JOB = 47_01
     private const val CHANNEL = "updates"
-    private val http by lazy { OkHttpClient() }
+    private val http by lazy { OkHttpClient.Builder().callTimeout(3, java.util.concurrent.TimeUnit.MINUTES).build() }
+    private val mutableState = kotlinx.coroutines.flow.MutableStateFlow(UpdateState())
+    val state: kotlinx.coroutines.flow.StateFlow<UpdateState> = mutableState
+    private val pendingConfirmation = kotlinx.coroutines.flow.MutableStateFlow<Intent?>(null)
+    val confirmation: kotlinx.coroutines.flow.StateFlow<Intent?> = pendingConfirmation
+    fun clearConfirmation() { pendingConfirmation.value = null }
+    internal fun confirm(intent: Intent) { pendingConfirmation.value = intent }
+    private val operation = java.util.concurrent.atomic.AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    @Volatile private var busy = false
-
-    /** The release's version and APK, from GitHub's `releases/latest` JSON. */
+    /** Select only this product's channel, never desktop/host releases. */
     fun parse(json: String): Release? = runCatching {
         val o = Json.parseToJsonElement(json).jsonObject
-        val tag = o["tag_name"]!!.jsonPrimitive.content.trimStart('v')
+        if (o["draft"]?.jsonPrimitive?.content == "true") return null
+        val tag = o["tag_name"]!!.jsonPrimitive.content
+        if (!Regex("v\\d+\\.\\d+\\.\\d+(?:-secpar-preview\\.\\d+)?").matches(tag)) return null
         val apk = o["assets"]!!.jsonArray.map { it.jsonObject }
-            .first { it["name"]!!.jsonPrimitive.content.endsWith(".apk") }["browser_download_url"]!!.jsonPrimitive.content
-        Release(tag, apk)
+            .first { Regex("Secpar(?:-preview[0-9]+)?\\.apk").matches(it["name"]!!.jsonPrimitive.content) }
+        val url = apk["browser_download_url"]!!.jsonPrimitive.content
+        val prefix = "https://github.com/modnite/Secpar/releases/download/$tag/"
+        if (!url.startsWith(prefix) || url.removePrefix(prefix).contains('/')) return null
+        val hash = apk["digest"]!!.jsonPrimitive.content.removePrefix("sha256:")
+        if (!Regex("[a-f0-9]{64}").matches(hash)) return null
+        val size = apk["size"]!!.jsonPrimitive.content.toLong()
+        if (size !in 1..200_000_000) return null
+        Release(tag.trimStart('v'), url, hash, size)
+    }.getOrNull()
+
+    fun select(json: String, previews: Boolean = true): Release? = runCatching {
+        Json.parseToJsonElement(json).jsonArray.mapNotNull { parse(it.toString()) }
+            .filter { previews || !it.version.contains("-secpar-preview.") }
+            .reduceOrNull { a, b -> if (isNewer(b.version, a.version)) b else a }
     }.getOrNull()
 
     fun isNewer(latest: String, current: String): Boolean {
-        fun v(s: String) = s.split('.', '-').mapNotNull { it.toIntOrNull() }
-        val (a, b) = v(latest) to v(current)
-        for (i in 0 until maxOf(a.size, b.size)) {
-            val d = a.getOrElse(i) { 0 } - b.getOrElse(i) { 0 }
-            if (d != 0) return d > 0
+        fun v(s: String): List<Long> {
+            val clean = s.trimStart('v')
+            val base = clean.substringBefore('-').split('.').map { it.toLongOrNull() ?: 0 }
+            val preview = clean.substringAfter("-secpar", "").trimStart('-', '.').removePrefix("preview.").toLongOrNull()
+            return (base + listOf(0L, 0L, 0L)).take(3) + listOf(if (preview == null) 1L else 0L, preview ?: 0)
         }
+        val a=v(latest); val b=v(current)
+        for (i in a.indices) if (a[i] != b[i]) return a[i] > b[i]
         return false
     }
 
@@ -79,38 +98,71 @@ object Updater {
     }
 
     fun checkNow(ctx: Context, done: () -> Unit = {}) {
-        if (BuildConfig.DEBUG || busy) return done()
-        busy = true
+        if (!operation.compareAndSet(false, true)) return done()
+        mutableState.value = mutableState.value.copy(message = "Checking for updates...", busy = true)
         scope.launch {
-            try { runCatching { check(ctx.applicationContext) } } finally { busy = false; done() }
+            try {
+                val body = http.newCall(Request.Builder().url(LATEST).header("Accept", "application/vnd.github+json").build()).execute()
+                    .use { check(it.isSuccessful) { "Update service unavailable. Try again later." }; it.body.string() }
+                val r = select(body, BuildConfig.VERSION_NAME.contains("secpar"))
+                val newer = r?.takeIf { isNewer(it.version, BuildConfig.VERSION_NAME) }
+                mutableState.value = UpdateState(newer, if (newer == null) "You're up to date." else "Secpar ${newer.version} is available.")
+                if (newer != null) notify(ctx, "Secpar ${newer.version} is available. Tap to review.", Intent(ctx, UpdatesActivity::class.java))
+            } catch (_: Exception) {
+                mutableState.value = mutableState.value.copy(message = "Could not check for updates. Try again.", busy = false)
+            } finally {
+                operation.set(false)
+                android.os.Handler(android.os.Looper.getMainLooper()).post { done() }
+            }
         }
     }
 
-    private fun check(ctx: Context) {
-        val body = http.newCall(Request.Builder().url(LATEST).header("Accept", "application/vnd.github+json").build()).execute()
-            .use { if (it.isSuccessful) it.body.string() else null } ?: return
-        val r = parse(body) ?: return
-        if (!isNewer(r.version, BuildConfig.VERSION_NAME)) return
+    fun downloadAndInstall(ctx: Context) {
+        val r = state.value.release ?: return
         if (Build.VERSION.SDK_INT >= 26 && !ctx.packageManager.canRequestPackageInstalls()) {
-            // one-time: let PC Remote install its own updates
-            notify(ctx, ctx.getString(R.string.pcr_update_allow, r.version),
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)))
+            ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)))
+            mutableState.value = state.value.copy(message = "Allow updates from Secpar, then tap Download & install again.")
             return
         }
-        val apk = File(ctx.cacheDir, "update.apk")
-        http.newCall(Request.Builder().url(r.apkUrl).build()).execute().use { resp ->
-            if (!resp.isSuccessful) return
-            apk.outputStream().use { resp.body.byteStream().copyTo(it) }
+        if (!operation.compareAndSet(false, true)) return
+        mutableState.value = state.value.copy(busy = true, message = "Downloading update...")
+        scope.launch {
+            val apk = File(ctx.cacheDir, "secpar-update.apk")
+            try {
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                var total = 0L
+                http.newCall(Request.Builder().url(r.apkUrl).build()).execute().use { resp ->
+                    check(resp.isSuccessful) { "Download failed" }
+                    apk.outputStream().use { out -> resp.body.byteStream().use { input ->
+                        val buffer = ByteArray(65536)
+                        while (true) {
+                            val n = input.read(buffer); if (n < 0) break
+                            total += n; check(total <= r.size) { "Unexpected download size" }
+                            digest.update(buffer, 0, n); out.write(buffer, 0, n)
+                        }
+                    } }
+                }
+                check(total == r.size && digest.digest().joinToString("") { "%02x".format(it) } == r.sha256) { "Download verification failed" }
+                val flags = if (Build.VERSION.SDK_INT >= 28) android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES else @Suppress("DEPRECATION") android.content.pm.PackageManager.GET_SIGNATURES
+                val downloaded = ctx.packageManager.getPackageArchiveInfo(apk.path, flags) ?: error("Invalid APK")
+                val installed = ctx.packageManager.getPackageInfo(ctx.packageName, flags)
+                fun version(p: android.content.pm.PackageInfo) = if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else @Suppress("DEPRECATION") p.versionCode.toLong()
+                fun signers(p: android.content.pm.PackageInfo) = (if (Build.VERSION.SDK_INT >= 28) p.signingInfo!!.apkContentsSigners else @Suppress("DEPRECATION") p.signatures!!).map { it.toCharsString() }.toSet()
+                check(downloaded.packageName == ctx.packageName && version(downloaded) > version(installed)) { "Wrong app or older update" }
+                check(signers(installed).isNotEmpty() && signers(installed) == signers(downloaded)) { "Update signing key does not match" }
+                install(ctx, apk)
+                mutableState.value = state.value.copy(busy = false, message = "Download verified. Confirm installation when Android asks.")
+            } catch (_: Exception) {
+                mutableState.value = state.value.copy(busy = false, message = "Update could not be verified or installed. Try again.")
+            } finally { apk.delete(); operation.set(false) }
         }
-        install(ctx, apk)
     }
 
     private fun install(ctx: Context, apk: File) {
         val pi = ctx.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(ctx.packageName)
-            if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
-            if (Build.VERSION.SDK_INT >= 34) setRequestUpdateOwnership(true)
+            if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
         }
         val id = pi.createSession(params)
         pi.openSession(id).use { s ->
@@ -137,9 +189,11 @@ class UpdateReceiver : BroadcastReceiver() {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 @Suppress("DEPRECATION") val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
+                Updater.confirm(confirm)
                 Updater.notify(ctx, ctx.getString(R.string.pcr_update_tap), confirm)
             }
-            else -> {}
+            PackageInstaller.STATUS_SUCCESS -> {}
+            else -> Updater.notify(ctx, "Update was not installed. Tap to retry.", Intent(ctx, UpdatesActivity::class.java))
         }
     }
 }

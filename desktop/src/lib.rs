@@ -6,6 +6,7 @@ mod input;
 mod local_host;
 #[cfg(windows)]
 mod tray;
+mod updates;
 mod vault;
 use eframe::egui::{
     self, Color32, CursorGrab, Event as UiEvent, Key, TextureHandle, TextureOptions,
@@ -95,6 +96,7 @@ struct App {
     review_frames: u32,
     #[cfg(windows)]
     tray: Option<tray::Tray>,
+    updates: updates::Panel,
     hosting: hosting::Panel,
     account: account::Panel,
     page: Page,
@@ -139,6 +141,7 @@ impl App {
             review_frames: 0,
             #[cfg(windows)]
             tray: tray::Tray::new(&cc.egui_ctx),
+            updates: updates::Panel::new(),
             hosting: hosting::Panel::new(cc.egui_ctx.clone()),
             account: account::Panel::new(cc.egui_ctx.clone()),
             page: initial_page(),
@@ -468,6 +471,8 @@ impl eframe::App for App {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.updates.tick(ctx);
+        self.updates.window(ctx, self.command.is_some());
         #[cfg(windows)]
         if self
             .tray
@@ -506,6 +511,7 @@ impl eframe::App for App {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
+                                    self.updates.button(ui);
                                     ui.label(
                                         egui::RichText::new(&self.status)
                                             .size(12.)

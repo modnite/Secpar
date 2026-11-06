@@ -113,10 +113,9 @@ fun SettingsScreen(model: SettingsModel, onBack: () -> Unit, onThemeChanged: () 
 
         Group(R.string.pcr_set_about) {
             LinkRow(Icons.Rounded.Info, R.string.pcr_version, null, trailing = BuildConfig.VERSION_NAME) {}
-            var checking by remember { mutableStateOf(false) }
-            LinkRow(Icons.Rounded.SystemUpdate, R.string.pcr_update_check, R.string.pcr_update_check_desc, trailing = if (checking) "…" else null) {
-                checking = true
-                com.pcremote.update.Updater.checkNow(ctx) { checking = false }
+            val update by com.pcremote.update.Updater.state.collectAsState()
+            LinkRow(Icons.Rounded.SystemUpdate, R.string.pcr_update_check, R.string.pcr_update_check_desc, trailing = if (update.release != null) "Available" else null) {
+                ctx.startActivity(Intent(ctx, com.pcremote.update.UpdatesActivity::class.java))
             }
             LinkRow(Icons.Rounded.Code, R.string.pcr_source, R.string.pcr_source_desc) {
                 ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL)))

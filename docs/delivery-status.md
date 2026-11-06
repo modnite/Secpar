@@ -192,7 +192,30 @@
   95f92d9cc1c8b92b25c008e2e1170724f2b75f3c34a9f3c58b216b4b621652bf,
   matching GitHub asset digest. The isolated Secpar emulator was stopped after
   verification; the unrelated emulator and physical phone were left untouched.
-  Physical S23 streaming confirmation is pending. No PC update is required.
+  Physical S23 result: unchanged or worse. Both video and cursor problems go away
+  when playback is PAUSED; the cursor itself does NOT disappear. User corrected
+  that misinterpretation explicitly. P15 logs confirm direct LAN UDP to
+  192.168.100.130, 4–11 received fps under playback, zero assembly/invalid/socket
+  drops, zero measured loss. Capture/encoding/packetization/send path now under
+  investigation. Do not ship another decoder-pacing guess.
+- Desktop Development 6 / Android Preview 16 implementation: automatic checks of
+  product-specific preview releases, explicit download/install UI, SHA-256/size
+  verification and Android package/version/certificate checks. Unified Windows
+  packages disable the legacy service's unattended timer. No live installation was
+  modified. Android has 190 passing unit tests and an emulator activity smoke;
+  desktop has 19 passing tests, including corrupted-download rejection. Native
+  install/relaunch and physical S23 performance remain user checks.
+- Confirmed host packetization bottleneck: fresh ReedSolomon matrices were built
+  synchronously per block/frame on the same video/cursor-polling thread. The exact
+  host debug profile reproduced 71.466 ms/64 KiB and 237.353 ms/192 KiB. A bounded
+  matrix cache plus optimized secpar-stream lowers those to 1.631 and 5.391 ms.
+  Nine shared-stream tests pass, including byte compatibility and concurrent loss
+  recovery. Fourteen agent tests pass; seven session tests passed and one tight
+  timeout test failed during concurrent builds, then passed alone. No capture or
+  real service restart was used. Details: docs/video-pacing.md and docs/updates.md.
+- Windows packaging first hit low C: disk space. No cache was deleted: automatic
+  review rejected that cleanup. Builds continue with a copied compiler cache and
+  temporary output on D:/Secpar-CI/secpar-host-updates-target. Originals retained.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
