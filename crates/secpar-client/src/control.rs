@@ -201,6 +201,13 @@ fn remote(v: &Value) -> Option<Relay> {
 
 impl Connected {
     pub async fn pair(p: Pairing, device: &str) -> Result<Self, String> {
+        Self::pair_ordered(p, device, false).await
+    }
+    /// Account-verified computer: attempt pinned LAN addresses before its remote bootstrap URL.
+    pub async fn pair_lan_first(p: Pairing, device: &str) -> Result<Self, String> {
+        Self::pair_ordered(p, device, true).await
+    }
+    async fn pair_ordered(p: Pairing, device: &str, lan_first: bool) -> Result<Self, String> {
         let mut routes: Vec<(String, Option<String>)> =
             p.relay_url.iter().cloned().map(|r| (r, None)).collect();
         routes.extend(
@@ -208,6 +215,7 @@ impl Connected {
                 .into_iter()
                 .zip(p.hosts.iter().cloned().map(Some)),
         );
+        if lan_first && p.relay_url.is_some() { routes.rotate_left(1); }
         let mut last = "No connection address".to_string();
         for (url, direct_host) in routes {
             let mut ws = match open(&url, direct_host.as_ref().map(|_| p.fingerprint)).await {
@@ -364,7 +372,7 @@ mod tests {
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7; 32]);
         let server_token = token.clone();
         let server = tokio::spawn(async move {
-            for mode in ["pair", "hello", "bad-certificate"] {
+            for mode in ["pair", "pair", "hello", "bad-certificate"] {
                 let (s, _) = listener.accept().await.unwrap();
                 let tls = accept.accept(s).await;
                 if mode == "bad-certificate" {
@@ -398,7 +406,14 @@ mod tests {
             relay_url: None,
             pc_id: Some("pc1".into()),
         };
-        let mut c = Connected::pair(p, "Desktop").await.unwrap();
+        let mut manual = Connected::pair(p.clone(), "Desktop").await.unwrap();
+        manual.socket.close(None).await.unwrap();
+        drop(manual);
+        let unused_relay = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut owned = p;
+        owned.relay_url = Some(format!("wss://{}/v1/phone?pc=pc1", unused_relay.local_addr().unwrap()));
+        let mut c = Connected::pair_lan_first(owned, "Desktop").await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(20), unused_relay.accept()).await.is_err(), "A working LAN route must not contact the relay");
         assert!(c.computer.relay.is_some());
         assert_eq!(c.computer.token, token);
         let computer = c.computer.clone();

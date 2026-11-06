@@ -288,6 +288,7 @@ impl App {
     fn connect(&mut self, ctx: &egui::Context, pairing: Option<Pairing>) {
         if self.command.is_some() { return; }
         self.session_account=self.computer_account.clone();
+        let lan_first = self.computer_account.is_some();
         let computer = self.computer.clone();
         self.audio = self.client.audio.then(audio::Audio::new).and_then(Result::ok);
         let options = Options {
@@ -322,7 +323,8 @@ impl App {
             };
             runtime.block_on(async move {
                 let connection = if let Some(p) = pairing {
-                    Connected::pair(p, &device_name()).await
+                    if lan_first { Connected::pair_lan_first(p, &device_name()).await }
+                    else { Connected::pair(p, &device_name()).await }
                 } else if let Some(c) = computer {
                     Connected::reconnect(c, &device_name()).await
                 } else {
