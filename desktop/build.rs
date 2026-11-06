@@ -10,7 +10,7 @@ fn main() {
         tauri_winres::WindowsResource::new()
             .set_icon("../host/src-tauri/icons/icon.ico")
             .set("ProductName", "Secpar")
-            .set("FileDescription", "Secpar â€” host and connect")
+            .set("FileDescription", "Secpar — host and connect")
             .compile()
             .expect("Embed the Secpar triangle icon");
     }

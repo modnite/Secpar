@@ -229,7 +229,7 @@ impl App {
                     .selected_text(if self.options.width == 0 {
                         "Host native".into()
                     } else {
-                        format!("{} Ã— {}", self.options.width, self.options.height)
+                        format!("{} × {}", self.options.width, self.options.height)
                     })
                     .show_ui(ui, |ui| {
                         for (w, h) in [
@@ -242,7 +242,7 @@ impl App {
                             let label = if w == 0 {
                                 "Host native".into()
                             } else {
-                                format!("{w} Ã— {h}")
+                                format!("{w} × {h}")
                             };
                             if ui
                                 .selectable_label(self.options.width == w, label)
@@ -394,7 +394,7 @@ impl App {
                     self.status = if self.audio.is_some() {
                         s
                     } else {
-                        format!("{s} Â· no audio output")
+                        format!("{s} · no audio output")
                     }
                 }
                 Event::Audio(packet) => {
@@ -609,9 +609,9 @@ impl eframe::App for App {
                             if self.texture.is_some()
                                 && ui
                                     .button(if self.input.captured {
-                                        format!("Release Â· {}",self.client.shortcut.label())
+                                        format!("Release · {}",self.client.shortcut.label())
                                     } else {
-                                        format!("Capture Â· {}",self.client.shortcut.label())
+                                        format!("Capture · {}",self.client.shortcut.label())
                                     })
                                     .clicked()
                             {
@@ -766,7 +766,7 @@ impl eframe::App for App {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            ui.menu_button("â€¦", |ui| {
+                                            ui.menu_button("…", |ui| {
                                                 if ui.button("Forget on this device").clicked() {
                                                     self.account.forget_computer();
                                                     ui.close();
@@ -790,7 +790,7 @@ impl eframe::App for App {
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label("Connecting to the remote desktopâ€¦");
+                        ui.label("Connecting to the remote desktop…");
                     });
                 }
             });
