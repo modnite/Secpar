@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const accountProject = resolve(root, "cloud/accounts");
 const relayProject = resolve(root, "cloud/rendezvous");
+const siteProject = resolve(root, "cloud/site");
 const { parse } = createRequire(resolve(accountProject, "package.json"))(
   "jsonc-parser",
 );
@@ -52,6 +53,8 @@ async function config(project, changes) {
   );
   if (errors.length) throw new Error("Invalid source Worker configuration.");
   const output = { ...base, ...changes, main: resolve(project, base.main) };
+  if (output.assets)
+    output.assets = { ...output.assets, directory: resolve(project, output.assets.directory) };
   if (output.d1_databases)
     output.d1_databases = output.d1_databases.map((db) => ({
       ...db,
@@ -66,6 +69,13 @@ async function config(project, changes) {
 async function prepare() {
   const id = await account();
   const service = process.env.SECPAR_SERVICE ?? "accounts";
+  if (service === "site") {
+    const site = await config(siteProject, { account_id: id });
+    if (process.env.GITHUB_OUTPUT)
+      await writeFile(process.env.GITHUB_OUTPUT, `site=${site}\n`, { flag: "a" });
+    console.log("Prepared the Secpar public website for secpar.win.");
+    return;
+  }
   if (!["accounts", "relay", "both"].includes(service))
     throw new Error("Unknown Secpar service.");
   let accounts;

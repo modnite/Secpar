@@ -1,0 +1,11 @@
+{
+  "name": "secpar-site",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-06",
+  "workers_dev": false,
+  "assets": {"directory": "public", "binding": "ASSETS", "run_worker_first": true},
+  "routes": [
+    {"pattern": "secpar.win", "custom_domain": true},
+    {"pattern": "www.secpar.win", "custom_domain": true}
+  ]
+}

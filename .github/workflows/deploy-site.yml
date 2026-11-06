@@ -1,0 +1,50 @@
+name: Deploy Secpar website
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'cloud/site/**'
+      - 'cloud/scripts/cloudflare.mjs'
+      - '.github/workflows/deploy-site.yml'
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: secpar-website-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: [self-hosted, Linux, X64, secpar]
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      SECPAR_SERVICE: site
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+        working-directory: cloud/accounts
+      - name: Resolve the current public downloads
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node cloud/site/generate-downloads.mjs
+      - name: Check the website code
+        run: |
+          node --check cloud/site/src/worker.js
+          node --check cloud/site/public/site.js
+      - id: config
+        run: node cloud/scripts/cloudflare.mjs prepare
+      - name: Deploy the public site
+        working-directory: cloud/accounts
+        run: npx wrangler deploy --config "${{ steps.config.outputs.site }}"
+      - name: Check the public domain
+        run: |
+          curl --fail --max-time 20 --retry 3 --retry-delay 5 https://secpar.win/health ||
+            curl --doh-url https://cloudflare-dns.com/dns-query --fail --max-time 20 https://secpar.win/health

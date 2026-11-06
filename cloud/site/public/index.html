@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0c0e0f">
+  <title>Secpar — your desktop, right here.</title>
+  <meta name="description" content="Secpar is an open-source remote desktop app for Windows, Linux and Android. Download the apps and follow development.">
+  <link rel="canonical" href="https://secpar.win/">
+  <link rel="icon" type="image/svg+xml" href="/assets/secpar-icon.svg">
+  <link rel="preload" href="/assets/rubik-700.woff" as="font" type="font/woff" crossorigin>
+  <link rel="stylesheet" href="/style.css"><script src="/site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="nav wrap">
+    <a class="brand" href="/" aria-label="Secpar home"><img src="/assets/secpar-wordmark.svg" width="151" height="36" alt="Secpar"></a>
+    <nav aria-label="Main navigation"><a class="source" href="https://github.com/modnite/Secpar">Source</a><a href="https://accounts.secpar.win/auth/sign-in">Sign in</a><a class="button small outline" href="#downloads">Download <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main id="main">
+    <section class="hero wrap">
+      <p class="eyebrow">REMOTE DESKTOP · OPEN SOURCE</p>
+      <h1>Your desktop.<br><span>Right here.</span></h1>
+      <p class="intro">Your computer, your keyboard, your mouse.<br class="desktop-break"> Connect from Windows, Linux or Android.</p>
+      <a class="button primary" href="#downloads">Get Secpar <span aria-hidden="true">↓</span></a>
+      <div class="product">
+        <div class="product-heading"><span>One desktop app. Both sides of the connection.</span><span class="sample">Interface preview</span></div>
+        <div class="product-stage">
+          <img class="app-preview" src="/assets/desktop-preview.png" width="640" height="400" alt="Secpar Hosting interface showing a paired device and a Pair a device button">
+          <div class="roles"><div><span class="role-number">01</span><h2>Host</h2><p>Make your desktop available to your devices.</p></div><div><span class="role-number">02</span><h2>Connect</h2><p>Use another computer from the same app.</p></div></div>
+        </div>
+      </div>
+    </section>
+    <section id="downloads" class="downloads wrap">
+      <div class="section-heading"><div><p class="eyebrow">GET CONNECTED</p><h2>Pick your device.</h2></div><p>One app per platform.<br>Android stays client-only.</p></div>
+      <div class="download-list">
+        <article class="download-row"><div class="os-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 4h8v7H3zm10 0h8v7h-8zM3 13h8v7H3zm10 0h8v7h-8z"/></svg></div><div class="os-info"><h3>Windows</h3><p>Host + client</p></div><span class="release-version" data-version="windows">3.4.0</span><a class="button outline download" data-download="windows" href="https://github.com/modnite/Secpar/releases/download/v3.4.0/Secpar-Windows-x64-setup.exe">Download <span class="format">.exe</span><span aria-hidden="true">↘</span></a></article>
+        <article class="download-row"><div class="os-mark line" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="m6 8 4 4-4 4m7 0h5"/></svg></div><div class="os-info"><h3>Linux <span class="tag">Early release</span></h3><p>Host + client · x86-64 AppImage</p></div><span class="release-version" data-version="linux">3.4.0</span><a class="button outline download" data-download="linux" href="https://github.com/modnite/Secpar/releases/download/v3.4.0/Secpar-Linux-x64.AppImage">Download <span class="format">.AppImage</span><span aria-hidden="true">↘</span></a></article>
+        <article class="download-row"><div class="os-mark line" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/></svg></div><div class="os-info"><h3>Android</h3><p>Client · keyboard, mouse and touch</p></div><span class="release-version" data-version="android">3.2.0</span><a class="button outline download" data-download="android" href="https://github.com/modnite/Secpar/releases/download/v3.2.0/Secpar.apk">Download <span class="format">.apk</span><span aria-hidden="true">↘</span></a></article>
+        <article class="download-row upcoming"><div class="os-mark line" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="13" rx="1"/><path d="m4 16-3 5h22l-3-5"/></svg></div><div class="os-info"><h3>macOS</h3><p>Host + client in development</p></div><span class="development">Not available yet</span></article>
+      </div>
+      <p class="release-note">Linux hosting currently supports owner-paired devices on LAN. <a href="https://github.com/modnite/Secpar/blob/main/docs/linux.md">Read the Linux notes ↗</a></p>
+      <a class="text-link" href="https://github.com/modnite/Secpar/releases">Release notes &amp; checksums <span aria-hidden="true">↗</span></a>
+    </section>
+    <section class="setup wrap" id="setup">
+      <div class="section-heading"><div><p class="eyebrow">THE SHORT VERSION</p><h2>Start with your computer.</h2></div><a class="text-link" href="https://github.com/modnite/Secpar#readme">Setup guide ↗</a></div>
+      <ol class="steps"><li><span>1</span><h3>Install Secpar</h3><p>Open it on the computer you want to use remotely.</p></li><li><span>2</span><h3>Pair your device</h3><p>Open Hosting and pair using the code or pairing link.</p></li><li><span>3</span><h3>Connect</h3><p>Choose the computer on your other device and start a session.</p></li></ol>
+    </section>
+    <section class="open-source wrap"><div><p class="eyebrow">BUILT IN THE OPEN</p><h2>A work in progress.<br>Yours to follow.</h2></div><div><p>Secpar is an independent open-source project. Follow the code, report a problem or help shape what comes next.</p><a class="button outline" href="https://github.com/modnite/Secpar">View on GitHub <span aria-hidden="true">↗</span></a></div></section>
+  </main>
+  <footer class="wrap"><a class="brand" href="/" aria-label="Secpar home"><img src="/assets/secpar-wordmark.svg" width="126" height="30" alt="Secpar"></a><p>Independent. Open source. GPL-3.0.</p><div><a href="https://github.com/modnite/Secpar/blob/main/LICENSE.txt">License</a><a href="https://github.com/modnite/Secpar/releases">Releases</a><a href="https://accounts.secpar.win/auth/register">Create account</a></div></footer>
+</body>
+</html>
