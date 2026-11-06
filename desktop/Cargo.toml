@@ -56,6 +56,9 @@ name = "secpar-desktop-review"
 path = "src/review.rs"
 required-features = ["ui-review"]
 
+[target.'cfg(target_os = "linux")'.dependencies]
+secpar-host-linux = { path = "../crates/secpar-host-linux" }
+
 [[bin]]
 name = "secpar-tray-review"
 path = "src/tray_review_main.rs"

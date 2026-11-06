@@ -83,16 +83,7 @@ pub struct GpuFrame {
     pub shape: Option<Shape>,
 }
 
-/// A display the user can pick in Settings: `id` is the Windows device name (`\\.\DISPLAY2`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct Display {
-    pub id: String,
-    pub name: String,
-    pub primary: bool,
-    /// Desktop coordinates: left, top, right, bottom.
-    #[serde(skip)]
-    pub rect: [i32; 4],
-}
+pub use secpar_host_core::Display;
 
 fn outputs() -> Vec<(IDXGIAdapter1, IDXGIOutput)> {
     // SAFETY: COM enumeration with valid out-params.

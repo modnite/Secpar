@@ -3594,6 +3594,7 @@ dependencies = [
  "reqwest",
  "ring",
  "rustls-platform-verifier",
+ "secpar-host-core",
  "secpar-network",
  "secpar-stream",
  "serde",
@@ -3609,6 +3610,19 @@ dependencies = [
  "window-vibrancy",
  "windows",
  "wiremock",
+]
+
+[[package]]
+name = "secpar-host-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
 ]
 
 [[package]]

@@ -13,9 +13,9 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
 /// Either half of a phone connection: a direct WebSocket or a relayed one.
-pub(crate) trait Rx: Stream<Item = Message> + Unpin + Send {}
+pub trait Rx: Stream<Item = Message> + Unpin + Send {}
 impl<T: Stream<Item = Message> + Unpin + Send> Rx for T {}
-pub(crate) trait Tx: Sink<Message> + Unpin + Send {}
+pub trait Tx: Sink<Message> + Unpin + Send {}
 impl<T: Sink<Message> + Unpin + Send> Tx for T {}
 
 async fn send(ws: &mut impl Tx, m: &ServerMsg) -> bool {
@@ -45,17 +45,28 @@ async fn next_frame(ws: &mut impl Rx, idle: std::time::Duration) -> Option<Frame
 
 /// `remote` for a paired phone, when a Worker is configured.
 fn remote(ctx: &Ctx, dev: &str) -> Option<ServerMsg> {
-    let url = crate::remote::url()?;
-    let ticket = crate::store::b64url(&ctx.store.lock().unwrap().ticket(dev));
-    Some(ServerMsg::Remote { url: url.into(), dev: dev.into(), ticket })
+    let url = ctx.relay_url.as_deref()?;
+    let ticket = base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        ctx.store.lock().unwrap().ticket(dev),
+    );
+    Some(ServerMsg::Remote {
+        url: url.into(),
+        dev: dev.into(),
+        ticket,
+    })
 }
 
 fn ws_config() -> WebSocketConfig {
-    WebSocketConfig::default().max_message_size(Some(MAX_FRAME)).max_frame_size(Some(MAX_FRAME))
+    WebSocketConfig::default()
+        .max_message_size(Some(MAX_FRAME))
+        .max_frame_size(Some(MAX_FRAME))
 }
 
 pub(crate) async fn run(tcp: TcpStream, acceptor: tokio_rustls::TlsAcceptor, ctx: Arc<Ctx>) {
-    let Ok(Ok(tls)) = timeout(ctx.idle, acceptor.accept(tcp)).await else { return };
+    let Ok(Ok(tls)) = timeout(ctx.idle, acceptor.accept(tcp)).await else {
+        return;
+    };
     #[allow(clippy::result_large_err)] // signature fixed by tungstenite
     let only_v1 = |req: &Request, resp: Response| -> Result<Response, ErrorResponse> {
         if req.uri().path() == "/v1" {
@@ -66,10 +77,19 @@ pub(crate) async fn run(tcp: TcpStream, acceptor: tokio_rustls::TlsAcceptor, ctx
             Err(e)
         }
     };
-    let Ok(Ok(ws)) = timeout(ctx.idle, tokio_tungstenite::accept_hdr_async_with_config(tls, only_v1, Some(ws_config()))).await else { return };
+    let Ok(Ok(ws)) = timeout(
+        ctx.idle,
+        tokio_tungstenite::accept_hdr_async_with_config(tls, only_v1, Some(ws_config())),
+    )
+    .await
+    else {
+        return;
+    };
     let (tx, rx) = ws.split();
     // a read error ends the connection like a close
-    let rx = rx.take_while(|r| std::future::ready(r.is_ok())).filter_map(|r| std::future::ready(r.ok()));
+    let rx = rx
+        .take_while(|r| std::future::ready(r.is_ok()))
+        .filter_map(|r| std::future::ready(r.ok()));
     serve(rx, tx, ctx).await
 }
 
@@ -108,7 +128,17 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
             match auth {
                 Ok(id) => {
                     let pc = ctx.handlers.pc_info().await;
-                    if !send(&mut ws, &ServerMsg::Welcome { v: 1, pc, caps: ctx.handlers.caps(), locked: ctx.handlers.locked() }).await {
+                    if !send(
+                        &mut ws,
+                        &ServerMsg::Welcome {
+                            v: 1,
+                            pc,
+                            caps: ctx.handlers.caps(),
+                            locked: ctx.handlers.locked(),
+                        },
+                    )
+                    .await
+                    {
                         return;
                     }
                     if let Some(m) = remote(&ctx, &id) {
@@ -119,11 +149,24 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                 Err(code) => return fail(&mut ws, code, "this phone is not paired").await,
             }
         }
-        _ => return fail(&mut ws, "unauthorized", "first message must be pair or hello").await,
+        _ => {
+            return fail(
+                &mut ws,
+                "unauthorized",
+                "first message must be pair or hello",
+            )
+            .await
+        }
     };
 
     let (bin_tx, mut bin_rx) = mpsc::channel(4);
-    let mut session = ctx.handlers.session(&device, Outbox { ctl: tx.clone(), bin: bin_tx });
+    let mut session = ctx.handlers.session(
+        &device,
+        Outbox {
+            ctl: tx.clone(),
+            bin: bin_tx,
+        },
+    );
     let sid = ctx.register(&device, tx);
     loop {
         tokio::select! {

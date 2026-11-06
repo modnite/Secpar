@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[cfg(any(windows, test))]
 use serde_json::json;
 use serde_json::Value;
+#[cfg(any(windows, test))]
 const MAX_RESPONSE: usize = 512 * 1024;
 #[cfg(any(windows, test))]
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -44,7 +45,11 @@ pub async fn call(command: &str, args: Value) -> Result<Value, String> {
     .await
     .map_err(|_| "The Secpar hosting service did not respond in time".to_string())?
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub async fn call(command: &str, args: Value) -> Result<Value, String> {
+    secpar_host_linux::backend::call(command, args).await
+}
+#[cfg(not(any(windows, target_os = "linux")))]
 pub async fn call(_command: &str, _args: Value) -> Result<Value, String> {
     Err("Hosting on this platform is still in development".into())
 }

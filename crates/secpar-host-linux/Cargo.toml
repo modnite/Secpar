@@ -1,0 +1,35 @@
+[package]
+name = "secpar-host-linux"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+publish = false
+
+[dependencies]
+secpar-host-core = { path = "../secpar-host-core" }
+secpar-stream = { path = "../secpar-stream" }
+secpar-network = { path = "../secpar-network" }
+base64 = "0.23.1"
+ring = "0.17.14"
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+url = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+ashpd = { version = "0.13.13", features = ["remote_desktop", "screencast"] }
+gstreamer = "0.24.5"
+gstreamer-app = "0.24.5"
+gstreamer-video = "0.24.5"
+opus = "0.4.0"
+get_if_addrs = "0.5.3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev.package.secpar-stream]
+opt-level = 3
+[profile.dev.package.reed-solomon-erasure]
+opt-level = 3
