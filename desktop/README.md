@@ -1,8 +1,8 @@
 # Secpar desktop application
 
-The desktop application hosts and connects through one interface on Windows. Hosting → Pair a device pairs Android and desktop clients with the same Windows service. The combined Windows installer includes that service and the desktop UI, preserving existing Secpar owner pairings and TLS identity. Android stays client-only. Linux/macOS builds currently connect only; their hosting backends remain unfinished. PC Remote stays separate.
+The desktop application hosts and connects through one interface on Windows. Hosting â†’ Pair a device pairs Android and desktop clients with the same Windows service. The combined Windows installer includes that service and the desktop UI, preserving existing Secpar owner pairings and TLS identity. Android stays client-only. Linux/macOS builds currently connect only; their hosting backends remain unfinished. PC Remote stays separate.
 
-Implemented: pairing links for pinned direct TLS and signed relay bootstrap, OS credential-store persistence for the last paired computer, encrypted UDP video, bounded frame assembly/FEC, duplicate rejection, direct candidate probing, STUN discovery, TURN allocation/channel/permission refresh, Opus audio playback, H.264 software decode to a GPU-rendered window, host-native/720p/1080p/1440p/4K resolution choice, native cursor images, display switching, fullscreen, relative mouse/keyboard, Ctrl+F12 cursor capture/release and held-input cleanup on focus loss/disconnect.
+Implemented: pairing links for pinned direct TLS and signed relay bootstrap, OS credential-store persistence for the last paired computer, encrypted UDP video, bounded frame assembly/FEC, duplicate rejection, direct candidate probing, STUN discovery, TURN allocation/channel/permission refresh, Opus audio playback, bounded worker decoding with verified Linux VA-API and OpenH264 fallback to a GPU-rendered window, host-native/720p/1080p/1440p/4K resolution choice, native cursor images, display switching, fullscreen, relative mouse/keyboard, configurable Ctrl+Alt+G cursor capture/release and held-input cleanup on focus loss/disconnect.
 
 The compact window uses the accepted Secpar triangle and wordmark. Computers and Friends are separate tabs. Friends supports browser-based Secpar sign-in, copy/paste friend codes, incoming acceptance, cancellation/removal, blocking and unblocking. Friendship itself grants no PC access; host admission and sharing are still unfinished.
 
@@ -22,9 +22,9 @@ The client captures mouse and keyboard when the first decoded video frame arrive
 
 The portable client has real loopback TLS/WebSocket/UDP tests for pairing/reconnect, certificate mismatch, encrypted input, audio envelopes and video recovery with packet loss and duplicates. Decoder tests exercise actual H.264 and Opus bitstreams. Input tests cover release cleanup and fractional mouse movement. The same suite runs on the Windows desktop runner, OMV Linux runner and GitHub macOS runner.
 
-These are development checks, not a claim that all hardware/platform combinations are supported. Native rendered screenshots have now been reviewed at 800×600 and 640×400 logical pixels, with no scrolling on the Computers or signed-out Friends pages. A signed-in friend-list fixture also fits at 640×400; it is explicitly marked Layout sample and is not proof of a live friend session. See [visual review](../docs/ui-review.md). Real host-to-client sessions and physical mouse-grab behavior require validation on each target OS. TURN allocation against the production relay has not been tested with this desktop client.
+These are development checks, not a claim that all hardware/platform combinations are supported. Native rendered screenshots have now been reviewed at 800Ã—600 and 640Ã—400 logical pixels, with no scrolling on the Computers or signed-out Friends pages. A signed-in friend-list fixture also fits at 640Ã—400; it is explicitly marked Layout sample and is not proof of a live friend session. See [visual review](../docs/ui-review.md). Real host-to-client sessions and physical mouse-grab behavior require validation on each target OS. TURN allocation against the production relay has not been tested with this desktop client.
 
-Remaining client work: hardware decoding, audio/video timing and jitter handling, IME and full physical-key coverage, a full saved-computer list, native signed packaging and live network/performance testing. Linux/macOS hosting, the unified host UI, concurrent guest sessions and host/Android account integration are separate unfinished milestones. Native account approval, restart persistence and friend actions need real-user validation on each target OS. This source is not a new stable release or a replacement for Preview 10.
+Remaining client work: Windows/macOS hardware decoding, audio/video timing and jitter handling, IME and full physical-key coverage, a full saved-computer list, native signed packaging and live network/performance testing. Linux/macOS hosting, the unified host UI, concurrent guest sessions and host/Android account integration are separate unfinished milestones. Native account approval, restart persistence and friend actions need real-user validation on each target OS. Linux VA-API must pass an actual decoded-frame probe before it is offered; failure during a stream requests a fresh keyframe and switches to software. The X250 driver still requires physical validation.
 
 ## Development packages
 
@@ -32,7 +32,7 @@ Windows provides a standalone x64 executable. Linux provides an x64 archive with
 
 ## Account sign-in
 
-Choose Friends → Sign in. Secpar opens accounts.secpar.win in your default browser and shows an eight-character approval code. Sign in using your existing email/password account, confirm the matching code, then return to the desktop app. No password is collected or stored by the desktop UI. Approval polling honors the server interval and expires after ten minutes. Cancel stops local polling. Account API errors and sign-in expiry are shown without raw HTTP bodies or credentials.
+Choose Friends â†’ Sign in. Secpar opens accounts.secpar.win in your default browser and shows an eight-character approval code. Sign in using your existing email/password account, confirm the matching code, then return to the desktop app. No password is collected or stored by the desktop UI. Approval polling honors the server interval and expires after ten minutes. Cancel stops local polling. Account API errors and sign-in expiry are shown without raw HTTP bodies or credentials.
 
 The native worker pins its account origin, permits HTTPS only, refuses redirects, bounds response bodies and times out requests. Per-user secure storage and network operations run off the UI thread. Windows credential write/read/delete was verified with a disposable test entry; equivalent Linux/macOS runtime checks are still required. Linux needs an unlocked Secret Service in the desktop session (for example GNOME Keyring or KWallet).
 
@@ -43,7 +43,7 @@ Build the separate `secpar-desktop-review` binary with `--features ui-review`. S
 
 ## Linking the local Windows host
 
-Under Hosting → Settings → Account link, choose Link my account after signing in
+Under Hosting â†’ Settings â†’ Account link, choose Link my account after signing in
 under Friends. The Secpar hosting service must be running in the same Windows session.
 The host proves possession of its existing TLS key using an account-bound one-use
 challenge. The account session stays in the desktop worker. Only a separate,
