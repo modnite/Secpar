@@ -158,7 +158,7 @@
     <string name="pcr_s2_perf">%1$s · %2$d×%3$d · %4$d fps · %5$.1f Mbps\nLatency %6$d ms · RTT %7$d ms · loss %8$.1f%%</string>
     <string name="pcr_manual_title">Pair with a link</string>
     <string name="pcr_manual_desc">On your PC, open Secpar → Hosting → Pair a device and choose Copy pairing link, send it to this phone, then paste it here.</string>
-    <string name="pcr_wol_sent">Waking your PC…</string>
+    <string name="pcr_wol_sent">Wake request sent</string>
     <string name="pcr_wol_no_mac">This PC can\'t be woken remotely yet. Open Secpar on it once while it\'s on.</string>
     <!-- v3 -->
     <string name="pcr_app_name">Secpar</string>
@@ -192,7 +192,7 @@
     <string name="pcr_unlock_settings_nofp">Set up a fingerprint in Android settings to save PINs. Without one, you type the PIN each time.</string>
     <string name="pcr_unlock_saved_for">PIN saved</string>
 
-    <string name="pcr_set_wake">Wake from anywhere</string>
+    <string name="pcr_set_wake">Wake on LAN</string>
     <string name="pcr_ha_desc">A PC that\'s shut down can only be woken from its own network. Home Assistant is there all the time, so the Wake button asks it to send the wake signal. Paste the webhook link of a Home Assistant automation that presses your PC\'s Wake on LAN button (Settings › Automations › the automation › its webhook trigger › copy). Away from home, the phone must be able to reach Home Assistant, for example with Tailscale on.</string>
     <string name="pcr_ha_url">Wake link or Home Assistant address</string>
     <string name="pcr_ha_token">Access token (only for an address)</string>
@@ -228,4 +228,13 @@
     <string name="pcr_files_empty">This folder is empty.</string>
     <string name="pcr_files_download">Download</string>
     <string name="secpar_capture_shortcut">Mouse capture shortcut</string>
+    <string name="secpar_capture_mouse">Capture mouse</string>
+    <string name="secpar_pip">Picture in picture</string>
+    <string name="secpar_wake_desc">Local wake needs no extra service. Away from home, use an HTTPS wake link from a router, NAS or another device on the computer’s network.</string>
+    <string name="secpar_wake_local">Local network</string>
+    <string name="secpar_wake_webhook">HTTPS wake link</string>
+    <string name="secpar_wake_ha">Home Assistant (optional)</string>
+    <string name="secpar_wake_link">HTTPS wake link</string>
+    <string name="secpar_wake_token">Bearer token (optional for a wake link)</string>
+    <string name="secpar_wake_https">Enter a valid HTTPS link.</string>
 </resources>

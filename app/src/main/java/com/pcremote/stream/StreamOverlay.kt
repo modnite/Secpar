@@ -160,6 +160,16 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, close: () -> Unit)
                 state.showPerf = !state.showPerf
             }
         }
+        Spacer(Modifier.height(10.dp))
+        Tile(Icons.Rounded.Mouse, R.string.secpar_capture_mouse, wide = true,
+            active = state.mouseCaptured, modifier = Modifier.fillMaxWidth()) {
+            close(); a.captureMouse()
+        }
+        if (state.canPip) {
+            Spacer(Modifier.height(8.dp))
+            Tile(Icons.Rounded.PictureInPictureAlt, R.string.secpar_pip, wide = true,
+                modifier = Modifier.fillMaxWidth()) { close(); a.pictureInPicture() }
+        }
         if (state.displays.size > 1) {
             Section(R.string.pcr_tb_displays)
             state.displays.forEach { d ->
@@ -218,7 +228,7 @@ private fun Tile(icon: ImageVector, label: Int?, modifier: Modifier = Modifier, 
             verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = c.accent, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(10.dp))
-            (text ?: label?.let { stringResource(it) })?.let { Text(it, color = c.text, style = MaterialTheme.typography.labelMedium, maxLines = 1) }
+            (text ?: label?.let { stringResource(it) })?.let { Text(it, color = c.text, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.weight(1f)) }
         }
     } else {
         Column(

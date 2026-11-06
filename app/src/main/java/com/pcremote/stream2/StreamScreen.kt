@@ -150,6 +150,15 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val send: (Msg) -> Unit = { currentController.sendInput(it) }
     val desktop = remember { DesktopInput(send) }
     val activity = ctx as? com.pcremote.MainActivity
+    val inPip = activity?.pipVisible == true
+    DisposableEffect(activity, streaming?.w, streaming?.h) {
+        activity?.configureStreamPip(streaming != null, streaming?.w ?: 16, streaming?.h ?: 9)
+        onDispose { activity?.configureStreamPip(false) }
+    }
+    DisposableEffect(activity, controller) {
+        activity?.onStreamHidden = { controller.stop(); onBack() }
+        onDispose { activity?.onStreamHidden = null }
+    }
     val captureView = remember { java.util.concurrent.atomic.AtomicReference<android.view.View?>() }
     var captured by remember { mutableStateOf(false) }
     val capture = remember {
@@ -177,9 +186,13 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     }
     val trackpad = remember { TrackpadModel(settings.pointerSpeed, settings.naturalScroll) }
     val direct = remember { DirectTouchModel(settings.naturalScroll) }
+    toolbar.mouseCaptured = captured
+    toolbar.canPip = activity?.supportsPip == true
     val actions = remember {
         object : ToolbarActions {
             override fun shortcut(s: Shortcut) = s.events().forEach { send(it.toMsg()) }
+            override fun captureMouse() { capture.setUiOpen(false); capture.setRequested(true) }
+            override fun pictureInPicture() { activity?.enterStreamPip() }
             override fun keyboard() { toolbar.keyboardOpen = !toolbar.keyboardOpen }
             override fun setTrackpad(on: Boolean) { toolbar.trackpad = on }
             override fun lowerQuality() {}
@@ -266,7 +279,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
             }
         }
         // touch input over the whole screen
-        if (streaming != null && pic != null) {
+        if (!inPip && streaming != null && pic != null) {
             Box(Modifier.fillMaxSize().pointerInput(toolbar.trackpad, pic) {
                 kotlinx.coroutines.coroutineScope {
                     val gestures = this
@@ -332,21 +345,17 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                 }
             })
         }
-        StreamOverlay(toolbar, actions) { capture.setUiOpen(it) }
-        if (streaming != null && !captured) {
-            GhostButton("Android controls · ${settings.captureShortcut.label} to capture", { capture.setRequested(true) },
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
-        }
+        if (!inPip) StreamOverlay(toolbar, actions) { capture.setUiOpen(it) }
         // On the lock or sign-in screen: one tap and a fingerprint types the PIN
         val locked by session.conn.locked.collectAsState()
         val unlock = com.pcremote.modes.rememberUnlocker(pcId, session::send, session.conn.incoming)
         val canUnlock = (agent as? com.pcremote.agent.AgentState.Online)?.caps?.contains("unlock") == true
-        androidx.compose.animation.AnimatedVisibility(locked && canUnlock && streaming != null, Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)) {
+        androidx.compose.animation.AnimatedVisibility(!inPip && locked && canUnlock && streaming != null, Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)) {
             com.pcremote.ui.components.PrimaryButton(androidx.compose.ui.res.stringResource(R.string.pcr_unlock_fp), unlock,
                 icon = Icons.Rounded.Fingerprint)
         }
-        if (zoom.isZoomed) ZoomChip(zoom.scale, Modifier.align(Alignment.TopCenter).padding(top = 12.dp), zoom::reset)
-        if (toolbar.keyboardOpen && streaming != null) {
+        if (!inPip && zoom.isZoomed) ZoomChip(zoom.scale, Modifier.align(Alignment.TopCenter).padding(top = 12.dp), zoom::reset)
+        if (!inPip && toolbar.keyboardOpen && streaming != null) {
             Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(c.surface.copy(alpha = 0.9f))) {
                 TypingField(send, toolbar.bar) { toolbar.barTick++ }
             }

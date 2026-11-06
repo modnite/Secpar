@@ -3,6 +3,7 @@ package com.pcremote.home
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.NetworkInterface
 
 /** Wake-on-LAN magic packets: 6 × 0xFF then the MAC 16 times, to the broadcast address and each known host. */
 object WakeOnLan {
@@ -13,7 +14,11 @@ object WakeOnLan {
 
     /** Blocking; true if at least one packet went out. */
     fun send(macs: List<String>, hosts: List<String>): Boolean {
-        val targets = listOf("255.255.255.255") + hosts.filter { it.matches(Regex("""\d{1,3}(\.\d{1,3}){3}""")) }
+        val broadcasts = runCatching {
+            NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
+                .flatMap { it.interfaceAddresses }.mapNotNull { it.broadcast?.hostAddress }
+        }.getOrDefault(emptyList())
+        val targets = (listOf("255.255.255.255") + broadcasts + hosts.filter { it.matches(Regex("""\d{1,3}(\.\d{1,3}){3}""")) }).distinct()
         var sent = false
         DatagramSocket().use { s ->
             s.broadcast = true

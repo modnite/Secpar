@@ -135,20 +135,42 @@ private fun WakeGroup() {
     val c = LocalMidnight.current
     val ctx = LocalContext.current
     val ha = remember { com.pcremote.home.HomeAssistant.get(ctx) }
-    var url by remember { mutableStateOf(ha.url) }
-    var token by remember { mutableStateOf(ha.token) }
-    var saved by remember { mutableStateOf(false) }
+    val remote = remember { com.pcremote.home.RemoteWake.get(ctx) }
+    var method by remember { mutableStateOf(remote.method) }
+    var url by remember(method) { mutableStateOf(if (method == com.pcremote.home.WakeMethod.HOME_ASSISTANT) ha.url else remote.url) }
+    var token by remember(method) { mutableStateOf(if (method == com.pcremote.home.WakeMethod.HOME_ASSISTANT) ha.token else remote.token) }
+    var saved by remember(method) { mutableStateOf(false) }
+    var invalid by remember { mutableStateOf(false) }
     Group(R.string.pcr_set_wake) {
-        Text(stringResource(R.string.pcr_ha_desc), color = c.textDim, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(12.dp, 8.dp, 12.dp, 4.dp))
-        OutlinedTextField(url, { url = it; saved = false }, singleLine = true, label = { Text(stringResource(R.string.pcr_ha_url)) },
-            placeholder = { Text("https://home.example.com") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp))
-        OutlinedTextField(token, { token = it; saved = false }, singleLine = true, label = { Text(stringResource(R.string.pcr_ha_token)) },
-            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp))
-        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(R.string.secpar_wake_desc), color = c.textDim, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(12.dp, 8.dp))
+        com.pcremote.home.WakeMethod.entries.forEach { option ->
+            Row(Modifier.fillMaxWidth().clickable { method = option; remote.method = option; invalid = false },
+                verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = option == method, onClick = { method = option; remote.method = option; invalid = false })
+                Text(stringResource(when (option) {
+                    com.pcremote.home.WakeMethod.LOCAL -> R.string.secpar_wake_local
+                    com.pcremote.home.WakeMethod.WEBHOOK -> R.string.secpar_wake_webhook
+                    com.pcremote.home.WakeMethod.HOME_ASSISTANT -> R.string.secpar_wake_ha
+                }), color = c.text, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        if (method != com.pcremote.home.WakeMethod.LOCAL) {
+            OutlinedTextField(url, { url = it; saved = false; invalid = false }, singleLine = true,
+                label = { Text(stringResource(if (method == com.pcremote.home.WakeMethod.WEBHOOK) R.string.secpar_wake_link else R.string.pcr_ha_url)) },
+                isError = invalid, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth().padding(8.dp, 4.dp))
+            if (invalid) Text(stringResource(R.string.secpar_wake_https), color = c.bad, modifier = Modifier.padding(horizontal = 8.dp))
+            OutlinedTextField(token, { token = it; saved = false }, singleLine = true,
+                label = { Text(stringResource(R.string.secpar_wake_token)) },
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth().padding(8.dp, 4.dp))
             com.pcremote.ui.components.GhostButton(stringResource(if (saved) R.string.pcr_saved else R.string.pcr_save), {
-                ha.url = url; ha.token = token; url = ha.url; saved = true
-            }, icon = if (saved) Icons.Rounded.Check else Icons.Rounded.Save)
+                if (method == com.pcremote.home.WakeMethod.WEBHOOK) {
+                    invalid = !com.pcremote.home.RemoteWake.validUrl(url)
+                    if (!invalid) { remote.url = url; remote.token = token; saved = true }
+                } else { ha.url = url; ha.token = token; saved = true }
+            }, modifier = Modifier.padding(8.dp), icon = if (saved) Icons.Rounded.Check else Icons.Rounded.Save)
         }
     }
 }

@@ -123,8 +123,8 @@ class HomeController(private val ctx: Context, private val scope: CoroutineScope
     fun wake(card: PcCardUi): Boolean? {
         val pc = paired.value.firstOrNull { it.id == card.id }?.takeIf { it.macs.isNotEmpty() } ?: return null
         val lan = WakeOnLan.send(pc.macs, pc.hosts)
-        val ha = HomeAssistant.get(ctx)
-        return if (ha.configured) ha.wake(pc.macs).isSuccess || lan else lan
+        val remote = RemoteWake.get(ctx)
+        return if (remote.method == WakeMethod.LOCAL) lan else remote.wake(pc.macs).isSuccess
     }
 
 }

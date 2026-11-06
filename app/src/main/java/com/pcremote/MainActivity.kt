@@ -44,6 +44,51 @@ const val SETUP_GUIDE_URL = "https://github.com/modnite/Secpar#readme"
 val IMPLEMENTED_MODES = setOf(Mode.SCREEN, Mode.REMOTE, Mode.MEDIA, Mode.SLIDES, Mode.PAD, Mode.FILES)
 
 class MainActivity : ComponentActivity() {
+    var pipVisible by mutableStateOf(false)
+        private set
+    var onStreamHidden: (() -> Unit)? = null
+    private var pipActive = false
+    private var pipAspect = android.util.Rational(16, 9)
+    val supportsPip get() = packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    fun configureStreamPip(active: Boolean, width: Int = 16, height: Int = 9) {
+        pipActive = active && supportsPip
+        if (width > 0 && height > 0) {
+            val ratio = (width.toFloat() / height).coerceIn(1f / 2.39f, 2.39f)
+            pipAspect = android.util.Rational((ratio * 1000).toInt(), 1000)
+        }
+        if (supportsPip) runCatching { setPictureInPictureParams(streamPipParams()) }
+    }
+
+    private fun streamPipParams(): android.app.PictureInPictureParams {
+        val builder = android.app.PictureInPictureParams.Builder().setAspectRatio(pipAspect)
+        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(pipActive)
+        return builder.build()
+    }
+
+    fun enterStreamPip(): Boolean {
+        if (!pipActive) return false
+        desktopCapture?.setRequested(false)
+        return runCatching { enterPictureInPictureMode(streamPipParams()) }.getOrDefault(false)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // PiP remains started. Dismissing it or hiding the stream must end remote control.
+        if (pipActive && !isChangingConfigurations) onStreamHidden?.invoke()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT < 31 && pipActive) enterStreamPip()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pipVisible = isInPictureInPictureMode
+        if (isInPictureInPictureMode) desktopCapture?.setRequested(false)
+    }
+
     var desktopCapture: com.pcremote.stream2.DesktopCapture? = null
     private var captureShortcutKey: Int? = null
     var desktopMotion: ((android.view.MotionEvent) -> Boolean)? = null
@@ -209,7 +254,7 @@ class MainActivity : ComponentActivity() {
             val ok = home.wake(card)
             val msg = when (ok) {
                 null -> R.string.pcr_wol_no_mac
-                true -> if (com.pcremote.home.HomeAssistant.get(this).configured) R.string.pcr_wol_sent_ha else R.string.pcr_wol_sent
+                true -> R.string.pcr_wol_sent
                 false -> R.string.pcr_wol_failed
             }
             runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }

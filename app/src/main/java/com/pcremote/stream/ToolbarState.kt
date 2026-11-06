@@ -17,6 +17,8 @@ class ToolbarState {
     var keyboardOpen by mutableStateOf(false)
     var coachShown by mutableStateOf(true)
     var connecting by mutableStateOf<String?>(null)
+    var mouseCaptured by mutableStateOf(false)
+    var canPip by mutableStateOf(false)
     var connected by mutableStateOf(false)
     var pcName by mutableStateOf<String?>(null)
     /** The PC's displays (only offered when there are several) and the one being streamed. */
@@ -34,5 +36,7 @@ interface ToolbarActions {
     fun disconnect()
     fun keys(events: List<KeyEvt>)
     fun coachDone()
+    fun captureMouse() {}
+    fun pictureInPicture() {}
     fun selectDisplay(id: String)
 }
