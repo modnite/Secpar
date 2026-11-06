@@ -20,7 +20,9 @@ Protect the user's existing remote connection: don't replace, stop or restart
 installed PC Remote/Secpar services to validate a development build. Keep the
 original project's installations and identities separate.
 
-Use the approved mint/orange triangle and Secpar wordmark. Never include QR
+Use the approved mint/orange triangle and Secpar wordmark. Desktop app icons must
+use the triangle on transparency; Android icons use white with safe padding.
+Keep the approved geometry and colours when resizing. Never include QR
 pairing credentials, account tokens, private keys or personal data in screenshots.
 
 Flat and clean must still look deliberately designed: align control heights,
