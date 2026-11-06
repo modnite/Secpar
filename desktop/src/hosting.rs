@@ -95,6 +95,8 @@ impl Panel {
                 });
             });
         }
+        #[cfg(target_os = "linux")]
+        if !sample { let _ = tx.try_send(Command::Refresh); }
         Self {
             tx,
             events: rx,
