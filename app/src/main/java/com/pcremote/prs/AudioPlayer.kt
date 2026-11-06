@@ -34,6 +34,8 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     @Volatile internal var lastQueuedAgeUs = 0L; private set
     private var statsAt = System.nanoTime()
     private var inputWaits = 0
+    private var inputAgeUs = 0L
+    private var decodedAgeUs = 0L
     private val pending = java.util.concurrent.atomic.AtomicInteger()
     private val overflowPackets = java.util.concurrent.atomic.AtomicInteger()
     @Volatile internal var acceptedFrames = 0L; private set
@@ -89,6 +91,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private fun decode(packet: AudioPacket) {
         val opus = packet.opus
         if (dead) return
+        inputAgeUs = captureToLocalUs(packet.captureUs)?.let { System.nanoTime() / 1000 - it } ?: 0
         if (lastPacketId?.let { packet.id - it <= 0 } == true) return
         if (lastPacketId?.let { packet.id - it > 1 } == true) gapCaptureUs = packet.captureUs
         lastPacketId = packet.id
@@ -113,7 +116,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         drain(c, t, 1_000)
         if (System.nanoTime() - statsAt >= 5_000_000_000) {
             val queued = queuedFrames(t)
-            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()} recoveries=$recoveries staleFrames=$staleFrames captureAgeMs=${lastQueuedAgeUs / 1000}")
+            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()} recoveries=$recoveries staleFrames=$staleFrames captureAgeMs=${lastQueuedAgeUs / 1000} inputAgeMs=${inputAgeUs / 1000} decodedAgeMs=${decodedAgeUs / 1000}")
             statsAt = System.nanoTime()
         }
     }
@@ -129,6 +132,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 buf.position(info.offset); buf.get(pcm, 0, info.size)
                 val captureUs = captureToLocalUs(info.presentationTimeUs)
                 val nowUs = System.nanoTime() / 1000
+                decodedAgeUs = captureUs?.let { nowUs - it } ?: 0
                 if (!playing && firstBufferedCaptureUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t)
                 val queued = queuedFrames(t)
                 val decision = AudioPlayout.decide(captureUs, nowUs, queued, false)
