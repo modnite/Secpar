@@ -5,13 +5,14 @@ import {build} from 'esbuild';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {fileURLToPath} from 'node:url';
 import {readFileSync} from 'node:fs';
-import {SignJWT,importPKCS8} from 'jose';
+import {SignJWT,importPKCS8,generateKeyPair,exportJWK} from 'jose';
 const base='https://accounts.secpar.win';
 const bundled=await build({entryPoints:[fileURLToPath(new URL('../src/index.ts',import.meta.url))],bundle:true,format:'esm',platform:'neutral',conditions:['workerd','worker','browser'],mainFields:['module','main'],external:['node:*'],write:false,target:'es2022'});
-const runtime=new Miniflare(convertV4MiniflareOptions({modules:true,script:bundled.outputFiles[0].text,compatibilityDate:'2026-11-04',compatibilityFlags:['nodejs_compat'],bindings:{PUBLIC_ORIGIN:base},d1Databases:{DB:'enrollment-test'}}));
+const grantKey=JSON.stringify(await exportJWK((await generateKeyPair('ES256',{extractable:true})).privateKey));
+const runtime=new Miniflare(convertV4MiniflareOptions({modules:true,script:bundled.outputFiles[0].text,compatibilityDate:'2026-11-04',compatibilityFlags:['nodejs_compat'],bindings:{PUBLIC_ORIGIN:base,GRANT_PRIVATE_JWK:grantKey},d1Databases:{DB:'enrollment-test'}}));
 try {
 const db=await runtime.getD1Database('DB');
-for(const migration of ['0001_accounts.sql','0002_passwords.sql','0003_hosts.sql']) {
+for(const migration of ['0001_accounts.sql','0002_passwords.sql','0003_hosts.sql','0004_owner_pairings.sql']) {
  const sql=readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8');
  for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
 }
@@ -33,10 +34,18 @@ const finish=await call('/v1/host-enrollment/finish',account,'POST',{certificate
 assert.equal(finish.data.certificate_fp,fp);
 assert.equal((await call('/v1/host/status',finish.data.credential)).status,200);
 assert.equal((await call('/v1/host/heartbeat',finish.data.credential,'POST')).status,200);
+const computers=await call('/v1/computers');assert.equal(computers.data[0].online,1);
+const pending=await call('/v1/owner-pairings',account,'POST',{computer:finish.data.computer,device:'Runtime laptop'});assert.equal(pending.status,201);
+const jobs=await call('/v1/host/owner-pairings',finish.data.credential);assert.equal(jobs.data[0].id,pending.data.id);
+const pairLink=`secpar://pair?n=Runtime&h=192.168.1.2&p=48999&fp=${fp}&t=runtime-one-use-fixture`;
+assert.equal((await call(`/v1/host/owner-pairings/${pending.data.id}`,finish.data.credential,'POST',{link:pairLink})).status,200);
+const stored=await db.prepare('SELECT sealed FROM owner_pairings WHERE id=?').bind(pending.data.id).first();assert.ok(!stored.sealed.includes('runtime-one-use-fixture'));
+const result=await call(`/v1/owner-pairings/${pending.data.id}`);assert.equal(result.status,200);assert.equal(result.data.link,pairLink);
+assert.equal((await call(`/v1/owner-pairings/${pending.data.id}`)).status,404);
 assert.equal((await call('/v1/me',finish.data.credential)).status,401);
 assert.equal((await call('/v1/host-enrollment/finish',account,'POST',{certificate:cert,proof})).status,409);
 assert.equal((await call('/v1/host/link',finish.data.credential,'DELETE')).status,200);
 assert.equal((await call('/v1/host/status',finish.data.credential)).status,401);
-console.log('Cloudflare local runtime: certificate proof, D1 enrollment, heartbeat, scope, replay and revocation PASS');
+console.log('Cloudflare local runtime: certificate proof, D1 enrollment, heartbeat, scope, encrypted owner pairing, one-use consumption, replay and revocation PASS');
 
 } finally { await runtime.dispose(); }

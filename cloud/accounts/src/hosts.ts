@@ -1,18 +1,19 @@
 import { importX509, exportJWK, calculateJwkThumbprint, jwtVerify, type JWTPayload } from "jose";
+import { ownerRoutes } from "./ownership";
 
-interface Environment { DB: D1Database; PUBLIC_ORIGIN: string }
+interface Environment { DB: D1Database; PUBLIC_ORIGIN: string; GRANT_PRIVATE_JWK: string }
 interface Owner { id: string }
 interface Helpers {
   body(request: Request): Promise<Record<string, unknown>>;
   fail(status: number, code: string): never;
   hash(value: string): Promise<string>;
-  limit(request: Request, env: Environment, operation: string, maximum: number): Promise<void>;
+  limit(request: Request, env: unknown, operation: string, maximum: number): Promise<void>;
 }
 const now = () => Math.floor(Date.now()/1000);
 const q = (env: Environment, sql: string, ...args: (string|number)[]) => env.DB.prepare(sql).bind(...args);
 const random = () => Array.from(crypto.getRandomValues(new Uint8Array(32)), b=>b.toString(16).padStart(2,"0")).join("");
 const json = (data: unknown, status=200) => new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json","cache-control":"no-store","x-content-type-options":"nosniff"}});
-type Machine = {computer:string;owner:string;certificate_fp:string;name:string;platform:string};
+type Machine = {computer:string;owner:string;certificate_fp:string;name:string;platform:string;credential_hash:string};
 
 async function friends(env: Environment, owner: string, guest: string): Promise<boolean> {
   const [a,b]=owner<guest?[owner,guest]:[guest,owner];
@@ -26,13 +27,16 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
     await api.limit(request,env,"host_api",300);
     const token=request.headers.get("authorization")?.match(/^Bearer (h1_[a-f0-9]{64})$/)?.[1];
     if(!token) api.fail(401,"host_auth_required");
-    const machine=await q(env,"SELECT k.computer,c.owner,k.certificate_fp,c.name,c.platform FROM host_keys k JOIN computers c ON c.id=k.computer WHERE k.credential_hash=?",await api.hash(token)).first<Machine>();
+    const machine=await q(env,"SELECT k.computer,c.owner,k.certificate_fp,c.name,c.platform,k.credential_hash FROM host_keys k JOIN computers c ON c.id=k.computer WHERE k.credential_hash=?",await api.hash(token)).first<Machine>();
     if(!machine) api.fail(401,"host_credential_revoked");
-    if(path==="/v1/host/status" && method==="GET") return json(machine);
+    const ownerResponse = await ownerRoutes(request, env, null, machine, api);
+    if(ownerResponse) return ownerResponse;
+    const {credential_hash: _credentialHash, ...publicMachine} = machine;
+    if(path==="/v1/host/status" && method==="GET") return json(publicMachine);
     if(path==="/v1/host/heartbeat" && method==="POST") {
       await api.limit(request,env,"host_heartbeat",120);
       await q(env,"UPDATE host_keys SET last_seen=? WHERE computer=?",now(),machine.computer).run();
-      return json({...machine,sharing:false}); // Sharing is deliberately disabled until host enforcement exists.
+      return json({...publicMachine,sharing:false}); // Sharing is deliberately disabled until host enforcement exists.
     }
     if(path==="/v1/host/link" && method==="DELETE") {
       await unlink(env,machine.computer);
@@ -48,6 +52,8 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
     return json({error:"host_scope_denied"},403);
   }
   if(!me) return null;
+  const ownerResponse = await ownerRoutes(request, env, me.id, null, api);
+  if(ownerResponse) return ownerResponse;
   const base=new URL(env.PUBLIC_ORIGIN).origin;
   if(path==="/v1/host-enrollment/start"&&method==="POST") {
     await api.limit(request,env,"host_enroll",10);
@@ -92,6 +98,7 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
         q(env,"UPDATE computers SET name=?,platform=? WHERE id=? AND owner=?",name.trim(),platform,computer,me.id),
         q(env,"UPDATE host_keys SET certificate_fp=?,credential_hash=?,last_seen=0,sharing=0 WHERE computer=?",fp,await api.hash(credential),computer),
         q(env,"UPDATE connection_requests SET state='revoked' WHERE computer=?",computer),
+        q(env,"DELETE FROM owner_pairings WHERE computer=?",computer),
       ]);
     }else{
       await env.DB.batch([
@@ -117,6 +124,7 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
 async function unlink(env: Environment, computer: string) {
   await env.DB.batch([
     q(env,"UPDATE connection_requests SET state='revoked' WHERE computer=?",computer),
+    q(env,"DELETE FROM owner_pairings WHERE computer=?",computer),
     q(env,"DELETE FROM host_keys WHERE computer=?",computer),
   ]);
 }

@@ -383,3 +383,22 @@ This list is a work record, not a claim that the app family is complete.
 - 3.4.0 published for Windows/Linux. Windows updated successfully (installer exit 0, UI and host both 3.4.0; service running). User confirmed Linux app launches, signs in and connects to Windows. This validates Linux as a client on CachyOS KDE Wayland; it does not yet validate native Linux hosting.
 - Public website deployed and verified at https://secpar.win/ (workflow 42184485853 passed). www redirects to root; accounts remain on accounts.secpar.win. Rubik sourced under OFL, approved Secpar wordmark, current per-platform verified downloads, accurate Linux/macOS status, no trackers. Browser checks passed at desktop and 375px phone size with no horizontal overflow and full download labels. Screenshots outputs/ui-review/secpar-site-live.jpg, secpar-site-desktop.jpg and secpar-site-mobile.jpg. Website uses existing Secpar Cloudflare account/repo and refreshes downloads on releases.
 - 3.5.0 three-device streaming limit implemented for Windows/Linux via shared race-safe RAII reservations, held until streaming workers finish. Three slots accepted; fourth refused with connection_limit and device wording; failed starts/disconnect release capacity. Three capacity tests, 14 shared core and ten Linux host tests passed, along with Windows 133-regression run and a separate three-device controller-isolation test. Native Windows controller allocation remains per authenticated device; physical multiplayer and desktop hardware-controller forwarding are not yet validated/complete. Android 205 tests and minified release build passed, certificate/package retained, version 3.5.0 code 521. Linux production AppImage again passed native Arch Wayland window/render checks. Optimized Windows installer payloads verified. Publishing/installing 3.5 next; account-discovery and professional desktop UI work still required.
+
+- 3.5.0 is published for Windows/Linux/Android. GitHub asset digests match staged
+  release checksums. Site download refresh 42204063388 passed. Windows installation
+  is waiting at the OS administrator prompt; installed app still reports 3.4.0.
+  Do not report the update installed until version/service readback confirms it.
+- Hosting settings polish: aligned two-column display/quality controls, grouped
+  device access and connection/startup switches, Account action moved out of the
+  settings scroll area. Native-rendered 640×400 review caught bottom clipping;
+  section spacing was corrected so all six settings fit. Review screenshot
+  outputs/ui-review/hosting-settings-640.png; larger-window review also checked.
+  Desktop regression suite: 20 passed, one OS-keychain integration test skipped.
+  This UI change is not yet in a published binary.
+- Account-owned access API implemented with private owned-computer presence,
+  enrolled-host polling, bounded two-minute bootstrap requests, requesting-session
+  isolation, encrypted-at-rest one-use results and enrollment/revocation checks.
+  New cases exercise isolation, invalid links, racing claims, expiry, cancellation,
+  relinking, ciphertext swapping and sign-out. Local workerd/D1 runtime verifies
+  the actual AES-GCM/database roundtrip. Native applications still need integration;
+  no claim that automatic pairing is available in current releases.

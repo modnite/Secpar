@@ -40,6 +40,7 @@ class Database {
       ),
     );
     this.db.exec(readFileSync(new URL("../migrations/0003_hosts.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0004_owner_pairings.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -695,8 +696,8 @@ async function startHost(actor:keyof typeof tokens="alice") {
 async function finishHost(challenge:string,actor:keyof typeof tokens="alice",proof?:string) {
   return call("/v1/host-enrollment/finish",actor,"POST",{certificate:hostCertificate,proof:proof??await hostProof(challenge,actor)});
 }
-async function machine(path:string,credential:string,method="GET") {
-  return call(path,null,method,undefined,{authorization:`Bearer ${credential}`});
+async function machine(path:string,credential:string,method="GET",data?:unknown) {
+  return call(path,null,method,data,{authorization:`Bearer ${credential}`});
 }
 async function enrolledHost() {
   const {challenge}=await startHost();const response=await finishHost(challenge);expect(response.status).toBe(201);
@@ -780,5 +781,100 @@ describe("host enrollment and machine scope",()=>{
     expect(await (await call("/v1/friend-computers","mallory")).json()).toEqual([]);
     await call("/v1/blocks/bob","alice","PUT");
     expect(await (await call("/v1/friend-computers","bob")).json()).toEqual([]);
+  });
+});
+
+describe("same-account owner pairing", () => {
+  async function request(host: { computer: string }) {
+    const r = await call("/v1/owner-pairings", "alice", "POST", { computer: host.computer, device: "Fixture laptop" });
+    expect(r.status).toBe(201);
+    return await r.json() as { id: string; expires: number };
+  }
+  function link(host: { certificate_fp: string }, token = "one-use-fixture") {
+    return `secpar://pair?n=Fixture&h=192.168.1.2&p=48999&fp=${host.certificate_fp}&t=${token}`;
+  }
+  it("shows only owned machines and their actual enrollment/presence", async () => {
+    const host = await enrolledHost();
+    const offline = await (await call("/v1/computers", "alice")).json();
+    expect(offline).toMatchObject([{ id: host.computer, linked: 1, online: 0, certificate_fp: host.certificate_fp }]);
+    expect(JSON.stringify(offline)).not.toContain(host.credential);
+    await machine("/v1/host/heartbeat", host.credential, "POST");
+    expect((await (await call("/v1/computers", "alice")).json())[0].online).toBe(1);
+    expect(await (await call("/v1/computers", "bob")).json()).toEqual([]);
+    expect((await call("/v1/computers", null)).status).toBe(401);
+  });
+  it("round-trips an encrypted one-use result only to the requesting device session", async () => {
+    const host = await enrolledHost(), pair = await request(host);
+    expect((await call(`/v1/owner-pairings/${pair.id}`)).status).toBe(202);
+    const jobs = await (await machine("/v1/host/owner-pairings", host.credential)).json();
+    expect(jobs).toEqual([{ id: pair.id, device_name: "Fixture laptop", expires: pair.expires }]);
+    expect((await machine(`/v1/host/owner-pairings/${pair.id}`, host.credential, "POST", { link: link(host) })).status).toBe(200);
+    const stored = db.db.prepare("SELECT * FROM owner_pairings").get()!;
+    expect(stored.sealed).toMatch(/^[\w-]+\.[\w-]+$/);
+    expect(JSON.stringify(stored)).not.toContain("one-use-fixture");
+    expect(JSON.stringify(stored)).not.toContain("secpar://");
+    const otherSession = "e".repeat(64);
+    db.db.prepare("INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)").run(await hash(otherSession), "alice", pair.expires);
+    expect((await call(`/v1/owner-pairings/${pair.id}`, null, "GET", undefined, { authorization: `Bearer ${otherSession}` })).status).toBe(404);
+    expect((await call(`/v1/owner-pairings/${pair.id}`, "bob")).status).toBe(404);
+    const delivered = await call(`/v1/owner-pairings/${pair.id}`);
+    expect(delivered.status).toBe(200);
+    expect(await delivered.json()).toMatchObject({ link: link(host), certificate_fp: host.certificate_fp });
+    expect((await call(`/v1/owner-pairings/${pair.id}`)).status).toBe(404);
+    expect(db.db.prepare("SELECT count(*) AS n FROM owner_pairings").get()?.n).toBe(0);
+  });
+  it("does not grant friendship or machine tokens owner authorization", async () => {
+    await friendship(); const host = await enrolledHost(), pair = await request(host);
+    expect((await call("/v1/owner-pairings", "bob", "POST", { computer: host.computer, device: "Other" })).status).toBe(404);
+    expect((await machine("/v1/owner-pairings", host.credential, "POST", { computer: host.computer, device: "Other" })).status).toBe(401);
+    expect((await call(`/v1/host/owner-pairings/${pair.id}`, "alice", "POST", { link: link(host) })).status).toBe(401);
+    const second = "h1_" + "f".repeat(64), secondId = crypto.randomUUID();
+    db.db.prepare("INSERT INTO computers(id,owner,name,platform,created) VALUES(?,?,?,?,?)").run(secondId, "alice", "Second owned PC", "linux", 1);
+    db.db.prepare("INSERT INTO host_keys(computer,thumbprint,certificate_fp,credential_hash) VALUES(?,?,?,?)").run(secondId, "second-fixture", host.certificate_fp, await hash(second));
+    expect(await (await machine("/v1/host/owner-pairings", second)).json()).toEqual([]);
+    expect((await machine(`/v1/host/owner-pairings/${pair.id}`, second, "POST", { link: link(host) })).status).toBe(404);
+  });
+  it("rejects mismatched identities and malformed pairing links without burning the request", async () => {
+    const host = await enrolledHost(), pair = await request(host);
+    for (const bad of [link(host).replace(host.certificate_fp, "0".repeat(64)), link(host) + "&t=duplicate", link(host).replace("192.168.1.2", "https://evil.test"), link(host) + "#fragment", link(host).replace("secpar:", "https:")]) {
+      expect((await machine(`/v1/host/owner-pairings/${pair.id}`, host.credential, "POST", { link: bad })).status).toBe(400);
+    }
+    expect((await machine(`/v1/host/owner-pairings/${pair.id}`, host.credential, "POST", { link: link(host) })).status).toBe(200);
+    expect((await machine(`/v1/host/owner-pairings/${pair.id}`, host.credential, "POST", { link: link(host, "replacement") })).status).toBe(404);
+    const results = await Promise.all([call(`/v1/owner-pairings/${pair.id}`), call(`/v1/owner-pairings/${pair.id}`)]);
+    expect(results.map(r => r.status).sort()).toEqual([200, 404]);
+  });
+  it("bounds pending requests and invalidates them on expiry, cancellation, unlink and relink", async () => {
+    const host = await enrolledHost(), pair = await request(host);
+    for (let i = 0; i < 7; i++) await request(host);
+    expect((await call("/v1/owner-pairings", "alice", "POST", { computer: host.computer, device: "Ninth" })).status).toBe(429);
+    expect((await call(`/v1/owner-pairings/${pair.id}`, "bob", "DELETE")).status).toBe(404);
+    expect((await call(`/v1/owner-pairings/${pair.id}`, "alice", "DELETE")).status).toBe(200);
+    expect((await call(`/v1/owner-pairings/${pair.id}`)).status).toBe(404);
+    const expiring = await request(host);
+    db.db.prepare("UPDATE owner_pairings SET expires=0 WHERE id=?").run(expiring.id);
+    expect((await call(`/v1/owner-pairings/${expiring.id}`)).status).toBe(404);
+    expect((await machine(`/v1/host/owner-pairings/${expiring.id}`, host.credential, "POST", { link: link(host) })).status).toBe(404);
+    const old = await request(host), challenge = await startHost();
+    const next = await (await finishHost(challenge.challenge)).json();
+    expect((await call(`/v1/owner-pairings/${old.id}`)).status).toBe(404);
+    expect(await (await machine("/v1/host/owner-pairings", next.credential)).json()).toEqual([]);
+    const revoked = await request(host);
+    await machine("/v1/host/link", next.credential, "DELETE");
+    expect((await call(`/v1/owner-pairings/${revoked.id}`)).status).toBe(404);
+  });
+  it("authenticates result ciphertext and request context", async () => {
+    const host = await enrolledHost(), first = await request(host), second = await request(host);
+    await machine(`/v1/host/owner-pairings/${first.id}`, host.credential, "POST", { link: link(host) });
+    const sealed = db.db.prepare("SELECT sealed FROM owner_pairings WHERE id=?").get(first.id)?.sealed;
+    db.db.prepare("UPDATE owner_pairings SET sealed=? WHERE id=?").run(sealed, second.id);
+    expect((await call(`/v1/owner-pairings/${second.id}`)).status).toBe(409);
+    expect((await call(`/v1/owner-pairings/${first.id}`)).status).toBe(200);
+  });
+  it("stops offering pairing work for a signed-out requester", async () => {
+    const host = await enrolledHost(), pair = await request(host);
+    expect((await call("/auth/logout", "alice", "POST")).status).toBe(204);
+    expect(await (await machine("/v1/host/owner-pairings", host.credential)).json()).toEqual([]);
+    expect((await machine(`/v1/host/owner-pairings/${pair.id}`, host.credential, "POST", { link: link(host) })).status).toBe(404);
   });
 });
