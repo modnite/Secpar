@@ -3,7 +3,7 @@ fn main() {
     println!(
         "cargo:rustc-env=SECPAR_RELEASE_TAG={}",
         std::env::var("SECPAR_RELEASE_TAG")
-            .unwrap_or_else(|_| "v3.1.0".into())
+            .unwrap_or_else(|_| "v3.4.0".into())
     );
     println!("cargo:rerun-if-changed=../host/src-tauri/icons/icon.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {

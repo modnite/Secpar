@@ -1,5 +1,6 @@
 //! Platform-neutral control/pairing engine shared by every Secpar desktop host.
 pub mod agent;
+pub mod audio;
 pub mod proto;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

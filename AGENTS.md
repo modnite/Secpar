@@ -57,3 +57,12 @@ The user explicitly permits root to install and launch new Windows releases on
 this PC. Preserve PC Remote/Sunshine and other independent connections; subagents
 must not modify running installations. Conserve agent usage; no more spawning
 without a new explicit need/authorization.
+
+Same-account ownership flow requested 2026-11-06: signing into Windows/Linux
+must automatically enroll the local host, find/authorize the other owned computers
+on LAN without app-level QR/approval prompts, and synchronize all owned/paired
+computer access through the account. Android needs account sign-in and the same
+computer list/access. Prefer LAN; retain authenticated remote access anywhere.
+Keep each client credential separate, preserve revocation/account isolation, and
+never treat a shared LAN as proof of account ownership. OS screen-sharing consent
+still uses the system portal. This feature remains required after the 3.4 fixes.

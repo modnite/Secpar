@@ -42,31 +42,23 @@ impl Opus {
 /// Captures until `stop`, re-opening the source when it is gone; `send(opus, captureUs)`.
 pub fn run<S: Source>(mut open: impl FnMut() -> Option<S>, stop: &AtomicBool, mut send: impl FnMut(&[u8], u64)) {
     let Some(mut enc) = Opus::new() else { return };
-    let (mut src, mut pcm, mut t0) = (None::<S>, Vec::new(), 0u64);
+    let (mut src, mut pcm) = (None::<S>, Vec::new());
+    let mut frames = secpar_host_core::audio::AudioFrames::default();
     while !stop.load(Ordering::Relaxed) {
         let Some(s) = src.as_mut() else {
             src = open();
-            pcm.clear();
-            if src.is_none() {
-                std::thread::sleep(Duration::from_millis(500));
-            }
+            frames = Default::default();
+            if src.is_none() { std::thread::sleep(Duration::from_millis(500)); }
             continue;
         };
-        let was_empty = pcm.is_empty();
+        pcm.clear();
         match s.read(&mut pcm) {
-            Ok(Some(t)) if was_empty => t0 = t,
-            Ok(_) => {}
-            Err(Gone) => {
-                src = None;
-                continue;
-            }
+            Ok(Some(t)) => frames.push(&pcm, t),
+            Ok(None) => {},
+            Err(Gone) => { src = None; continue; }
         }
-        while pcm.len() >= FRAME * 2 {
-            if let Some(p) = enc.encode(&pcm[..FRAME * 2]) {
-                send(&p, t0);
-            }
-            pcm.drain(..FRAME * 2);
-            t0 += 10_000;
+        while let Some((pcm, capture_us)) = frames.next_frame() {
+            if let Some(p) = enc.encode(&pcm) { send(&p, capture_us); }
         }
     }
 }
@@ -133,7 +125,8 @@ impl Source for Wasapi {
                 return Err(Gone); // the user picked another output
             }
         }
-        let mut first = None;
+        let mut first = None::<u64>;
+        let original_len = pcm.len();
         // SAFETY: GetBuffer/ReleaseBuffer are paired; `frames` stereo f32 samples are readable.
         unsafe {
             // Loopback events are not signalled on every Windows build: wake at least every 20 ms.
@@ -148,8 +141,18 @@ impl Source for Wasapi {
                 if self.cap.GetBuffer(&mut data, &mut frames, &mut flags, None, Some(&mut qpc)).is_err() {
                     return Err(Gone);
                 }
-                first.get_or_insert(qpc / 10); // 100 ns units of the QPC clock
                 let n = frames as usize * 2;
+                let capture_us = if flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32 != 0 {
+                    super::now_us().saturating_sub(frames as u64 * 1_000_000 / RATE as u64)
+                } else { qpc / 10 }; // WASAPI reports QPC in 100 ns units.
+                if first.is_some_and(|t| {
+                    let expected = t + ((pcm.len() - original_len) / 2) as u64 * 1_000_000 / RATE as u64;
+                    expected.abs_diff(capture_us) > secpar_host_core::audio::MAX_TIMESTAMP_SKEW_US
+                }) || flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
+                    pcm.truncate(original_len);
+                    first = None;
+                }
+                first.get_or_insert(capture_us);
                 if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 || data.is_null() {
                     pcm.resize(pcm.len() + n, 0.0);
                 } else {
@@ -216,6 +219,31 @@ mod tests {
         run(|| Some(Fake { n: opens.fetch_add(1, Ordering::SeqCst), stop: s.clone() }), &stop, |p, t| got.push((p.len(), t)));
         assert_eq!(opens.load(Ordering::SeqCst), 2, "re-opened after the device went away");
         assert_eq!(got.iter().map(|g| g.1).collect::<Vec<_>>(), vec![5_000, 15_000], "two whole 10 ms packets, timed");
+    }
+
+    /// A normal 25 ms capture leaves 5 ms buffered when playback stops.
+    #[test]
+    fn pause_resume_discards_the_partial_pre_pause_frame_and_reanchors_capture_time() {
+        struct Paused { step: usize, stop: Arc<AtomicBool> }
+        impl Source for Paused {
+            fn read(&mut self, pcm: &mut Vec<f32>) -> Result<Option<u64>, Gone> {
+                self.step += 1;
+                match self.step {
+                    1 => { pcm.extend(std::iter::repeat_n(0.1, 1200 * 2)); Ok(Some(1_000_000)) }
+                    2 => Ok(None), // WASAPI has no samples during the pause.
+                    _ => {
+                        pcm.extend(std::iter::repeat_n(0.2, 1200 * 2));
+                        self.stop.store(true, Ordering::SeqCst);
+                        Ok(Some(6_000_000))
+                    }
+                }
+            }
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut stamps = Vec::new();
+        run(|| Some(Paused { step: 0, stop: stop.clone() }), &stop, |_, t| stamps.push(t));
+        assert_eq!(stamps, vec![1_000_000, 1_010_000, 6_000_000, 6_010_000],
+            "Resumed PCM must use the live capture clock, never the pre-pause remainder's clock");
     }
 
     #[test]

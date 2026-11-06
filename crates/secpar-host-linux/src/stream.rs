@@ -416,8 +416,7 @@ mod audio {
             encoder
                 .set_bitrate(opus::Bitrate::Bits(128000))
                 .map_err(|_| "Could not configure Opus encoder")?;
-            let mut pcm = std::collections::VecDeque::<f32>::new();
-            let mut capture_us = 0;
+            let mut frames = secpar_host_core::audio::AudioFrames::default();
             let mut id = 0u32;
             while !shared.stop.load(Ordering::Relaxed) {
                 let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_mseconds(100))
@@ -430,21 +429,14 @@ mod audio {
                 let map = buffer
                     .map_readable()
                     .map_err(|_| "Could not read captured audio")?;
-                if pcm.is_empty() {
-                    let lag = pipeline
-                        .current_running_time()
-                        .and_then(|n| buffer.pts().map(|p| n.saturating_sub(p)))
-                        .map(|d| d.useconds())
-                        .unwrap_or(0);
-                    capture_us = now_us().saturating_sub(lag);
-                }
-                pcm.extend(
-                    map.as_slice()
-                        .chunks_exact(4)
-                        .map(|b| f32::from_le_bytes(b.try_into().unwrap())),
-                );
-                while pcm.len() >= 960 {
-                    let frame: Vec<_> = pcm.drain(..960).collect();
+                let lag = pipeline.current_running_time()
+                    .and_then(|n| buffer.pts().map(|p| n.saturating_sub(p)))
+                    .map(|d| d.useconds()).unwrap_or(0);
+                let capture_us = now_us().saturating_sub(lag);
+                let pcm: Vec<_> = map.as_slice().chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+                frames.push(&pcm, capture_us);
+                while let Some((frame, capture_us)) = frames.next_frame() {
                     let mut packet = [0u8; 1100];
                     let n = encoder
                         .encode_float(&frame, &mut packet)
@@ -453,7 +445,6 @@ mod audio {
                     payload.extend_from_slice(&packet[..n]);
                     shared.send(header(Type::Audio, id), &payload);
                     id = id.wrapping_add(1);
-                    capture_us += 10000;
                 }
             }
             Ok(())

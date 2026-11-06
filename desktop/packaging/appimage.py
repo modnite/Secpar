@@ -12,8 +12,8 @@ if ".debug_" in subprocess.check_output(["readelf","-S",str(BINARY)],text=True):
 PLUGINS = Path(subprocess.check_output(["pkg-config","--variable=pluginsdir","gstreamer-1.0"],text=True).strip())
 DEST = ROOT/"dist-desktop/Secpar-Linux-x64.AppImage"
 DEST.parent.mkdir(exist_ok=True)
-# Drivers and the C runtime must come from the user's distribution.
-SYSTEM = re.compile(r"^(?:ld-linux|lib(?:c\.so|m\.so|pthread|dl\.so|rt\.so|resolv|util\.so|GL|EGL|OpenGL|GLES|vulkan|drm|gbm|va\.so|va-drm|va-x11|nvidia|cuda))")
+# Drivers, their Wayland ABI and the C runtime must come from the user's distribution.
+SYSTEM = re.compile(r"^(?:ld-linux|lib(?:c\.so|m\.so|pthread|dl\.so|rt\.so|resolv|util\.so|GL|EGL|OpenGL|GLES|vulkan|drm|gbm|va\.so|va-drm|va-x11|nvidia|cuda|wayland-))")
 with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     app=Path(temp)/"Secpar.AppDir"; lib=app/"usr/lib"; exe=app/"usr/bin"
     lib.mkdir(parents=True);exe.mkdir()
