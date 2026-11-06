@@ -2112,6 +2112,7 @@ dependencies = [
  "get_if_addrs",
  "keyring",
  "opus",
+ "rustls",
  "screencapturekit",
  "secpar-host-core",
  "secpar-host-linux",

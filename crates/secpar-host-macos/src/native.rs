@@ -96,7 +96,6 @@ pub fn computer_name() -> String {
 }
 
 /// Machine-enrollment credential kept in the user's login Keychain, not in a file.
-/// Not wired to a command yet: account enrollment waits until streaming works.
 pub struct KeychainStorage;
 impl KeychainStorage {
     fn entry() -> Result<keyring::Entry, String> {
@@ -131,6 +130,9 @@ pub struct MacPlatform;
 impl Platform for MacPlatform {
     fn machine_name(&self) -> String {
         computer_name()
+    }
+    fn credential_storage(&self) -> Arc<dyn CredentialStorage> {
+        Arc::new(KeychainStorage)
     }
     fn permissions(&self) -> Permissions {
         permissions()

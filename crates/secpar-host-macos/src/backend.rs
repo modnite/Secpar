@@ -4,6 +4,7 @@ use crate::{
     session::OwnerSession,
 };
 use secpar_host_core::{
+    account::Account,
     agent::{Agent, AgentHandle, BoxFut, Handlers, Outbox, Session},
     limits::StreamSlots,
     proto::PcInfo,
@@ -24,6 +25,8 @@ pub struct Backend {
     name: String,
     agent: Mutex<Option<AgentHandle>>,
     active: Arc<StreamSlots>,
+    /// An account failure must not interrupt manually paired devices.
+    account: Result<Arc<Account>, String>,
 }
 pub fn local_addresses() -> Vec<String> {
     let mut all: Vec<String> = get_if_addrs::get_if_addrs()
@@ -41,8 +44,18 @@ pub fn local_addresses() -> Vec<String> {
 impl Backend {
     /// `bind` is 0.0.0.0:48999 in the app; tests pass an ephemeral loopback port.
     pub async fn start(directory: &Path, platform: Arc<dyn Platform>, bind: SocketAddr) -> Result<Arc<Self>, String> {
+        Self::start_with(directory, platform, bind, true).await
+    }
+    /// `background` runs account polling; tests turn it off to stay off the network.
+    pub async fn start_with(directory: &Path, platform: Arc<dyn Platform>, bind: SocketAddr, background: bool) -> Result<Arc<Self>, String> {
         let store = Store::open(directory).map_err(|_| "Could not open private Secpar host settings")?;
         let identity = Identity::open(directory).map_err(|_| "Could not open Secpar host identity")?;
+        // The account client needs a process-wide TLS provider; the desktop app installs the same one.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let account = Account::open(platform.credential_storage(), &identity.fingerprint());
+        if let (Ok(account), true) = (&account, background) {
+            tokio::spawn(account.clone().run());
+        }
         let host = Arc::new(Self {
             store: Arc::new(Mutex::new(store)),
             identity,
@@ -50,11 +63,34 @@ impl Backend {
             platform,
             agent: Mutex::new(None),
             active: Arc::default(),
+            account,
         });
         let handle = Agent::start(&host.identity, host.store.clone(), host.clone(), bind, Duration::from_secs(60), None)
             .await
             .map_err(|_| "Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
         *host.agent.lock().unwrap() = Some(handle);
+        if background {
+            let weak = Arc::downgrade(&host);
+            tokio::spawn(async move {
+                let mut timer = tokio::time::interval(Duration::from_secs(3));
+                timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    timer.tick().await;
+                    let Some(host) = weak.upgrade() else { break };
+                    let Ok(account) = &host.account else { continue };
+                    let owner = account.state().await.owner;
+                    host.sync_account_owner(owner.clone());
+                    if let Some(owner) = owner {
+                        let _ = account
+                            .poll_pairings(|id| {
+                                let (host, owner) = (host.clone(), owner.clone());
+                                async move { host.owner_pair_link(&id, &owner) }
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
         Ok(host)
     }
     pub fn agent(&self) -> Option<AgentHandle> {
@@ -62,6 +98,19 @@ impl Backend {
     }
     pub fn streaming(&self) -> usize {
         self.active.count()
+    }
+    /// Account owner changes revoke devices paired under a previous owner.
+    pub fn sync_account_owner(&self, owner: Option<String>) {
+        let revoked = self.store.lock().unwrap().set_account_owner(owner);
+        if let Some(agent) = self.agent() {
+            for device in revoked {
+                agent.revoke(&device);
+            }
+        }
+    }
+    fn owner_pair_link(&self, id: &str, owner: &str) -> Result<String, String> {
+        let otp = self.store.lock().unwrap().owner_otp(id, owner)?;
+        self.pair_link(&otp)
     }
     fn port(&self) -> u16 {
         self.agent().map(|a| a.addr.port()).unwrap_or(48999)
@@ -117,6 +166,23 @@ impl Backend {
                 self.agent().ok_or("Host is not running")?.revoke(id);
                 Ok(Value::Null)
             }
+            "host_account_state" => Ok(json!(self.account.as_ref().map_err(Clone::clone)?.state().await)),
+            "host_enrollment_proof" => {
+                let challenge = serde_json::from_value::<secpar_host_core::account_link::Challenge>(args["challenge"].clone()).map_err(|_| "Invalid account enrollment challenge")?;
+                self.account.as_ref().map_err(Clone::clone)?.allow_owner(&challenge.owner).await?;
+                Ok(json!(secpar_host_core::account_link::prove(&self.identity, challenge, &self.name)?))
+            }
+            "host_account_install" => {
+                let registration = serde_json::from_value(args["registration"].clone()).map_err(|_| "Invalid host registration")?;
+                let state = self.account.as_ref().map_err(Clone::clone)?.install(registration).await?;
+                self.sync_account_owner(state.owner.clone());
+                Ok(json!(state))
+            }
+            "host_account_unlink" => {
+                let state = self.account.as_ref().map_err(Clone::clone)?.unlink().await?;
+                self.sync_account_owner(None);
+                Ok(json!(state))
+            }
             _ => Err("This host action is not available on macOS yet".into()),
         }
     }
@@ -157,7 +223,14 @@ mod tests {
             self.0.lock().unwrap().iter().map(|m| match m { ServerMsg::StreamError { code, .. } => code.clone(), _ => "other".into() }).collect()
         }
     }
-    struct Fake { perms: Permissions, delay: Duration, input: Arc<Mutex<u32>>, live: Arc<Mutex<i32>> }
+    #[derive(Default)]
+    struct Memory(Mutex<Option<Vec<u8>>>);
+    impl secpar_host_core::account::CredentialStorage for Memory {
+        fn load(&self) -> Result<Option<Vec<u8>>, String> { Ok(self.0.lock().unwrap().clone()) }
+        fn save(&self, b: &[u8]) -> Result<(), String> { *self.0.lock().unwrap() = Some(b.to_vec()); Ok(()) }
+        fn remove(&self) -> Result<(), String> { *self.0.lock().unwrap() = None; Ok(()) }
+    }
+    struct Fake { creds: Arc<Memory>, perms: Permissions, delay: Duration, input: Arc<Mutex<u32>>, live: Arc<Mutex<i32>> }
     struct Handle { _guard: StreamPermit, input: Arc<Mutex<u32>>, live: Arc<Mutex<i32>>, alive: AtomicBool }
     impl StreamHandle for Handle {
         fn alive(&self) -> bool { self.alive.load(Ordering::SeqCst) }
@@ -166,10 +239,11 @@ mod tests {
     }
     impl Drop for Handle { fn drop(&mut self) { *self.live.lock().unwrap() -= 1; } }
     fn fake(screen: bool, ax: bool, delay_ms: u64) -> Arc<Fake> {
-        Arc::new(Fake { perms: Permissions { screen_recording: screen, accessibility: ax }, delay: Duration::from_millis(delay_ms), input: Arc::default(), live: Arc::default() })
+        Arc::new(Fake { creds: Arc::default(), perms: Permissions { screen_recording: screen, accessibility: ax }, delay: Duration::from_millis(delay_ms), input: Arc::default(), live: Arc::default() })
     }
     impl Platform for Fake {
         fn machine_name(&self) -> String { "Test Mac".into() }
+        fn credential_storage(&self) -> Arc<dyn secpar_host_core::account::CredentialStorage> { self.creds.clone() }
         fn permissions(&self) -> Permissions { self.perms }
         fn request_permission(&self, _: Permission) {}
         fn displays(&self) -> Vec<Display> { vec![Display { id: "1".into(), name: "Display 1".into(), primary: true, rect: [0, 0, 1, 1] }] }
@@ -243,11 +317,11 @@ mod tests {
     async fn identity_and_pairing_persist_and_pairing_link_pins_the_same_fingerprint() {
         let dir = tempfile::tempdir().unwrap();
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let a = Backend::start(dir.path(), fake(true, true, 0), bind).await.unwrap();
+        let a = Backend::start_with(dir.path(), fake(true, true, 0), bind, false).await.unwrap();
         let fp = a.identity.fingerprint();
         let id = a.store.lock().unwrap().id().to_string();
         drop(a);
-        let b = Backend::start(dir.path(), fake(true, true, 0), bind).await.unwrap();
+        let b = Backend::start_with(dir.path(), fake(true, true, 0), bind, false).await.unwrap();
         assert_eq!((b.identity.fingerprint(), b.store.lock().unwrap().id().to_string()), (fp.clone(), id));
         if let Ok(v) = b.command("new_qr", Value::Null).await {
             let link = url::Url::parse(v["link"].as_str().unwrap()).unwrap();
@@ -258,5 +332,14 @@ mod tests {
         let state = b.command("get_state", Value::Null).await.unwrap();
         assert_eq!(state["permissions"]["screen_recording"], true);
         assert!(b.command("nope", Value::Null).await.is_err());
+    }
+    #[tokio::test]
+    async fn account_state_is_reachable_and_unlinked_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = Backend::start_with(dir.path(), fake(true, true, 0), "127.0.0.1:0".parse().unwrap(), false).await.unwrap();
+        let state = host.command("host_account_state", Value::Null).await.unwrap();
+        assert!(state["owner"].is_null() && state["computer"].is_null());
+        assert!(host.command("host_account_install", json!({"registration": {"bad": 1}})).await.is_err());
+        assert!(host.command("host_account_unlink", Value::Null).await.is_ok());
     }
 }

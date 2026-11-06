@@ -44,6 +44,8 @@ pub trait StreamHandle: Send {
 }
 pub trait Platform: Send + Sync + 'static {
     fn machine_name(&self) -> String;
+    /// Where the machine-enrollment credential lives (Keychain on a real Mac).
+    fn credential_storage(&self) -> Arc<dyn secpar_host_core::account::CredentialStorage>;
     fn permissions(&self) -> Permissions;
     /// Asks macOS to show its consent flow; consent itself stays with the system.
     fn request_permission(&self, which: Permission);
