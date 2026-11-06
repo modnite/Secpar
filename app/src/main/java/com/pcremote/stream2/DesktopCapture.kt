@@ -1,10 +1,12 @@
 package com.pcremote.stream2
 
 /** Explicit user choice outlives pointer capture and focus callbacks. */
-class DesktopCapture(private val releaseInput: () -> Unit, private val nativeCapture: (Boolean) -> Unit) {
+class DesktopCapture(private val releaseInput: () -> Unit, private val nativeCapture: (Boolean) -> Unit, val freePointer: Boolean) {
+    constructor(releaseInput: () -> Unit, nativeCapture: (Boolean) -> Unit) : this(releaseInput, nativeCapture, false)
     var requested = false; private set
     private var uiOpen = false
-    val forwarding get() = requested && !uiOpen
+    private var focused = true
+    val forwarding get() = requested && !uiOpen && focused
 
     fun setRequested(on: Boolean) {
         requested = on
@@ -13,14 +15,19 @@ class DesktopCapture(private val releaseInput: () -> Unit, private val nativeCap
     fun toggle() = setRequested(!requested)
     fun setUiOpen(open: Boolean) {
         uiOpen = open
-        if (open) requested = false
+        if (open && !freePointer) requested = false
         refresh()
     }
     fun refresh() {
         if (!forwarding) releaseInput()
-        nativeCapture(forwarding)
+        nativeCapture(forwarding && !freePointer)
     }
-    fun lostFocus() = setRequested(false)
+    fun lostFocus() {
+        focused = false
+        if (!freePointer) requested = false
+        refresh()
+    }
+    fun gainedFocus() { focused = true; refresh() }
 }
 
 enum class CaptureShortcut(val label: String) {

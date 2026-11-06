@@ -36,18 +36,6 @@ private const val REPO_URL = "https://github.com/modnite/Secpar"
 fun SettingsScreen(model: SettingsModel, onBack: () -> Unit, onThemeChanged: () -> Unit) {
     val c = LocalMidnight.current
     val ctx = LocalContext.current
-    var shortcut by remember { mutableStateOf(model.captureShortcut) }
-    var chooseShortcut by remember { mutableStateOf(false) }
-    if (chooseShortcut) AlertDialog(onDismissRequest = { chooseShortcut = false },
-        title = { Text("Mouse capture shortcut") },
-        text = { Column {
-            com.pcremote.stream2.CaptureShortcut.entries.forEach { choice ->
-                Row(Modifier.fillMaxWidth().clickable { shortcut = choice; model.captureShortcut = choice; chooseShortcut = false }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(shortcut == choice, null)
-                    Text(choice.label)
-                }
-            }
-        } }, confirmButton = { TextButton(onClick = { chooseShortcut = false }) { Text("Close") } })
     var theme by remember { mutableStateOf(model.theme) }
     var dynamic by remember { mutableStateOf(model.dynamicColor) }
     var haptics by remember { mutableStateOf(model.haptics) }
@@ -101,7 +89,6 @@ fun SettingsScreen(model: SettingsModel, onBack: () -> Unit, onThemeChanged: () 
         }
 
         Group(R.string.pcr_set_controls) {
-            LinkRow(Icons.Rounded.Mouse, R.string.secpar_capture_shortcut, null, trailing = shortcut.label) { chooseShortcut = true }
             SwitchRow(Icons.Rounded.Vibration, R.string.pcr_haptics, null, haptics) { haptics = it; model.haptics = it }
             SwitchRow(Icons.Rounded.SwapVert, R.string.pcr_natural_scroll, R.string.pcr_natural_scroll_desc, natural) { natural = it; model.naturalScroll = it }
             SliderRow(Icons.Rounded.Mouse, R.string.pcr_pointer_speed, pointer, 0.5f..3f) { pointer = it; model.pointerSpeed = it }

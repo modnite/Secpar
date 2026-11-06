@@ -57,7 +57,10 @@ class PrsPipeline(
         receiver = Receiver(sock, Crypt(Base64.decode(ready.key, Base64.DEFAULT), ready.session.toInt()), listener)
         audio = AudioPlayer(receiver::audioCaptureToLocalUs)
         decoder = newDecoder(ready)
-        thread(name = "pcr-rx", priority = Thread.MAX_PRIORITY) { receiver.run() }
+        thread(name = "pcr-rx", priority = Thread.MAX_PRIORITY) {
+            runCatching { audio.prepare() }.onFailure { Log.w(TAG, "Audio preparation failed", it) }
+            if (!closed) receiver.run()
+        }
         if (relay != null) thread(name = "pcr-turn-start") {
             Thread.sleep(2_500)
             if (closed || sock.confirmed()) return@thread
