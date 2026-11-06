@@ -4,6 +4,14 @@ Read this with AGENTS.md and docs/next-milestone.md when resuming work. Addition
 prompts add to the task; they do not cancel prior requirements. Later explicit
 corrections take precedence over earlier preferences.
 
+## Approved baseline
+
+- Android 3.8.0 with Windows host 3.7.0: user confirms audio stays live and
+  recovers after pauses/video switches, dock pointer leaves the window freely,
+  and Android/PC text clipboard works. Latest assessment: "simply perfect so far".
+- Preserve this streaming/input/UI baseline. Keep unfinished account/platform
+  work separate; do not alter the streaming engine for unrelated features.
+
 ## Working relationship
 
 - Deliver completed, usable results; do not stop at acknowledgement or a plan.
@@ -60,12 +68,11 @@ corrections take precedence over earlier preferences.
 - The Android dock pointer feels like 30 fps while video plays at 60. Fix cursor
   responsiveness; investigate local/native pointer rendering and forwarding rather
   than treating a smooth video result as proof of smooth input.
-- Cross-device copy/paste is required. Android streaming currently lacks the
-  clipboard integration used by other mode screens; handle focus changes too.
+- Cross-device copy/paste is required. Android 3.8.0 streaming clipboard/refocus is confirmed working; preserve it.
 - Audio must recover after silence, pause/resume and switching videos without
   disconnecting. It can also fail after minutes of uninterrupted playback.
-  This is still a confirmed fault; previous partial fixes are not
-  sufficient. Do not claim success based on a pure timing test alone.
+  These failures are resolved in the user-confirmed 3.8.0 baseline. Retain them as
+  regression cases; do not rely on pure timing tests alone.
 - The user requires no audio/video streaming regressions. Gate releases on steady
   playback, silence/resume, track changes, loss/hiccups, timing and the working
   video/cursor path. Never trade smooth video for broken audio or the reverse.

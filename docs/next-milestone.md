@@ -7,9 +7,10 @@
 - Windows 3.7.0 published AND installed, exit0, host/UI3.7.0, service running.
   User confirms Android video smooth again.135 host tests + controlled latency
   A/B + three actual concurrent hardware streams passed. Linux3.7 published too.
-- Physical Android audio still fails after silence, pause/video switches AND
-  sometimes after minutes without pause. No physical fix claimed. User is away
-  and cannot test Linux. Phone at office, no longer reachable through adb.
+- Android 3.8 is USER-CONFIRMED: audio stays live and recovers; dock mouse leaves
+  the window freely; Android/PC text clipboard works. User calls it "simply perfect
+  so far". Approved baseline with Windows3.7; preserve it. Linux validation still
+  pending availability; physical phone debugging remains unavailable.
 - Public3.8 is RELEASED for Android/Linux at https://github.com/modnite/Secpar/releases/tag/v3.8.0.
   Adjacent ../secpar-stream-fix isolates release
   from incomplete main account-owned foundation; never ship main wholesale.
@@ -70,10 +71,11 @@
   GitHub server digests match both artifacts and checksum file. Site refresh
   42262590998 passed; workflow explicitly checks out main to preserve site copy.
   Windows current3.7 fixes video; no unnecessary second installer this session.
-- Pending async S23 validation: Android3.8 update via Settings, check recovery after
-  pause/switch + minutes uninterrupted. Do not re-ask Linux testing while user has
-  no access. Audio fixes are physically UNCONFIRMED until that answer. Broader owner
-  accounts, Linux remote/native-host validation and macOS hosting remain required.
+- S23 validation complete: audio, free dock pointer and text clipboard all work;
+  overall 3.8 approved. No unresolved Android streaming defect reported. Broader
+  owner accounts, Linux remote/native-host validation and macOS hosting remain
+  required. Current next task: Android account sign-in/owned-computer access on
+  main, separate from the approved release; no streaming engine edits.
 - Punctuation encoding corrected in desktop/lib/build/README, StreamScreen and
   this file after spotting Windows Python cp1252 default. ALWAYS read_text with
   encoding='utf-8', write_bytes UTF8. Apply same punctuation correction to release
