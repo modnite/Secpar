@@ -161,7 +161,7 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, close: () -> Unit)
             }
         }
         Spacer(Modifier.height(10.dp))
-        Tile(Icons.Rounded.Mouse, R.string.secpar_capture_mouse, wide = true,
+        if (state.canCaptureMouse) Tile(Icons.Rounded.Mouse, R.string.secpar_capture_mouse, wide = true,
             active = state.mouseCaptured, modifier = Modifier.fillMaxWidth()) {
             close(); a.captureMouse()
         }

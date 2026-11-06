@@ -4,6 +4,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopCaptureTest {
+    @Test fun freePointerForwardsWithoutGrabbingAndReturnsAfterFocusOrControls() {
+        val grabs=mutableListOf<Boolean>()
+        var released=0
+        val capture=DesktopCapture({released++},{grabs+=it},freePointer=true)
+        capture.setRequested(true)
+        assertTrue(capture.forwarding)
+        assertTrue(grabs.none {it})
+        capture.setUiOpen(true)
+        assertFalse(capture.forwarding)
+        capture.setUiOpen(false)
+        assertTrue(capture.forwarding)
+        capture.lostFocus()
+        assertFalse(capture.forwarding)
+        capture.gainedFocus()
+        assertTrue(capture.forwarding)
+        assertTrue(released>0)
+        assertTrue(grabs.none {it})
+    }
     @Test fun releaseStaysLocalAcrossRefreshAndUiChanges() {
         val native = mutableListOf<Boolean>()
         var releases = 0

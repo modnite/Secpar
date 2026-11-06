@@ -6,6 +6,8 @@ internal class PcmTimeline {
     private data class Chunk(val captureUs: Long, var remaining: Int, var consumed: Int = 0)
     private val chunks = java.util.ArrayDeque<Chunk>()
 
+    fun clear() = chunks.clear()
+
     fun queued(captureUs: Long, frames: Int = 480) {
         require(frames > 0)
         check(chunks.size < 64) { "Opus timing queue exceeded decoder capacity" }

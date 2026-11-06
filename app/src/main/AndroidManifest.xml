@@ -45,6 +45,7 @@
             android:supportsPictureInPicture="true"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|fontScale|keyboard|keyboardHidden|navigation|uiMode|layoutDirection">
+            <layout android:defaultWidth="600dp" android:defaultHeight="420dp" android:gravity="center" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

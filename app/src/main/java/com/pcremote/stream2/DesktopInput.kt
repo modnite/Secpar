@@ -41,21 +41,35 @@ class DesktopInput(private val send: (Msg) -> Unit) {
             send(Msg.MouseScroll((e.getAxisValue(MotionEvent.AXIS_VSCROLL) * 120).roundToInt(),
                 (e.getAxisValue(MotionEvent.AXIS_HSCROLL) * 120).roundToInt()))
         }
-        for ((mask, name) in buttonMap) {
-            if ((buttons and mask) != (e.buttonState and mask)) send(Msg.MouseButton(name, e.buttonState and mask != 0))
-        }
-        buttons = e.buttonState
+        updateButtons(e.buttonState)
         return true
+    }
+
+    fun absoluteMouse(x: Float, y: Float, buttonState: Int, scrollX: Float = 0f, scrollY: Float = 0f) {
+        send(Msg.MousePos(x.coerceIn(0f,1f), y.coerceIn(0f,1f)))
+        updateButtons(buttonState)
+        if (scrollX != 0f || scrollY != 0f) send(Msg.MouseScroll((-scrollY*120).roundToInt(), (scrollX*120).roundToInt()))
+    }
+
+    private fun updateButtons(state: Int) {
+        for ((mask, name) in buttonMap) {
+            if ((buttons and mask) != (state and mask)) send(Msg.MouseButton(name, state and mask != 0))
+        }
+        buttons = state
     }
 
     fun release() {
         keys.toList().forEach { send(Msg.Key(it, false)) }; keys.clear()
+        releaseMouse()
+    }
+
+    fun releaseMouse() {
         for ((mask, name) in buttonMap) if (buttons and mask != 0) send(Msg.MouseButton(name, false))
         buttons = 0; dx = 0f; dy = 0f
     }
 
     companion object {
-        private val buttonMap = listOf(MotionEvent.BUTTON_PRIMARY to "left", MotionEvent.BUTTON_SECONDARY to "right", MotionEvent.BUTTON_TERTIARY to "middle")
+        private val buttonMap = listOf(MotionEvent.BUTTON_PRIMARY to "left", MotionEvent.BUTTON_SECONDARY to "right", MotionEvent.BUTTON_TERTIARY to "middle", MotionEvent.BUTTON_BACK to "x1", MotionEvent.BUTTON_FORWARD to "x2")
         internal fun virtualKey(k: Int): Int? = when (k) {
             in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z -> 0x41 + k - KeyEvent.KEYCODE_A
             in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> 0x30 + k - KeyEvent.KEYCODE_0

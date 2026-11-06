@@ -153,50 +153,59 @@ private fun PcPage(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, 
     val conn = a.connection(card)
     val unlock = rememberUnlocker(card.id, { m -> conn?.sendIfOnline(m) == true }, conn?.incoming)
     val modes = card.modes.filter { it in implemented }
-    @Composable fun overview(modifier: Modifier, previewRatio: Float = 16f / 9f) {
-        Column(modifier) {
-            Monitor(thumb, card.online && !card.locked,
-                Modifier.fillMaxWidth().combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() }), ratio = previewRatio) {
-                StatusChip(card, Modifier.align(Alignment.TopStart).padding(12.dp))
-                if (card.locked) Icon(Icons.Rounded.Lock, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(40.dp))
-            }
-            Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(card.name, color = c.text, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (card.os.isNotEmpty()) Text(card.os, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+    @Composable fun preview(modifier: Modifier) {
+        Monitor(thumb, card.online && !card.locked,
+            modifier.combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() })) {
+            StatusChip(card, Modifier.align(Alignment.TopStart).padding(8.dp))
+            if (card.locked) Icon(Icons.Rounded.Lock, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(32.dp))
+        }
+    }
+    @Composable fun identity(modifier: Modifier) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(card.name, color = c.text, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (card.os.isNotEmpty()) Text(card.os, color = c.textDim, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 GlassIconButton(Icons.Rounded.MoreHoriz, stringResource(R.string.pcr_more), onMore)
             }
-            Spacer(Modifier.height(16.dp))
-            PrimaryRow(card, a, unlock)
-        }
-    }
-    @Composable fun controls(modifier: Modifier) {
-        if (card.online && modes.isNotEmpty()) Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            modes.chunked(2).forEach { row ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    row.forEach { m -> ModeTile(m, Modifier.weight(1f)) { a.open(card, m) } }
-                    if (row.size == 1) Spacer(Modifier.weight(1f))
-                }
-            }
+            Box(Modifier.widthIn(max = 320.dp).fillMaxWidth()) { PrimaryRow(card, a, unlock) }
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (maxWidth >= 700.dp && maxWidth > maxHeight) {
-            // Reserve room for identity and the primary action before sizing the preview.
-            val previewWidth = (maxWidth - 64.dp) / 2
-            val previewHeight = (maxHeight - 176.dp).coerceAtLeast(80.dp)
-            val previewRatio = maxOf(16f / 9f, previewWidth.value / previewHeight.value)
-            Row(Modifier.fillMaxSize().padding(20.dp, 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                overview(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), previewRatio)
-                controls(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
-            }
-        } else {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp, 16.dp, 20.dp, 24.dp)) {
-                overview(Modifier.fillMaxWidth())
-                Spacer(Modifier.height(20.dp))
-                controls(Modifier.fillMaxWidth())
+        // DeX windows can be wide but shorter than a phone. Keep the preview and identity in
+        // the same bounded row for every connection state, without sizing either to window height.
+        val wide = maxWidth >= 560.dp
+        val previewWidth = (maxWidth * 0.34f).coerceIn(180.dp, 240.dp)
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                if (wide) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        preview(Modifier.width(previewWidth))
+                        identity(Modifier.weight(1f))
+                    }
+                } else {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            preview(Modifier.widthIn(max = 360.dp).fillMaxWidth())
+                        }
+                        identity(Modifier.fillMaxWidth())
+                    }
+                }
+                if (card.online && modes.isNotEmpty()) {
+                    HorizontalDivider(color = c.border)
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        modes.chunked(if (wide) 3 else 2).forEach { row ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { m -> ModeTile(m, Modifier.weight(1f)) { a.open(card, m) } }
+                                repeat((if (wide) 3 else 2) - row.size) { Spacer(Modifier.weight(1f)) }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -240,9 +249,9 @@ private fun PrimaryRow(card: PcCardUi, a: HomeActions, unlock: () -> Unit) {
 private fun ModeTile(m: Mode, modifier: Modifier, onClick: () -> Unit) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
-    Row(modifier.heightIn(min = 64.dp).glass(MidnightShapes.control)
+    Row(modifier.heightIn(min = 52.dp).glass(MidnightShapes.control)
         .border(1.dp, c.border, MidnightShapes.control)
-        .clickable { haptics.tick(); onClick() }.padding(horizontal = 14.dp, vertical = 12.dp),
+        .clickable { haptics.tick(); onClick() }.padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(m.icon(), null, tint = c.accent, modifier = Modifier.size(24.dp))
         Text(stringResource(m.label()), color = c.text, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)

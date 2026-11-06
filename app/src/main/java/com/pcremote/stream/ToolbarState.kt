@@ -18,6 +18,7 @@ class ToolbarState {
     var coachShown by mutableStateOf(true)
     var connecting by mutableStateOf<String?>(null)
     var mouseCaptured by mutableStateOf(false)
+    var canCaptureMouse by mutableStateOf(true)
     var canPip by mutableStateOf(false)
     var connected by mutableStateOf(false)
     var pcName by mutableStateOf<String?>(null)

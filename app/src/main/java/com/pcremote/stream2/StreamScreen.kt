@@ -83,6 +83,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val agent by session.conn.state.collectAsState()
+    com.pcremote.modes.ClipboardSync(session, agent)
     val toolbar = remember { ToolbarState().apply { pcName = session.pc.name; connecting = session.pc.name; coachShown = true } }
 
     Immersive()
@@ -161,17 +162,17 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     }
     val captureView = remember { java.util.concurrent.atomic.AtomicReference<android.view.View?>() }
     var captured by remember { mutableStateOf(false) }
+    var hardwarePointerInView by remember { mutableStateOf(false) }
     val capture = remember {
-        DesktopCapture(desktop::release) { on ->
+        DesktopCapture(desktop::release, { on ->
             captured = on
             captureView.get()?.let { view ->
                 if (on) { view.requestFocus(); view.requestPointerCapture() } else view.releasePointerCapture()
             }
-            (ctx as? Activity)?.let { act ->
-                val insets = WindowCompat.getInsetsController(act.window, act.window.decorView)
-                if (on) insets.hide(WindowInsetsCompat.Type.systemBars()) else insets.show(WindowInsetsCompat.Type.systemBars())
-            }
-        }
+        }, freePointer = true)
+    }
+    LaunchedEffect(inPip, streaming != null) {
+        capture.setRequested(streaming != null && !inPip)
     }
     DisposableEffect(activity, streaming != null) {
         if (streaming != null) {
@@ -187,6 +188,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val trackpad = remember { TrackpadModel(settings.pointerSpeed, settings.naturalScroll) }
     val direct = remember { DirectTouchModel(settings.naturalScroll) }
     toolbar.mouseCaptured = captured
+    toolbar.canCaptureMouse = false
     toolbar.canPip = activity?.supportsPip == true
     val actions = remember {
         object : ToolbarActions {
@@ -207,20 +209,6 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
 
     val c = LocalMidnight.current
     var box by remember { mutableStateOf(IntSize.Zero) }
-    val motionHandler by rememberUpdatedState<(android.view.MotionEvent) -> Boolean>({ event ->
-        if (capture.forwarding && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && streaming != null) {
-            fit(box, streaming.w, streaming.h)?.let { bounds ->
-                send(Msg.MousePos(
-                    ((zoom.toStreamX(event.x) - bounds.left) / bounds.w).coerceIn(0f, 1f),
-                    ((zoom.toStreamY(event.y) - bounds.top) / bounds.h).coerceIn(0f, 1f)))
-            }
-            desktop.mouse(event)
-        } else false
-    })
-    DisposableEffect(activity, streaming != null) {
-        if (streaming != null) activity?.desktopMotion = { motionHandler(it) }
-        onDispose { activity?.desktopMotion = null }
-    }
     LaunchedEffect(box) { zoom.setContentSize(box.width.toFloat(), box.height.toFloat()) }
     Box(Modifier.fillMaxSize().background(Color.Black).onSizeChanged { box = it }) {
         val pic = streaming?.let { fit(box, it.w, it.h) }
@@ -233,12 +221,12 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                     isFocusableInTouchMode = true
                     setOnCapturedPointerListener { _, event -> capture.forwarding && desktop.mouse(event) }
                     setOnGenericMotionListener { view, event ->
-                        if (capture.forwarding && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+                        if (!capture.freePointer && capture.forwarding && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
                             capture.refresh(); true
                         } else false
                     }
                     setOnFocusChangeListener { view, focused ->
-                        if (focused && capture.forwarding) view.requestPointerCapture() else if (!focused) desktop.release()
+                        if (focused && capture.forwarding && !capture.freePointer) view.requestPointerCapture() else if (!focused) desktop.release()
                     }
                     post { capture.refresh() }
                     holder.addCallback(object : SurfaceHolder.Callback {
@@ -266,7 +254,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                     zoom.follow(pic.left + cur.x * sx, pic.top + cur.y * sy, minOf(box.width, box.height) * 0.12f)
             }
             Canvas(Modifier.fillMaxSize()) {
-                if (!cur.visible) return@Canvas
+                if (!cur.visible || hardwarePointerInView) return@Canvas
                 withTransform({ translate(zoom.tx, zoom.ty); scale(zoom.scale, zoom.scale, Offset.Zero) }) {
                 if (shape != null) {
                     val (img, hx, hy) = shape
@@ -280,7 +268,10 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
         }
         // touch input over the whole screen
         if (!inPip && streaming != null && pic != null) {
-            Box(Modifier.fillMaxSize().pointerInput(toolbar.trackpad, pic) {
+            Box(Modifier.fillMaxSize().freeMouse(
+                androidx.compose.ui.geometry.Rect(pic.left.toFloat(),pic.top.toFloat(),(pic.left+pic.w).toFloat(),(pic.top+pic.h).toFloat()),
+                zoom,desktop,{capture.forwarding},{hardwarePointerInView=it}
+            ).pointerInput(toolbar.trackpad, pic) {
                 kotlinx.coroutines.coroutineScope {
                     val gestures = this
                     var hold: Job? = null
@@ -293,6 +284,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                             while (true) {
                                 val e = awaitPointerEvent()
                                 if (e.changes.any { it.type == androidx.compose.ui.input.pointer.PointerType.Mouse }) continue
+                                hardwarePointerInView = false
                                 val t = e.changes.firstOrNull()?.uptimeMillis ?: 0L
                                 val down = e.changes.filter { it.pressed }
                                 if (down.size < 2) span0 = 0f
@@ -341,7 +333,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                                 }
                             }
                         }
-                    } finally { hold?.cancel(); emit(trackpad.cancel() + direct.cancel()) }
+                    } finally { hold?.cancel(); desktop.releaseMouse(); hardwarePointerInView = false; emit(trackpad.cancel() + direct.cancel()) }
                 }
             })
         }
@@ -417,7 +409,7 @@ private fun request(ctx: Context): StreamRequest {
         return StreamRequest(p.width, p.height, p.fps, p.bitrateKbps)
     }
     // On mobile data, cap the stream: it keeps a relayed 4G path inside its capacity and the data
-    // plan sane (8 Mbps ≈ 3.6 GB an hour). Wi-Fi gets up to 50 Mbps; the host adapts below that.
+    // plan sane (8 Mbps is about 3.6 GB an hour). Wi-Fi gets up to 50 Mbps; the host adapts below that.
     val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
     val cellular = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
     return StreamRequest(w, h, hz.toInt().coerceIn(30, if (cellular) 60 else 120), if (cellular) 8_000 else 50_000)

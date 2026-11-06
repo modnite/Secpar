@@ -73,9 +73,22 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        super.onStop()
         // PiP remains started. Dismissing it or hiding the stream must end remote control.
-        if (pipActive && !isChangingConfigurations) onStreamHidden?.invoke()
+        if (pipActive && !isChangingConfigurations) endHiddenStream()
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        // A PiP task can be removed without another stop callback. Capture the
+        // stream callback before the composition is disposed, and invoke once.
+        if (isFinishing && !isChangingConfigurations) endHiddenStream()
+        super.onDestroy()
+    }
+
+    private fun endHiddenStream() {
+        val end=onStreamHidden ?: return
+        onStreamHidden=null
+        end()
     }
 
     override fun onUserLeaveHint() {
@@ -93,10 +106,10 @@ class MainActivity : ComponentActivity() {
     private var captureShortcutKey: Int? = null
     var desktopMotion: ((android.view.MotionEvent) -> Boolean)? = null
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
-        (desktopCapture?.forwarding == true && desktopMotion?.invoke(event) == true) || super.dispatchGenericMotionEvent(event)
+        (desktopCapture?.let { it.forwarding && !it.freePointer } == true && desktopMotion?.invoke(event) == true) || super.dispatchGenericMotionEvent(event)
 
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (desktopCapture?.forwarding == true && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && desktopMotion?.invoke(event) == true) return true
+        if (desktopCapture?.let { it.forwarding && !it.freePointer } == true && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && desktopMotion?.invoke(event) == true) return true
         return super.dispatchTouchEvent(event)
     }
 
@@ -104,7 +117,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) desktopCapture?.lostFocus()
+        if (!hasFocus) desktopCapture?.lostFocus() else desktopCapture?.gainedFocus()
     }
 
     private lateinit var home: HomeController
@@ -270,7 +283,7 @@ class MainActivity : ComponentActivity() {
         val chosen = com.pcremote.settings.SettingsModel.get(this).captureShortcut
         val isToggle = chosen.matches(event.keyCode, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed) ||
             com.pcremote.stream2.CaptureShortcut.MOONLIGHT.matches(event.keyCode, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed)
-        if (capture != null && isToggle) {
+        if (capture != null && !capture.freePointer && isToggle) {
             if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 captureShortcutKey = event.keyCode
                 capture.toggle()
