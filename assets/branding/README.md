@@ -9,7 +9,7 @@ SecparWordmark.otf is a six-letter logo font assembled from these outlines, mapp
 Colours: mint #0AFFB6, orange #D95400, near-white #F9FAFC, charcoal #15161A.
 
 Desktop application icons use only the approved triangle on transparency. Android
-adaptive icons use a white background and a 0.56-scale foreground, leaving safe
-space inside circular and rounded-square masks. Legacy Android icons use a white
+adaptive icons use a black background and a 0.56-scale foreground, leaving safe
+space inside circular and rounded-square masks. Legacy Android icons use a black
 rounded tile. Regenerate native PNG/ICO resources with generate-icons.py after
 installing the host Node dependencies and Python Pillow. The triangle geometry is unchanged.
