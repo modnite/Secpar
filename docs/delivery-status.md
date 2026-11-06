@@ -216,6 +216,19 @@
 - Windows packaging first hit low C: disk space. No cache was deleted: automatic
   review rejected that cleanup. Builds continue with a copied compiler cache and
   temporary output on D:/Secpar-CI/secpar-host-updates-target. Originals retained.
+- Published Windows Development 6 from f30d1dd: one installer, 9,825,691 bytes,
+  SHA-256 60316dd65ee435292bcbdab3bc596d8c7e096e94a68fb3285f50332081da0528.
+  Packaged desktop bytes match the built x64 UI; host bytes match after Tauri's
+  expected UNK→NSS installer marker patch. Executable code sections match.
+- Published Android Preview 16 from ddbf61d: APK 24,008,155 bytes, SHA-256
+  96d53836ecba5c9b4c7eb26e9d416b4a8f4b97aba0ded141b71e03720cb3c7aa.
+  Version code 516, same signing certificate as prior previews, no test video
+  fixture included. All 190 tests pass; release/vital lint pass. Final update UI
+  smoke passes on phone and 800×600 isolated emulator layouts, with screenshots
+  under outputs/ui-review. Four public asset links return 200; GitHub digests
+  match local checksums. Windows/Linux CI pass in run 42135559751; Mac jobs pending.
+  Physical S23 host-fix test requested asynchronously. Do not install/restart the
+  live Windows service or physical phone to force that result.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
@@ -258,8 +271,10 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 ## Delivery links
 
 - Repository: https://github.com/modnite/Secpar
-- Desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
-- Android Preview 15: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15
+- Desktop development 6: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.6
+- Previous desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
+- Android Preview 16: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.16
+- Previous Android Preview 15: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15
 - Previous Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
 - Previous Android Preview 13: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.13
 - Previous desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
