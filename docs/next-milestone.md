@@ -1,4 +1,85 @@
-# Active Secpar work â€” 2026-11-06
+# Active Secpar work — 2026-11-06
+
+## CURRENT: supersedes historical statuses below
+
+- Read docs/user-requirements.md and AGENTS.md. New prompts accumulate; no scope
+  abandonment. User permits a few narrow subagents, with extreme token care.
+- Windows 3.7.0 published AND installed, exit0, host/UI3.7.0, service running.
+  User confirms Android video smooth again.135 host tests + controlled latency
+  A/B + three actual concurrent hardware streams passed. Linux3.7 published too.
+- Physical Android audio still fails after silence, pause/video switches AND
+  sometimes after minutes without pause. No physical fix claimed. User is away
+  and cannot test Linux. Phone at office, no longer reachable through adb.
+- Public3.8 is RELEASED for Android/Linux at https://github.com/modnite/Secpar/releases/tag/v3.8.0.
+  Adjacent ../secpar-stream-fix isolates release
+  from incomplete main account-owned foundation; never ship main wholesale.
+- Prepared Linux3.8: decoding/RGB conversion off UI, bounded queue/IDR recovery,
+  real decoded-frame VA-API capability probe + runtime software fallback.26 Linux
+  desktop tests passed (one vault skipped), actual native Wayland AppImage check
+  passed. Optimized AppImage staged D:/Secpar-CI/publish-3.8.0; X250 GPU unverified.
+- Android3.8: PcmTimeline keeps host capture timestamps independent of
+  decoder PTS; bounded recent-low-RTT clock window replaces lifetime minimum.
+  Extra diagnostics contain counters only. Final optimized signed APK published,
+  24079999bytes, SHA256e989b09d869825fec2d79625a1d6d403de80d0f5ba9c574536674d3906599542.
+  Same package/certificate, non-debuggable, no review/test payloads; five black
+  launcher densities verified exact. Minified APK cold-launched on ONLY5556.
+- Exact strict audio failure diagnosed: lazy codec initialization overflowed
+  pending>12 queue (2–4 dropped encoded packets); ALL submitted samples decoded
+  and written exactly, zero timeline misses/stale/incomplete. prepare() now
+  initializes audio on executor before first PROBE, max2s; catch errors to retain
+  video startup. Queue sizes unchanged. Original144000-sample-frame gate kept.
+- Permanent audio death path found: exception handlers setdead forever. New
+  AUDIO-ONLY reset/retry (50ms–1s backoff), fresh PCM timing/output/fades, preserves
+  release as permanent stop. No video engine changes. Agent audio_gate implemented
+  these owned files and strict silence, codec.stop fault +180s continuous tests.
+- Combined Gradle unit/debug/androidTest build PASSED:217 units, zero failures.
+  Agent audio_gate returned5556 after all5 real audio gates passed (194.111s):
+  exact144000-frame conservation,250/1200/2500ms silence, actual MediaCodec.stop
+  fault recovered in sameplayer,180s uninterrupted flow. Soak overflow0, failures0,
+  timelineMisses0, incompleteWrites0; accepted progress/current age everysecond.
+  Virtual no-audio sink reported859 underrun resets: NOT audible continuity proof.
+  Do not tune S23 buffers from this artificial sink or claim physical success.
+- Root input test passed after waiting for Compose layout before injecting taps.
+  Video pacing passed. PiP dismissal exposed a missing final callback; root now
+  ends once before stop/disposal and on final destroy, preserving PiP entry/return.
+  New debug APK with endHiddenStream method confirmed installed. All four input,
+  two PiP and one video-pacing checks pass after ONLY5556 reboot (its System UI
+  hung on live display resize). UI fixture now render-only: brittle native
+  accessibility-provider queries removed, no automated geometry claim. Clean
+  checking/connected screenshots manually reviewed at1024x700 and600x420, all
+  actions fit. outputs/ui-review/android-docked-{checking,connected}.png and
+  android-600x420-{checking,connected}.png. Our emulator5556 now SHUT DOWN.
+- Root Android pointer change is specifically dock/DeX, not Linux: free local OS
+  pointer (no capture request/shortcut), absolute mapping only on video hit target
+  in FreeMouse modifier, no Activity-wide mouse interception, overlays stay local,
+  focus loss releases held input and focus return automatically forwards again.
+  Touch trackpad fallback retained. Capture UI/Android shortcut setting removed.
+- ClipboardSync was missing from stream screen; root added it. Agent
+  clipboard_focus improved focused reads/resume comparison, first-focus baseline,
+  no echo/UTF8 limits, subscribe-after-listener and cleanup; unit tests passed.
+- HomeScreen compact DeX layout: stable checking/online/offline summary row at
+  >=560dp,180–240dp thumbnail beside identity/action, max760dp content,3-column
+  secondary modes. Phone max360dp thumbnail. User supplied giant checking preview
+  screenshots; must render/check synthetic wide/narrow fixtures before release.
+  New DesktopLayoutInstrumentedTest writes home-checking.png/home-connected.png
+  in debug app files. New freeMouse routing/native-control tests await running.
+- Main Android changes committed c51556c plus review-fixture df2c0d5, cherry-picked
+  to release worktree ec7a1fd/1990786. Public tag v3.8.0 is ecfc96c. All105 Android
+  production source files verified identical between main/release trees. Linux
+  AppImage23386616bytes, SHA256aa935ab2421b0582f333cc995b9773184201a59ed9351be46cbc566f5f428f01.
+  GitHub server digests match both artifacts and checksum file. Site refresh
+  42262590998 passed; workflow explicitly checks out main to preserve site copy.
+  Windows current3.7 fixes video; no unnecessary second installer this session.
+- Pending async S23 validation: Android3.8 update via Settings, check recovery after
+  pause/switch + minutes uninterrupted. Do not re-ask Linux testing while user has
+  no access. Audio fixes are physically UNCONFIRMED until that answer. Broader owner
+  accounts, Linux remote/native-host validation and macOS hosting remain required.
+- Punctuation encoding corrected in desktop/lib/build/README, StreamScreen and
+  this file after spotting Windows Python cp1252 default. ALWAYS read_text with
+  encoding='utf-8', write_bytes UTF8. Apply same punctuation correction to release
+  worktree and rebuild its Linux artifact if changed; source/artifact must match.
+
+## Historical context below (superseded where noted above)
 
 Keep working, solo. User wants completed releases, check-ins and actual screenshots.
 Never lose the broader Windows/Linux/macOS host+client scope; Android client only.
@@ -28,7 +109,7 @@ Never lose the broader Windows/Linux/macOS host+client scope; Android client onl
   still fails. UI is better. Linux branding also aliases badly when downscaled. User explicitly
   authorized updating/running Windows releases; do not ask permission again.
   Only Secpar may restart; preserve independent PC Remote/Sunshine.
-- 3.6 UI: default 540Ã—400, version by logo, Client settings tab for resolution,
+- 3.6 UI: default 540×400, version by logo, Client settings tab for resolution,
   FPS, bitrate, audio and capture shortcut; Ctrl+Alt+G default plus alternatives.
   Legacy Ctrl+F12 remains an unadvertised fallback. Android defaults Ctrl+Alt+G,
   explicit saved choices retained, Moonlight shortcut still accepted. Hosting
@@ -37,7 +118,7 @@ Never lose the broader Windows/Linux/macOS host+client scope; Android client onl
   Screenshots outputs/ui-review/client-settings-540.png, hosting-settings-540.png.
 - Release installer extracted to D:/Secpar-CI/release-verify-3.6.0; UI exact match
   to worktree unified exe. Host differs from target only expected three-byte
-  Tauri UNKâ†’NSS marker. No .debug sections, debug/review/PDB payloads. PE CodeView
+  Tauri UNK→NSS marker. No .debug sections, debug/review/PDB payloads. PE CodeView
   directory may exist even in optimized stripped MSVC output; don't mistake that
   external reference metadata for a debug build.
 - Linux release built on OMV in /tmp/secpar-core.JBPqA6/repo with release-worktree
@@ -121,8 +202,8 @@ Never lose the broader Windows/Linux/macOS host+client scope; Android client onl
   stale tabs. Website screenshots outputs/ui-review/secpar-site-short-copy.jpg
   and -mobile.jpg (mobile shot before final font-size change; refresh it).
 - C: filled mid-build. Relocated ONLY own build directories to D:, with junctions:
-  host/src-tauri/target â†’ D:/Secpar-CI/archived-original-host-target;
-  app/build â†’ D:/Secpar-CI/android-app-build. C: recovered ~10 GB. Zero-byte new
+  host/src-tauri/target → D:/Secpar-CI/archived-original-host-target;
+  app/build → D:/Secpar-CI/android-app-build. C: recovered ~10 GB. Zero-byte new
   account.rs and tracked core Cargo.lock were recovered before continuing.
   Keep builds/cache on D:, CARGO_INCREMENTAL=0, TEMP/TMP=D:/Secpar-CI/secpar-build-temp.
 - Kotlin incremental cache became stale after relocation. A full nonincremental

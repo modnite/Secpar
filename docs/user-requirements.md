@@ -63,7 +63,8 @@ corrections take precedence over earlier preferences.
 - Cross-device copy/paste is required. Android streaming currently lacks the
   clipboard integration used by other mode screens; handle focus changes too.
 - Audio must recover after silence, pause/resume and switching videos without
-  disconnecting. This is still a confirmed fault; previous partial fixes are not
+  disconnecting. It can also fail after minutes of uninterrupted playback.
+  This is still a confirmed fault; previous partial fixes are not
   sufficient. Do not claim success based on a pure timing test alone.
 - The user requires no audio/video streaming regressions. Gate releases on steady
   playback, silence/resume, track changes, loss/hiccups, timing and the working
@@ -82,6 +83,8 @@ corrections take precedence over earlier preferences.
 - Separate host/client settings, version beside logo, actual preset resolutions
   and frame rates. Keep the desktop window as narrow as practical; test smaller
   displays without tiny text, excess dead space, awkward wrapping or scrolling.
+- Android desktop/DeX checking preview must remain compact: never expand to the
+  full window, clip computer controls, or change the grid when it becomes online.
 - Fit Picture in picture on one line without clipping or awkward wrapping.
 - Website writing as well as layout should learn from Parsec's concise style.
 - Preserve the approved mint/orange rounded perspective triangle, equal side
