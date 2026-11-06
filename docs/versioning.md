@@ -2,8 +2,9 @@
 
 Public versions use x.x.x. The first number advances for a major milestone; the
 second for features and bug fixes; the third for minor fixes and visual polish.
-The next Windows release is 3.1.0, above the installed legacy 3.0.3 version so
-upgrades do not appear to be downgrades. Applications can advance when their own
+Windows moved to 3.1.0, above the installed legacy 3.0.3 version so
+upgrades do not appear to be downgrades. Android followed with 3.2.0; the initial
+Linux host/client package uses 3.3.0. Applications can advance when their own
 changes ship; public release tags remain plain vX.Y.Z and select assets per OS.
 Existing preview tags stay historical and updaters must continue accepting them.
 Android package version codes remain increasing internal install identifiers.
@@ -13,3 +14,9 @@ remain local; never bundle them in a public installer. The Windows release build
 is scripts/build-windows-release.ps1, which checks version agreement and builds
 both the UI and host in release mode with symbols stripped. No --debug switch.
 The public Windows asset remains one complete installer with both roles.
+
+Linux release builds use scripts/build-linux-release.sh vX.Y.Z. The explicit
+SECPAR_RELEASE_TAG is embedded in the application, verified by the packager and
+used by the updater; private Rust crate versions are not the product release tag.
+The AppImage bundles the optimized host/client executable and media dependencies,
+without UI-review binaries. Hardware drivers come from the target system.

@@ -122,11 +122,24 @@ async fn check() -> Result<Option<Release>, String> {
     Ok(select(&releases, name, CURRENT))
 }
 async fn download(r: Release) -> Result<PathBuf, String> {
+    #[cfg(target_os = "linux")]
+    let directory = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cache")))
+        .ok_or("No user update directory is available")?.join("secpar/updates");
+    #[cfg(not(target_os = "linux"))]
     let directory = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("Secpar/updates");
     std::fs::create_dir_all(&directory).map_err(|_| "Could not create update folder")?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::symlink_metadata(&directory).map_err(|_| "Invalid update folder")?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() { return Err("Invalid update folder".into()); }
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).map_err(|_| "Could not protect update folder")?;
+    }
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -173,6 +186,18 @@ async fn download(r: Release) -> Result<PathBuf, String> {
         let _ = std::fs::remove_file(&path);
     }
     result
+}
+fn launch_installer(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(|_| "Could not prepare the update")?;
+        std::process::Command::new(path).args(["--install", "--replace", &std::process::id().to_string()])
+            .spawn().map_err(|_| "Could not start the update")?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    open::that(path).map_err(|_| "Could not start the installer".into())
 }
 enum ResultEvent {
     Checked(Result<Option<Release>, String>),
@@ -321,8 +346,13 @@ impl Panel {
                 if let Some(path) = self.ready.clone() {
                     ui.add_space(8.);
                     if ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update...")).clicked() {
-                        self.message = match open::that(&path) {
-                            Ok(()) => "Installer opened. Approve its system prompt to continue.".into(),
+                        self.message = match launch_installer(&path) {
+                            Ok(()) => {
+                                #[cfg(target_os = "linux")]
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                if cfg!(target_os = "linux") { "Installing update. Secpar will reopen.".into() }
+                                else { "Installer opened. Approve its system prompt to continue.".into() }
+                            },
                             Err(_) => "Could not open installer. Try again.".into(),
                         };
                     }
