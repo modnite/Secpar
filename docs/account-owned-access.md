@@ -1,7 +1,8 @@
 # Account-owned computer access
 
 Status: server and Windows/Linux/Android native integration shipped in3.9.0.
-Live account-holder sign-in acceptance remains pending. Linux remote hosting and
+User confirms Android3.9 sign-in lists the Windows PC and connects without QR.
+Windows3.9 auto-enrollment is verified live. Linux remote hosting and
 macOS hosting remain incomplete; do not describe them as supported remote hosts.
 Owner pairing acceptance cases live in cloud/accounts/test/service.test.ts and
 cloud/accounts/test/runtime-smoke.mjs.

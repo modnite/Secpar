@@ -2,6 +2,16 @@
 
 ## CURRENT: supersedes historical statuses below
 
+- VERIFIED NEWEST: Windows3.9 installation completed with exit0; installed host/UI
+  versions3.9 and SHA256 match the published installer payloads exactly. Secpar
+  service Running. Desktop launched; sanitized host_account_state confirms linked,
+  owner present, online, no note/error. User has now physically confirmed Android
+  3.9 Account sign-in shows the PC and connects WITHOUT QR. End-to-end account flow
+  is USER-ACCEPTED, not just a scripted/local test. Prior UAC-pending text below is
+  historical. Do not repeat installation or ask the same account test again.
+  Next active implementation: Linux outside-LAN hosting (relay/STUN/TURN). Keep
+  this isolated from approved Windows/Android engine code. Mac work stays Claude's.
+
 - NEWEST:3.9.0 is PUBLIC at https://github.com/modnite/Secpar/releases/tag/v3.9.0,
   source99b8762, release/3.9.0 branch/tag pushed. Website42308784762 passed.
   Android/Windows/Linux release packages +checksums match GitHub asset digests.

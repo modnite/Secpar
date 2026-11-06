@@ -1,5 +1,14 @@
 # Secpar delivery record
 
+## Verified: Windows installed and account flow accepted
+
+Windows3.9 installer exit0; installed host/UI versions and hashes match staged
+release payloads, Secpar service running. Desktop launched and automatically
+linked the host: account state linked/owner-present/online with no error. User
+physically confirms Android3.9 sign-in shows the Windows PC and connects without
+QR. Account milestone is accepted end to end. Next is Linux outside-LAN hosting;
+preserve working Windows/Android engines and Claude's separate macOS scope.
+
 ## Latest: 3.9.0 published, Windows approval pending
 
 Source99b8762 and branch release/3.9.0 published with optimized Android/Windows/Linux
