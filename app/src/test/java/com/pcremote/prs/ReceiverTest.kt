@@ -164,6 +164,13 @@ class ReceiverTest {
         assertEquals(11_010_000L,r.audioCaptureToLocalUs(59_800_000))
     }
 
+    @Test fun anExpiredMinimumUsesRecentGoodProbesInsteadOfOneSlowOutlier() {
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(50_000_000).putLong(1_000_000).array(),1_010_000)
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(58_510_000).putLong(9_500_000).array(),9_520_000)
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(60_200_000).putLong(11_000_000).array(),11_050_000)
+        assertEquals(10_000_000L,r.audioCaptureToLocalUs(59_000_000))
+    }
+
     @Test fun keepsProbingAfterAddressChange() {
         fun probesBetween(from: Long, to: Long, stepUs: Long = 10_000): Int {
             val before = sentOf(Prs.PROBE).size
