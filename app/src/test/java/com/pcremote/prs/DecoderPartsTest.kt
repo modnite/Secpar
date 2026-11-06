@@ -28,7 +28,7 @@ class DecoderPartsTest {
     }
 
     @Test fun audioBufferAtLeast20ms() {
-        assertEquals(3840, AudioPlayer.bufferBytes(1000))
+        assertEquals(5760, AudioPlayer.bufferBytes(1000))
         assertEquals(7680, AudioPlayer.bufferBytes(7680))
         assertEquals("never below the platform minimum", 20000, AudioPlayer.bufferBytes(20000))
         assertEquals(19, AudioPlayer.opusHead().size)

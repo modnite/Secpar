@@ -226,9 +226,20 @@
   fixture included. All 190 tests pass; release/vital lint pass. Final update UI
   smoke passes on phone and 800×600 isolated emulator layouts, with screenshots
   under outputs/ui-review. Four public asset links return 200; GitHub digests
-  match local checksums. Windows/Linux CI pass in run 42135559751; Mac jobs pending.
+  match local checksums. All four CI jobs pass in run 42135559751, including native Intel macOS and ARM cross-build.
   Physical S23 host-fix test requested asynchronously. Do not install/restart the
   live Windows service or physical phone to force that result.
+- User confirms Desktop Development 6: video and cursor are perfect on the S23.
+  Rare slight audio crackle/slowdown remains and is absent in Moonlight. This is
+  treated as a Secpar audio defect, not a general device/network limitation.
+- Android Preview 17 work corrects ignored/partial AudioTrack writes, false frame
+  accounting and dropped MediaCodec input when busy. It primes 30 ms, preserves
+  waveform samples under backpressure, drains delayed decoder output, and adds
+  underrun/queue/sequence-gap diagnostics. No video behavior or PC audio code changes.
+  The real Android Opus/AudioTrack fixture test preserves all 144,000 sample frames.
+- Desktop Development 7 work places Check for updates / Download update on one row.
+  Download remains visible and greyed out without an available update, while busy,
+  or once downloaded. Both states reviewed at 640×400 with native screenshots.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux

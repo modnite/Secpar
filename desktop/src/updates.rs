@@ -201,10 +201,21 @@ impl Panel {
             open: false,
             last_check: None,
         };
-        if cfg!(feature = "ui-review") && std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p == "updates-sample") {
+        if cfg!(feature = "ui-review")
+            && std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.starts_with("updates-"))
+        {
             panel.open = true;
-            panel.message = "Development 7 is available.".into();
-            panel.release = Some(Release { tag:"v0.1.0-secpar-desktop-dev.7".into(), url:String::new(), hash:String::new(), size:100 });
+            if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p == "updates-none-sample") {
+                panel.message = "You're up to date.".into();
+            } else {
+                panel.message = "Development 8 is available.".into();
+                panel.release = Some(Release {
+                    tag: "v0.1.0-secpar-desktop-dev.8".into(),
+                    url: String::new(),
+                    hash: String::new(),
+                    size: 100,
+                });
+            }
         }
         panel
     }
@@ -236,7 +247,9 @@ impl Panel {
                         .as_ref()
                         .map(|r| format!("{} is available.", r.tag))
                         .unwrap_or_else(|| "You’re up to date.".into());
-                    if self.release.as_ref().map(|r| &r.tag) != release.as_ref().map(|r| &r.tag) { self.ready = None; }
+                    if self.release.as_ref().map(|r| &r.tag) != release.as_ref().map(|r| &r.tag) {
+                        self.ready = None;
+                    }
                     self.release = release;
                 }
                 ResultEvent::Downloaded(Ok(path)) => {
@@ -272,32 +285,49 @@ impl Panel {
             return;
         }
         let mut open = true;
-        egui::Window::new("Secpar updates").open(&mut open).collapsible(false).resizable(false).default_width(350.).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO).show(ctx,|ui| {
-            ui.label(format!("Installed: {CURRENT}")); ui.add_space(8.); ui.label(&self.message);
-            if self.busy { ui.spinner(); }
-            if self.release.is_some() {
+        egui::Window::new("Secpar updates").open(&mut open).collapsible(false)
+            .resizable(false).default_width(350.)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(format!("Installed: {CURRENT}"));
                 ui.add_space(8.);
-                ui.label("Installing restarts Secpar and its hosting service. Any connected devices will disconnect. Make sure you have another way back to this PC.");
-                if streaming { ui.label("Disconnect your current stream before installing."); }
-                if let Some(path)=self.ready.clone() {
-                    if ui.add_enabled(!self.busy && !streaming,egui::Button::new("Install update…")).clicked() {
-                        match open::that(&path) {
-                            Ok(()) => self.message="Installer opened. Approve its system prompt to continue.".into(),
-                            Err(_) => self.message="Could not open installer. Try again.".into(),
-                        }
-                    }
-                } else if ui.add_enabled(!self.busy,egui::Button::new("Download update")).clicked() {
-                    self.busy=true; self.message="Downloading update…".into();
-                    let r=self.release.clone().unwrap(); let tx=self.tx.clone(); let ctx=ctx.clone();
-                    std::thread::spawn(move || {
-                        let result=tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| "Could not start updater".into()).and_then(|rt| rt.block_on(download(r)));
-                        let _=tx.send(ResultEvent::Downloaded(result)); ctx.request_repaint();
-                    });
+                ui.label(&self.message);
+                if self.busy { ui.spinner(); }
+                if self.release.is_some() {
+                    ui.add_space(8.);
+                    ui.label("Installing restarts Secpar and its hosting service. Any connected devices will disconnect. Make sure you have another way back to this PC.");
+                    if streaming { ui.label("Disconnect your current stream before installing."); }
                 }
-            }
-            ui.add_space(8.);
-            if ui.add_enabled(!self.busy,egui::Button::new("Check for updates")).clicked() { self.start_check(ctx); }
-        });
+                ui.add_space(8.);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!self.busy, egui::Button::new("Check for updates")).clicked() {
+                        self.start_check(ctx);
+                    }
+                    let can_download = !self.busy && self.release.is_some() && self.ready.is_none();
+                    if ui.add_enabled(can_download, egui::Button::new("Download update")).clicked() {
+                        self.busy = true;
+                        self.message = "Downloading update...".into();
+                        let r = self.release.clone().unwrap();
+                        let tx = self.tx.clone();
+                        let ctx = ctx.clone();
+                        std::thread::spawn(move || {
+                            let result = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                                .map_err(|_| "Could not start updater".into()).and_then(|rt| rt.block_on(download(r)));
+                            let _ = tx.send(ResultEvent::Downloaded(result));
+                            ctx.request_repaint();
+                        });
+                    }
+                });
+                if let Some(path) = self.ready.clone() {
+                    ui.add_space(8.);
+                    if ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update...")).clicked() {
+                        self.message = match open::that(&path) {
+                            Ok(()) => "Installer opened. Approve its system prompt to continue.".into(),
+                            Err(_) => "Could not open installer. Try again.".into(),
+                        };
+                    }
+                }
+            });
         self.open = open;
     }
 }
@@ -330,10 +360,10 @@ mod tests {
         let name = "Secpar-Windows-x64-setup.exe";
         let mut r = release("v0.1.0-secpar-desktop-dev.7", name);
         r["assets"][0]["browser_download_url"] = json!("https://evil.example/installer.exe");
-        assert!(select(&json!([r]), name, CURRENT).is_none());
+        assert!(select(&json!([r]), name, "v0.1.0-secpar-desktop-dev.6").is_none());
         let mut r = release("v0.1.0-secpar-desktop-dev.7", name);
         r["assets"][0]["digest"] = Value::Null;
-        assert!(select(&json!([r]), name, CURRENT).is_none());
+        assert!(select(&json!([r]), name, "v0.1.0-secpar-desktop-dev.6").is_none());
     }
     #[test]
     fn stable_beats_same_version_preview() {
@@ -345,18 +375,37 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         for valid in [true, false] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let url = format!("http://{}/test",listener.local_addr().unwrap());
+            let url = format!("http://{}/test", listener.local_addr().unwrap());
             let server = tokio::spawn(async move {
-                let (mut socket,_) = listener.accept().await.unwrap();
-                let mut request = [0u8;4096]; let _ = socket.read(&mut request).await;
-                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello").await.unwrap();
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await;
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+                    )
+                    .await
+                    .unwrap();
             });
-            let release=Release {tag:"test".into(),url,hash:if valid {format!("{:x}",Sha256::digest(b"hello"))}else{"0".repeat(64)},size:5};
-            let result=download(release).await;
+            let release = Release {
+                tag: "test".into(),
+                url,
+                hash: if valid {
+                    format!("{:x}", Sha256::digest(b"hello"))
+                } else {
+                    "0".repeat(64)
+                },
+                size: 5,
+            };
+            let result = download(release).await;
             server.await.unwrap();
-            if valid { let path=result.unwrap(); assert_eq!(std::fs::read(&path).unwrap(),b"hello"); std::fs::remove_file(path).unwrap(); }
-            else {assert!(result.is_err());}
+            if valid {
+                let path = result.unwrap();
+                assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+                std::fs::remove_file(path).unwrap();
+            } else {
+                assert!(result.is_err());
+            }
         }
     }
-
 }

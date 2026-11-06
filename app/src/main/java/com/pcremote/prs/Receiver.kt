@@ -20,7 +20,7 @@ interface Transport {
 data class AudioPacket(val id: Int, val captureUs: Long, val opus: ByteArray)
 data class Cursor(val x: Int, val y: Int, val visible: Boolean)
 data class Stats(val rttMs: Int = 0, val lossPct: Float = 0f, val kbps: Int = 0, val fps: Int = 0, val dropped: Int = 0, val jitterMs: Int = 0, val decodeMs: Int = 0,
-    val invalidPackets: Int = 0, val processPeakMs: Int = 0, val packetBacklog: Int = 0, val socketDrops: Int = 0)
+    val invalidPackets: Int = 0, val processPeakMs: Int = 0, val packetBacklog: Int = 0, val socketDrops: Int = 0, val audioMissing: Int = 0, val audioReordered: Int = 0)
 
 interface ReceiverListener {
     fun onFrame(f: Frame)
@@ -69,6 +69,9 @@ class Receiver(
     private var jitterUs = 0.0
     private var prevArrival = 0L
     private var prevCapture = 0L
+    private var lastAudioId: Int? = null
+    private var audioMissing = 0
+    private var audioReordered = 0
     private var statFrames = 0
     private var statBytes = 0L
     private var invalidPackets = 0
@@ -128,7 +131,15 @@ class Receiver(
         statBytes += len
         when (h.typ) {
             Prs.VIDEO, Prs.FEC -> { lastVideoUs = nowUs; assembler.onShard(h, plain, nowUs) }
-            Prs.AUDIO -> if (plain.size > 8) listener.onAudio(AudioPacket(h.frameId, ByteBuffer.wrap(plain).getLong(0), plain.copyOfRange(8, plain.size)))
+            Prs.AUDIO -> if (plain.size > 8) {
+                val gap = lastAudioId?.let { h.frameId - it - 1 }
+                if (gap != null) {
+                    if (gap >= 0) audioMissing += gap
+                    else audioReordered++
+                }
+                if (lastAudioId == null || h.frameId - lastAudioId!! > 0) lastAudioId = h.frameId
+                listener.onAudio(AudioPacket(h.frameId, ByteBuffer.wrap(plain).getLong(0), plain.copyOfRange(8, plain.size)))
+            }
             Prs.CURSOR -> if (plain.size >= 5) {
                 val b = ByteBuffer.wrap(plain)
                 _cursor.value = Cursor(b.getShort(0).toInt(), b.getShort(2).toInt(), plain[4].toInt() != 0)
@@ -159,7 +170,7 @@ class Receiver(
             val secs = (nowUs - lastStatsUs) / 1e6
             _stats.value = Stats((rttUs / 1000).toInt(), lossPermille / 10f, (statBytes * 8 / 1000 / secs).toInt(),
                 (statFrames / secs).toInt(), assembler.dropped, (jitterUs / 1000).toInt(), decodeMs,
-                invalidPackets, (processPeakUs / 1000).toInt(), transport.backlog(), transport.droppedPackets())
+                invalidPackets, (processPeakUs / 1000).toInt(), transport.backlog(), transport.droppedPackets(), audioMissing = audioMissing, audioReordered = audioReordered)
             listener.onStats(_stats.value)
             processPeakUs = 0
             lastStatsUs = nowUs; statFrames = 0; statBytes = 0

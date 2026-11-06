@@ -187,4 +187,12 @@ class ReceiverTest {
         val b = s.payload(Msg.Text("b".repeat(700)))
         assertEquals(1, Json.parseToJsonElement(String(b)).jsonArray.size)
     }
+    @Test fun audioSequenceGapsAndLatePacketsAreReportedSeparately() {
+        val audio = ByteBuffer.allocate(9).putLong(123L).put(1).array()
+        for (id in listOf(10, 12, 11, 13)) fromHost(Header(Prs.AUDIO, frameId = id), audio, 1000)
+        r.step(1_000_000)
+        assertEquals(1, r.stats.value.audioMissing)
+        assertEquals(1, r.stats.value.audioReordered)
+    }
+
 }
