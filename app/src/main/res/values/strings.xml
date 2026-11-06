@@ -104,7 +104,7 @@
     <string name="pcr_source_desc">Open source on GitHub (GPL-3.0)</string>
     <string name="pcr_power">Power</string>
     <string name="pcr_conn_connecting">Connecting to your PC…</string>
-    <string name="pcr_conn_revoked">This phone was removed on the PC. Scan the code to pair again.</string>
+    <string name="pcr_conn_revoked">This device was removed on the host. Scan the code to pair again.</string>
     <string name="pcr_conn_unreachable">Can\'t reach your PC. Is it on, and is Secpar running?</string>
     <string name="pcr_conn_unknown_pc">This PC is no longer paired.</string>
     <string name="pcr_remote_hint">Tap to click · two fingers to scroll or right-click · hold to drag</string>
@@ -150,14 +150,14 @@
     <string name="pcr_s2_err_title">Couldn\'t start the screen</string>
     <string name="pcr_s2_err_no_encoder">Your PC has no hardware video encoder available. Update its graphics driver and try again.</string>
     <string name="pcr_s2_err_capture">Your PC couldn\'t capture its screen. If a login or admin (UAC) prompt is showing, answer it on the PC and retry.</string>
-    <string name="pcr_s2_err_busy">Another phone is already showing this PC\'s screen.</string>
+    <string name="pcr_s2_err_busy">The host is busy. Try again or update Secpar on the host.</string>
     <string name="pcr_s2_err_timeout">Your PC didn\'t answer. Make sure Secpar is running on it and retry.</string>
-    <string name="pcr_s2_err_no_decoder">This phone couldn\'t decode the video from your PC.</string>
+    <string name="pcr_s2_err_no_decoder">This device couldn\'t decode the video from the host.</string>
     <string name="pcr_s2_retry">Retry</string>
     <string name="pcr_s2_back">Back</string>
     <string name="pcr_s2_perf">%1$s · %2$d×%3$d · %4$d fps · %5$.1f Mbps\nLatency %6$d ms · RTT %7$d ms · loss %8$.1f%%</string>
     <string name="pcr_manual_title">Pair with a link</string>
-    <string name="pcr_manual_desc">On your PC, open Secpar → Hosting → Pair a device and choose Copy pairing link, send it to this phone, then paste it here.</string>
+    <string name="pcr_manual_desc">On your PC, open Secpar → Hosting → Pair a device and choose Copy pairing link, send it to this device, then paste it here.</string>
     <string name="pcr_wol_sent">Wake request sent</string>
     <string name="pcr_wol_no_mac">This PC can\'t be woken remotely yet. Open Secpar on it once while it\'s on.</string>
     <!-- v3 -->
@@ -237,4 +237,5 @@
     <string name="secpar_wake_link">HTTPS wake link</string>
     <string name="secpar_wake_token">Bearer token (optional for a wake link)</string>
     <string name="secpar_wake_https">Enter a valid HTTPS link.</string>
+    <string name="secpar_connection_limit">Connection limit reached. Three devices are already streaming. Disconnect a device and try again.</string>
 </resources>

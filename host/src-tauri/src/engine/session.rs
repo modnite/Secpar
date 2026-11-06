@@ -14,7 +14,7 @@ use crate::prs::{Crypt, Dir, Header, Type};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
@@ -53,6 +53,7 @@ pub type Notify = Arc<dyn Fn(ServerMsg) + Send + Sync>;
 pub type InputSink = Box<dyn FnMut(ClientMsg) + Send>;
 
 pub struct Shared {
+    _stream_slot: Option<secpar_host_core::limits::StreamPermit>,
     crypt: Crypt,
     sock: UdpSocket,
     seq: AtomicU32,
@@ -79,6 +80,7 @@ fn hdr(typ: Type, frame_id: u32) -> Header {
 impl Shared {
     pub fn new(sock: UdpSocket, key: &[u8; 32], session: u32, target: Target) -> Shared {
         Shared {
+            _stream_slot: None,
             crypt: Crypt::new(key, session),
             sock,
             seq: AtomicU32::new(0),
@@ -530,7 +532,7 @@ fn host_cands(lan: &[String], port: u16, public: Option<IpAddr>, reflexive: Opti
     v
 }
 
-static ACTIVE: Mutex<Weak<Shared>> = Mutex::new(Weak::new());
+static ACTIVE: OnceLock<Arc<secpar_host_core::limits::StreamSlots>> = OnceLock::new();
 
 pub struct StreamSession {
     sh: Arc<Shared>,
@@ -543,10 +545,8 @@ impl StreamSession {
     #[allow(clippy::result_large_err)] // once per stream start
     pub fn start(p: Params, bind: IpAddr, notify: Notify, mut input: InputSink) -> Result<(ServerMsg, StreamSession), ServerMsg> {
         let err = |code: &str, msg: &str| ServerMsg::StreamError { code: code.into(), msg: msg.into() };
-        let mut active = ACTIVE.lock().unwrap();
-        if active.upgrade().is_some_and(|s| !s.stopped()) {
-            return Err(err("busy", "another phone is streaming from this PC"));
-        }
+        let permit = ACTIVE.get_or_init(Default::default).try_acquire()
+            .ok_or_else(|| err("connection_limit", secpar_host_core::limits::LIMIT_MESSAGE))?;
         // The fixed port only matters when UPnP mapped it (access from anywhere). Otherwise a fresh
         // port per stream: a relay keeps a killed run's allocation for its address pair (437).
         let fixed = if p.public.is_some() { STREAM_PORT } else { 0 };
@@ -556,7 +556,9 @@ impl StreamSession {
         let port = sock.local_addr().map_err(|e| err("capture_failed", &e.to_string()))?.port();
         let key: [u8; 32] = crate::store::random();
         let session = u32::from_be_bytes(crate::store::random());
-        let sh = Arc::new(Shared::new(sock, &key, session, Bitrate::new(p.max_kbps, 0).target()));
+        let mut shared = Shared::new(sock, &key, session, Bitrate::new(p.max_kbps, 0).target());
+        shared._stream_slot = Some(permit);
+        let sh = Arc::new(shared);
 
         // The video thread opens its pipeline, reports the codec and size it got, then waits for
         // the full `stream.ready` (it repeats it on resolution changes).
@@ -611,7 +613,6 @@ impl StreamSession {
                 });
             }));
         }
-        *active = Arc::downgrade(&sh);
         Ok((ready.msg(base), StreamSession { sh, threads }))
     }
 

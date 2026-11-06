@@ -97,7 +97,7 @@ FunctionEnd
   ${Else}
     nsExec::Exec 'sc.exe create "${PCR_SVC}" binPath= "\"$INSTDIR\secpar-host.exe\" --service" start= auto obj= LocalSystem DisplayName= "Secpar"'
   ${EndIf}
-  nsExec::Exec 'sc.exe description "${PCR_SVC}" "Lets your paired phone see and control this PC, at the sign-in screen too."'
+  nsExec::Exec 'sc.exe description "${PCR_SVC}" "Lets your paired devices see and control this computer, including the sign-in screen."'
   nsExec::Exec 'sc.exe failure "${PCR_SVC}" reset= 86400 actions= restart/5000/restart/5000/restart/30000'
 
   ; Only Secpar is started. No PC Remote, Sunshine, power or adapter settings are changed.

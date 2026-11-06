@@ -66,3 +66,16 @@ computer list/access. Prefer LAN; retain authenticated remote access anywhere.
 Keep each client credential separate, preserve revocation/account isolation, and
 never treat a shared LAN as proof of account ownership. OS screen-sharing consent
 still uses the system portal. This feature remains required after the 3.4 fixes.
+
+Additional 2026-11-06 requirements: public website on secpar.win, taking typography,
+layout/spacing inspiration from parsec.app with Secpar's approved logo/colours.
+Deploy in the existing Secpar Cloudflare account/repository. Accounts remain on
+accounts.secpar.win. No fake platform/features/performance claims or tracking fluff.
+Desktop Hosting settings and overall layout need another professional polish pass:
+reduce wasted space, improve hierarchy/rows/alignment, test small resolutions.
+Allow THREE simultaneous remote streaming devices per host (host + three clients
+for four players). Replace phone-centric connection errors with device wording;
+report the connection limit when all three slots are occupied. Keep per-client
+controllers and sessions independent. Linux client launch/sign-in/streaming to
+Windows were confirmed working by the user after the 3.4 launch fix; native Linux
+hosting and multiplayer still need real device validation.

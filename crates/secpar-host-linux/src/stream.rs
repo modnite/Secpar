@@ -65,12 +65,6 @@ impl Shared {
             .send_to(&self.crypt.seal(Dir::HostToPhone, &h, &p), peer);
     }
 }
-pub struct ActiveGuard(pub Arc<AtomicBool>);
-impl Drop for ActiveGuard {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
-    }
-}
 pub struct Stream {
     shared: Arc<Shared>,
     input: mpsc::Sender<ClientMsg>,
@@ -104,7 +98,7 @@ impl Stream {
         portal: Arc<Portal>,
         options: Options,
         out: Outbox,
-        guard: ActiveGuard,
+        guard: secpar_host_core::limits::StreamPermit,
     ) -> Result<(Self, ServerMsg), String> {
         let p = portal.clone();
         let video_options = VideoOptions {

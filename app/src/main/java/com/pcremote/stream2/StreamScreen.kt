@@ -373,6 +373,7 @@ private fun Failure(f: StreamUi.Failed, retry: () -> Unit, back: () -> Unit) {
         "no_encoder" -> R.string.pcr_s2_err_no_encoder
         "capture_failed" -> R.string.pcr_s2_err_capture
         "busy" -> R.string.pcr_s2_err_busy
+        "connection_limit" -> R.string.secpar_connection_limit
         "no_decoder" -> R.string.pcr_s2_err_no_decoder
         else -> R.string.pcr_s2_err_timeout
     }

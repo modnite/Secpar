@@ -3,7 +3,7 @@ use crate::{
     identity::Identity,
     portal::Portal,
     store::{Config, Store},
-    stream::{self, ActiveGuard, Options, Stream},
+    stream::{self, Options, Stream},
 };
 use secpar_host_core::{
     agent::{Agent, AgentHandle, BoxFut, Handlers, Outbox, Session},
@@ -12,10 +12,7 @@ use secpar_host_core::{
 use serde_json::{json, Value};
 use std::{
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::sync::{watch, OnceCell};
@@ -49,7 +46,7 @@ struct Backend {
     identity: Identity,
     name: String,
     agent: Mutex<Option<AgentHandle>>,
-    active: Arc<AtomicBool>,
+    active: Arc<secpar_host_core::limits::StreamSlots>,
 }
 impl Backend {
     async fn start(directory: PathBuf) -> Result<Arc<Self>, String> {
@@ -62,7 +59,7 @@ impl Backend {
             identity,
             name: machine_name(),
             agent: Mutex::new(None),
-            active: Arc::new(AtomicBool::new(false)),
+            active: Arc::default(),
         });
         let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),"0.0.0.0:48999".parse().unwrap(),Duration::from_secs(60),None).await.map_err(|_|"Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
         *host.agent.lock().unwrap() = Some(handle);
@@ -80,7 +77,7 @@ impl Backend {
                     .unwrap_or_default();
                 let store = self.store.lock().unwrap();
                 Ok(
-                    json!({"name":self.name,"devices":store.devices().iter().map(|d|json!({"id":d.id,"name":d.name,"connected":connected.contains(&d.id)})).collect::<Vec<_>>(),"locked":false,"streaming":self.active.load(Ordering::Relaxed)}),
+                    json!({"name":self.name,"devices":store.devices().iter().map(|d|json!({"id":d.id,"name":d.name,"connected":connected.contains(&d.id)})).collect::<Vec<_>>(),"locked":false,"streaming":(self.active.count() > 0)}),
                 )
             }
             "get_config" => Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[]})),
@@ -151,7 +148,7 @@ struct State {
 }
 struct OwnerSession {
     store: Arc<Mutex<Store>>,
-    active: Arc<AtomicBool>,
+    active: Arc<secpar_host_core::limits::StreamSlots>,
     state: Arc<Mutex<State>>,
     out: Outbox,
     cancel: watch::Sender<bool>,
@@ -175,18 +172,13 @@ impl OwnerSession {
                 return;
             }
         }
-        if self
-            .active
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
+        let Some(guard) = self.active.try_acquire() else {
             self.out.send(ServerMsg::StreamError {
-                code: "busy".into(),
-                msg: "Another device is already streaming".into(),
+                code: "connection_limit".into(),
+                msg: secpar_host_core::limits::LIMIT_MESSAGE.into(),
             });
             return;
-        }
-        let guard = ActiveGuard(self.active.clone());
+        };
         let state = self.state.clone();
         let out = self.out.clone();
         let store = self.store.clone();

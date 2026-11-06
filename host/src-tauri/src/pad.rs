@@ -239,6 +239,31 @@ mod tests {
     }
 
     #[test]
+    fn three_devices_have_independent_controller_zero_and_disconnect_is_local() {
+        struct MultiBus(Arc<Mutex<Vec<Option<PadState>>>>);
+        struct MultiTarget { index: usize, states: Arc<Mutex<Vec<Option<PadState>>>> }
+        impl Bus for MultiBus {
+            fn plug(&self, _id: u8, _rumble: Rumble) -> Option<Box<dyn Target>> {
+                let index = { let mut states=self.0.lock().unwrap(); let i=states.len();states.push(Some(st(0)));i };
+                Some(Box::new(MultiTarget {index,states:self.0.clone()}))
+            }
+        }
+        impl Target for MultiTarget {
+            fn update(&mut self, state: &PadState) -> bool {self.states.lock().unwrap()[self.index]=Some(*state);true}
+        }
+        impl Drop for MultiTarget {fn drop(&mut self){self.states.lock().unwrap()[self.index]=None;}}
+        let states=Arc::new(Mutex::new(Vec::new()));
+        let bus:Arc<dyn Bus>=Arc::new(MultiBus(states.clone()));
+        let lingering=Lingering::default();
+        let mut devices:Vec<_>=(0..3).map(|n|Pads::new(bus.clone(),Box::new(|_,_,_|{}))
+            .for_device(&format!("device-{n}"),lingering.clone())).collect();
+        for (n,device) in devices.iter_mut().enumerate(){device.pad(0,&st(1<<n)).unwrap();}
+        assert_eq!(*states.lock().unwrap(),vec![Some(st(1)),Some(st(2)),Some(st(4))]);
+        devices[0].off(0);
+        assert_eq!(*states.lock().unwrap(),vec![None,Some(st(2)),Some(st(4))]);
+    }
+
+    #[test]
     fn real_vigem_plug_update_unplug() {
         let Some(bus) = ViGEm::connect() else {
             eprintln!("ViGEmBus not installed: skipped");
