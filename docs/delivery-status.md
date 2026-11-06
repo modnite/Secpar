@@ -276,6 +276,30 @@
   hiccup comparison. Windows Development 6 video/cursor and Android Preview 18
   audio are now user-verified. Preserve these working paths while continuing
   Linux/macOS hosting. This does not validate all devices or network conditions.
+- CachyOS laptop is confirmed KDE Plasma on Wayland. Linux branch has merged
+  main through a7233eb, merge checkpoint 93ed978, and all eight portable core tests
+  pass. Branch is pushed; native capture/input and Linux runtime validation remain.
+  Work temporarily switches to the requested icon polish.
+- Icon update: transparent triangle for desktop PNG/ICO/window/tray/installer;
+  Android adaptive background white, foreground scale 0.56 instead of 0.72;
+  legacy Android icons use a white tile with matching visual padding. Approved
+  triangle paths and colours are unchanged. Reproducible SVG renderer is under
+  assets/branding/generate-icons.py. PNG/ICO transparency and foreground safe
+  bounds verified, plus circle/rounded-square comparison generated for review.
+- Linux portable core was also built/tested natively on the OMV runner as
+  ghrunner: eight tests pass. Isolated checkout /tmp/secpar-core.JBPqA6/repo.
+  No capture/input or system package installation was attempted on the headless
+  server. This verifies protocol portability, not a working Linux host yet.
+- Published icon releases from bd3377e: Android Preview 19 (24,080,295 bytes,
+  SHA-256 797cf47b5f2c21d87408ad52b594c6e8bde9eae231d8d07c60265931a7dc812a),
+  Windows Development 8 single installer (9,807,317 bytes, SHA-256
+  ed2c9218a89ab15024d8e176aa717228f2dfad61b6e1614295384a69257fde0a).
+  GitHub digests match; public APK/installer links return 200. Same APK signer,
+  release/vital lint pass. All ten Android PNG density assets verified in the
+  release APK. All seven transparent ICO frames verified in packaged desktop and
+  host executables. Android native launcher review shows the new white padded icon
+  next to the older black release icon in the isolated emulator. Audio/video code
+  unchanged from user-confirmed Preview 18. Phone and installed host untouched.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
@@ -319,10 +343,12 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 ## Delivery links
 
 - Repository: https://github.com/modnite/Secpar
-- Desktop development 7: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.7
+- Desktop development 8: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.8
+- Previous desktop development 7: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.7
 - Previous desktop development 6: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.6
 - Previous desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
-- Android Preview 18: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.18
+- Android Preview 19: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.19
+- Previous Android Preview 18: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.18
 - Previous Android Preview 17: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.17
 - Previous Android Preview 16: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.16
 - Previous Android Preview 15: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15

@@ -20,7 +20,9 @@ Protect the user's existing remote connection: don't replace, stop or restart
 installed PC Remote/Secpar services to validate a development build. Keep the
 original project's installations and identities separate.
 
-Use the approved mint/orange triangle and Secpar wordmark. Never include QR
+Use the approved mint/orange triangle and Secpar wordmark. Desktop app icons must
+use the triangle on transparency; Android icons use white with safe padding.
+Keep the approved geometry and colours when resizing. Never include QR
 pairing credentials, account tokens, private keys or personal data in screenshots.
 
 Flat and clean must still look deliberately designed: align control heights,
@@ -45,4 +47,4 @@ must see one Secpar app per OS. Android has one client-only APK.
 The user has one Windows PC and a CachyOS laptop for testing. The OMV box is a
 build runner/server, not a streaming target. Prioritize Linux hosting next so
 Windows↔Linux and Linux↔Linux can be tested; macOS must also eventually support
-both roles in its one application. CachyOS desktop/session type is not yet known.
+both roles in its one application. The laptop uses KDE Plasma on Wayland.
