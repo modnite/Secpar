@@ -7,3 +7,9 @@ SECPAR rearranges the original six letterforms, with adjusted kerning. The symbo
 SecparWordmark.otf is a six-letter logo font assembled from these outlines, mapping S/E/C/P/A/R and lowercase equivalents. It is not a full alphabet or the original Parsec font file. Use the SVG wordmark for the exact final spacing. Interface body text remains the platform font.
 
 Colours: mint #0AFFB6, orange #D95400, near-white #F9FAFC, charcoal #15161A.
+
+Desktop application icons use only the approved triangle on transparency. Android
+adaptive icons use a white background and a 0.56-scale foreground, leaving safe
+space inside circular and rounded-square masks. Legacy Android icons use a white
+rounded tile. Regenerate native PNG/ICO resources with generate-icons.py after
+installing the host Node dependencies and Python Pillow. The triangle geometry is unchanged.

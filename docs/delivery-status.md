@@ -276,6 +276,16 @@
   hiccup comparison. Windows Development 6 video/cursor and Android Preview 18
   audio are now user-verified. Preserve these working paths while continuing
   Linux/macOS hosting. This does not validate all devices or network conditions.
+- CachyOS laptop is confirmed KDE Plasma on Wayland. Linux branch has merged
+  main through a7233eb, merge checkpoint 93ed978, and all eight portable core tests
+  pass. Branch is pushed; native capture/input and Linux runtime validation remain.
+  Work temporarily switches to the requested icon polish.
+- Icon update: transparent triangle for desktop PNG/ICO/window/tray/installer;
+  Android adaptive background white, foreground scale 0.56 instead of 0.72;
+  legacy Android icons use a white tile with matching visual padding. Approved
+  triangle paths and colours are unchanged. Reproducible SVG renderer is under
+  assets/branding/generate-icons.py. PNG/ICO transparency and foreground safe
+  bounds verified, plus circle/rounded-square comparison generated for review.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux

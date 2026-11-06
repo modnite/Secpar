@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix="secpar-package-") as temporary:
             "CFBundleIdentifier": "com.secpar.desktop",
             "CFBundleName": "Secpar", "CFBundleDisplayName": "Secpar",
             "CFBundleExecutable": "SecparDesktop", "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "7",
+            "CFBundleShortVersionString": "0.1.0", "CFBundleVersion": "8",
             "CFBundleIconFile": "Secpar.icns", "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "13.0",
             "LSApplicationCategoryType": "public.app-category.productivity",

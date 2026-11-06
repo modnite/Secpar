@@ -45,4 +45,4 @@ must see one Secpar app per OS. Android has one client-only APK.
 The user has one Windows PC and a CachyOS laptop for testing. The OMV box is a
 build runner/server, not a streaming target. Prioritize Linux hosting next so
 Windows↔Linux and Linux↔Linux can be tested; macOS must also eventually support
-both roles in its one application. CachyOS desktop/session type is not yet known.
+both roles in its one application. The laptop uses KDE Plasma on Wayland.
