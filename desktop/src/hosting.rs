@@ -424,7 +424,7 @@ impl Panel {
                     right.label(egui::RichText::new("Quality limit").size(12.).color(design::MUTED));
                     let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
                     let old = quality.clone();
-                    let choices = [("auto", "Automatic"), ("smooth", "Smooth"), ("sharp", "Sharp"), ("battery", "Battery saver")];
+                    let choices = [("auto", "No limit"), ("battery", "1280 × 720 · 30 fps"), ("smooth", "1920 × 1080 · 60 fps"), ("sharp", "2560 × 1440 · 60 fps"), ("2160p60", "3840 × 2160 · 60 fps")];
                     let label = choices.iter().find(|(value,_)| *value == quality).map(|(_,label)| *label).unwrap_or("Custom");
                     egui::ComboBox::from_id_salt("host-quality").width(right.available_width())
                         .selected_text(label).show_ui(right, |ui| {

@@ -198,6 +198,7 @@ impl Session for HostSession {
                 let st = self.net.lock().unwrap().clone();
                 let public = st.public.filter(|_| st.upnp).and_then(|ip| ip.parse().ok());
                 let (fps, max_kbps) = (if fps == 0 { 60 } else { fps }, if max_kbps == 0 { 20000 } else { max_kbps });
+                let (w,h,fps)=crate::engine::session::quality_limit(&self.store.lock().unwrap().config().max_quality,w,h,fps);
                 let display = if display.is_empty() { self.store.lock().unwrap().config().display.clone() } else { display };
                 let p = Params { w, h, fps, codecs, max_kbps, audio, cands, public, display };
                 let out = self.out.clone();

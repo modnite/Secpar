@@ -8,12 +8,16 @@ pub struct Input {
     held: BTreeSet<u32>,
     buttons: BTreeSet<&'static str>,
     ignore_ctrl: bool,
+    ignore_alt: bool,
+    ignore_shift: bool,
     fractional: [f32; 2],
 }
 impl Input {
     pub fn capture(&mut self) {
         self.captured = true;
         self.ignore_ctrl = true;
+        self.ignore_alt = true;
+        self.ignore_shift = true;
         self.fractional = [0.; 2];
     }
     pub fn release(&mut self) -> Vec<Value> {
@@ -37,11 +41,13 @@ impl Input {
         if !m.ctrl {
             self.ignore_ctrl = false;
         }
+        if !m.alt {self.ignore_alt=false;}
+        if !m.shift {self.ignore_shift=false;}
         let mut out = vec![];
         for (vk, down) in [
-            (0x10, m.shift),
+            (0x10, m.shift && !self.ignore_shift),
             (0x11, m.ctrl && !self.ignore_ctrl),
-            (0x12, m.alt),
+            (0x12, m.alt && !self.ignore_alt),
             (0x5B, m.mac_cmd),
         ] {
             if down && self.held.insert(vk) || !down && self.held.remove(&vk) {
@@ -213,6 +219,19 @@ mod tests {
             1
         );
         assert_eq!(i.release().len(), 1);
+    }
+    #[test]
+    fn one_hand_recapture_suppresses_both_modifiers_until_released() {
+        let mut input=Input::default();input.capture();
+        let chord=Modifiers{ctrl:true,alt:true,..Default::default()};
+        assert!(input.modifiers(chord).is_empty());
+        assert!(input.modifiers(Modifiers::default()).is_empty());
+        let pressed=input.modifiers(chord);
+        assert_eq!(pressed.len(),2);
+        assert!(pressed.iter().all(|event|event["down"]==true));
+        let released=input.release();
+        assert_eq!(released.len(),2);
+        assert!(released.iter().all(|event|event["down"]==false));
     }
     #[test]
     fn preserves_subpixel_mouse_motion() {

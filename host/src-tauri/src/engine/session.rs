@@ -18,6 +18,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 
+/// Enforce the host's advertised resolution/frame-rate ceiling for every client.
+pub fn quality_limit(profile: &str, w:u32, h:u32, fps:u32)->(u32,u32,u32) {
+    let (mw,mh,mfps)=match profile {"battery"=>(1280,720,30),"smooth"=>(1920,1080,60),"sharp"=>(2560,1440,60),"2160p60"=>(3840,2160,60),_=>(0,0,0)};
+    if mw==0 {return (w,h,fps)}
+    (if w==0 {mw}else{w.min(mw)},if h==0 {mh}else{h.min(mh)},fps.min(mfps))
+}
+
 pub const TIMEOUT: Duration = Duration::from_secs(5);
 const IDR_EVERY: Duration = Duration::from_millis(250);
 /// Hole punching (docs/remote-protocol.md): PROBE every phone candidate this often, for this long.
