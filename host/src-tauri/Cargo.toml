@@ -48,6 +48,10 @@ windows = { version = "0.62", features = ["Foundation", "Media_Control", "Win32_
 [profile.dev.package.reed-solomon-erasure]
 opt-level = 3
 
+# Shared framing and matrix construction must also be optimized in preview packages.
+[profile.dev.package.secpar-stream]
+opt-level = 3
+
 [profile.release]
 opt-level = "s"
 lto = true

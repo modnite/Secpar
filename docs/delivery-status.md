@@ -174,14 +174,115 @@
   real decoder/SurfaceView/PixelCopy test passed again after diagnostics were added.
   No physical phone installation or installed PC service change was performed.
 
-- Linux hosting branch checkpoint: extracted secpar-host-core for shared wire
-  models, TLS/WebSocket owner authentication, revocation and session handling.
-  Windows uses an adapter retaining the existing DPAPI identity and owner store.
-  Eight portable protocol tests and 14 existing Windows TLS/pairing/relay tests
-  pass (one live internet test intentionally ignored). Native Linux capture/input,
-  persistent credentials and Linux runtime checks remain to be implemented. No
-  platform package is published from this branch. Work was set aside to address
-  the user's unsuccessful Android Preview 14 playback test.
+- Preview 14 physical result: user reports unchanged or worse video slowdowns.
+  S23 logs show 8–59 presented fps, stable 11–14ms local decode/submission time,
+  almost no output drops and only one startup input resync. This does not support
+  decoder queue buildup as the main reported failure. Direct UDP was confirmed.
+- Preview 15 work: found that Receiver shares a Crypt instance between its receive
+  thread and synchronized sender, but both cipher directions reused ONE nonce
+  scratch array. A full-duplex regression reproduced 29 authentication failures
+  in 40,000 packet checks before the fix; independent send/receive buffers give
+  zero failures. All 188 unit tests pass. A device-provider instrumented test on
+  the isolated emulator also passed all 12,000 video/input packet checks. This is
+  a proven transport defect; its contribution to the S23 slowdown still needs a
+  real-stream comparison. Added receive diagnostics for frame rate, throughput,
+  loss, frame-assembly drops, invalid packets, processing wall-time peak and socket
+  backlog/drop counts. Audio code and the PC host engine remain unchanged.
+- Android Preview 15 published from e489fc6: APK 24,008,327 bytes, SHA-256
+  95f92d9cc1c8b92b25c008e2e1170724f2b75f3c34a9f3c58b216b4b621652bf,
+  matching GitHub asset digest. The isolated Secpar emulator was stopped after
+  verification; the unrelated emulator and physical phone were left untouched.
+  Physical S23 result: unchanged or worse. Both video and cursor problems go away
+  when playback is PAUSED; the cursor itself does NOT disappear. User corrected
+  that misinterpretation explicitly. P15 logs confirm direct LAN UDP to
+  192.168.100.130, 4–11 received fps under playback, zero assembly/invalid/socket
+  drops, zero measured loss. Capture/encoding/packetization/send path now under
+  investigation. Do not ship another decoder-pacing guess.
+- Desktop Development 6 / Android Preview 16 implementation: automatic checks of
+  product-specific preview releases, explicit download/install UI, SHA-256/size
+  verification and Android package/version/certificate checks. Unified Windows
+  packages disable the legacy service's unattended timer. No live installation was
+  modified. Android has 190 passing unit tests and an emulator activity smoke;
+  desktop has 19 passing tests, including corrupted-download rejection. Native
+  install/relaunch and physical S23 performance remain user checks.
+- Confirmed host packetization bottleneck: fresh ReedSolomon matrices were built
+  synchronously per block/frame on the same video/cursor-polling thread. The exact
+  host debug profile reproduced 71.466 ms/64 KiB and 237.353 ms/192 KiB. A bounded
+  matrix cache plus optimized secpar-stream lowers those to 1.631 and 5.391 ms.
+  Nine shared-stream tests pass, including byte compatibility and concurrent loss
+  recovery. Fourteen agent tests pass; seven session tests passed and one tight
+  timeout test failed during concurrent builds, then passed alone. No capture or
+  real service restart was used. Details: docs/video-pacing.md and docs/updates.md.
+- Windows packaging first hit low C: disk space. No cache was deleted: automatic
+  review rejected that cleanup. Builds continue with a copied compiler cache and
+  temporary output on D:/Secpar-CI/secpar-host-updates-target. Originals retained.
+- Published Windows Development 6 from f30d1dd: one installer, 9,825,691 bytes,
+  SHA-256 60316dd65ee435292bcbdab3bc596d8c7e096e94a68fb3285f50332081da0528.
+  Packaged desktop bytes match the built x64 UI; host bytes match after Tauri's
+  expected UNK→NSS installer marker patch. Executable code sections match.
+- Published Android Preview 16 from ddbf61d: APK 24,008,155 bytes, SHA-256
+  96d53836ecba5c9b4c7eb26e9d416b4a8f4b97aba0ded141b71e03720cb3c7aa.
+  Version code 516, same signing certificate as prior previews, no test video
+  fixture included. All 190 tests pass; release/vital lint pass. Final update UI
+  smoke passes on phone and 800×600 isolated emulator layouts, with screenshots
+  under outputs/ui-review. Four public asset links return 200; GitHub digests
+  match local checksums. All four CI jobs pass in run 42135559751, including native Intel macOS and ARM cross-build.
+  Physical S23 host-fix test requested asynchronously. Do not install/restart the
+  live Windows service or physical phone to force that result.
+- User confirms Desktop Development 6: video and cursor are perfect on the S23.
+  Rare slight audio crackle/slowdown remains and is absent in Moonlight. This is
+  treated as a Secpar audio defect, not a general device/network limitation.
+- Android Preview 17 work corrects ignored/partial AudioTrack writes, false frame
+  accounting and dropped MediaCodec input when busy. It primes 30 ms, preserves
+  waveform samples under backpressure, drains delayed decoder output, and adds
+  underrun/queue/sequence-gap diagnostics. No video behavior or PC audio code changes.
+  The real Android Opus/AudioTrack fixture test preserves all 144,000 sample frames.
+- Desktop Development 7 work places Check for updates / Download update on one row.
+  Download remains visible and greyed out without an available update, while busy,
+  or once downloaded. Both states reviewed at 640×400 with native screenshots.
+- Published Android Preview 17 and Desktop Development 7 from 22f9fff. APK:
+  24,024,539 bytes, SHA-256
+  49938d047f2760672a5134b46d18bbdbf4fd510528d7b40390faef4749cac485.
+  Windows single installer: 9,829,835 bytes, SHA-256
+  00be8f68b5baff14e8a61619a5b2d501fe85fdf11ee5f31801eb606201a7f9e4.
+  Both GitHub digests match local files; direct APK/installer links return 200.
+  APK retains the signing certificate; synthetic audio/video test assets excluded.
+  Packaged desktop matches the built UI, and the host matches with the expected
+  Tauri installer marker. All 195 unit tests and vital release lint pass. Final
+  Android Opus/AudioTrack smoke again preserves all 144,000 sample frames. Desktop
+  tests: 19 passed. Windows/Linux CI pass in run 42142493406; Mac jobs pending.
+  User asked to test Preview 17 via the new in-app updater. The physical phone and
+  installed Windows service have not been modified by tools.
+- Preview 17 physical result: occasional hiccups produce permanent music lag;
+  video stays synchronized and Moonlight does not hiccup on the same desktop.
+  Read-only S23 logs show 60–70 ms queued PCM, up to eight pending packets, 15
+  underruns, six overflow packets and six observed audio gaps. No short writes or
+  decoder input waits in that session. Do not claim Preview 17 fixed audio.
+- Preview 18 work uses host capture timestamps and PRS clock conversion, rejects
+  audio older than 40 ms, flushes projected latency over 80 ms, and resets/reprimes
+  on real underruns. Five-ms restart fades and gap crossfades soften transitions;
+  full Opus PLC is not implemented. Android tests cover a real 180 ms starvation,
+  ten delayed packets and return to live audio. Both device tests pass; physical
+  S23 comparison is pending. No video or PC engine changes.
+- Published Preview 18 from f0d6dde, version code 518. APK 24,024,539 bytes,
+  SHA-256 834a38bd267bf4e55f7308c5c073e9a0918b1795d77f1a2a8dc55ac561f7e37d,
+  matching the GitHub digest; both release assets return HTTP 200. Same signing
+  certificate and no synthetic test assets in release. Release/vital lint and all
+  202 unit tests pass. Both Android audio tests pass, including actual starvation,
+  ten stale packets and live recovery. Published P17 regression notice pointing to
+  P18. Physical audio comparison requested asynchronously. The Secpar emulator was
+  stopped after tests; physical phone and installed host left untouched.
+- Physical S23 confirmation: Preview 18 audio is "In sync and clean" after the
+  hiccup comparison. Windows Development 6 video/cursor and Android Preview 18
+  audio are now user-verified. Preserve these working paths while continuing
+  Linux/macOS hosting. This does not validate all devices or network conditions.
+- Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
+  worktree work/secpar-linux-host. Shared host protocol/control code passes eight
+  portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
+  capture/input and Linux runtime checks are still pending. Merge main's subsequent
+  Android hotfixes before integrating this branch. No Linux/Mac client-only package
+  was published. Main’s later video, updater and audio fixes must be merged before
+  integration; work was set aside for Android streaming/audio fixes.
 
 ## Active implementation
 
@@ -218,8 +319,14 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 ## Delivery links
 
 - Repository: https://github.com/modnite/Secpar
-- Desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
-- Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
+- Desktop development 7: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.7
+- Previous desktop development 6: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.6
+- Previous desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
+- Android Preview 18: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.18
+- Previous Android Preview 17: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.17
+- Previous Android Preview 16: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.16
+- Previous Android Preview 15: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15
+- Previous Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
 - Previous Android Preview 13: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.13
 - Previous desktop development 4: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.4
 - Android Preview 12: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.12

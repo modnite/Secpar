@@ -36,7 +36,7 @@ class PrsPipeline(
     private val onDecoderFailed: () -> Unit,
     private val onEnded: () -> Unit,
 ) : Pipeline {
-    private val audio = AudioPlayer()
+    private val audio: AudioPlayer
     @Volatile private lateinit var decoder: VideoDecoder
     private val receiver: Receiver
     @Volatile private var closed = false
@@ -46,11 +46,16 @@ class PrsPipeline(
         sock.setTargets(listOfNotNull(direct) + ready.cands.mapNotNull(StunMsg::parseHostPort))
         Log.i(TAG, "host candidates ${ready.cands}, direct $direct")
         val listener = object : ReceiverListener {
+            private var reports = 0
             override fun onFrame(f: Frame) = decoder.submit(f)
             override fun onAudio(a: AudioPacket) = audio.play(a)
             override fun onBye() = onEnded()
+            override fun onStats(stats: Stats) {
+                if (++reports % 5 == 0) Log.i("PcrReceive", "fps=${stats.fps} kbps=${stats.kbps} loss=${stats.lossPct} rttMs=${stats.rttMs} assemblyDrops=${stats.dropped} invalid=${stats.invalidPackets} processPeakMs=${stats.processPeakMs} backlog=${stats.packetBacklog} socketDrops=${stats.socketDrops} audioMissing=${stats.audioMissing} audioReordered=${stats.audioReordered}")
+            }
         }
         receiver = Receiver(sock, Crypt(Base64.decode(ready.key, Base64.DEFAULT), ready.session.toInt()), listener)
+        audio = AudioPlayer(receiver::audioCaptureToLocalUs)
         decoder = newDecoder(ready)
         thread(name = "pcr-rx", priority = Thread.MAX_PRIORITY) { receiver.run() }
         if (relay != null) thread(name = "pcr-turn-start") {

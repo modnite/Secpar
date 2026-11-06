@@ -36,3 +36,58 @@ The test asset is generated locally, not captured from a user's screen:
 ```
 ffmpeg -f lavfi -i color=c=0x2070b0:s=320x180:r=120 -frames:v 240 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 15 -x264-params aud=1:repeat-headers=1:scenecut=0 -f h264 video-pacing.h264
 ```
+
+
+## Preview 15: packet integrity and upstream measurements
+
+The user reported Preview 14 unchanged or worse. Phone logs showed low presented
+fps during the bad interval while local decode/submission stayed around 12ms,
+with no growing output drops or input recovery count. Pacing alone did not solve
+the reported symptom; upstream delivery and frame assembly need measurement.
+
+A separate full-duplex defect was reproduced: Crypt had independent encrypt/decrypt
+Cipher instances but shared their mutable nonce scratch buffer. The receive thread
+and sender could overwrite that array concurrently, invalidating authenticated
+packets. Separate per-direction buffers preserve the same wire format and avoid
+serializing video reception behind input sends. The sender's existing lock and
+single receive thread still serialize calls within each direction.
+
+The JVM regression failed 29 of 40,000 packet checks before the fix and zero after.
+Android's actual crypto provider also passed 12,000 simultaneous video/input packet
+checks on the isolated emulator. These tests demonstrate the defect/fix, not a
+measured real-world loss percentage or proof that all video stutters are resolved.
+
+PcrReceive now logs receive fps/bitrate, packet loss, cumulative frame-assembly
+losses, invalid packet count, maximum per-packet processing wall time and socket
+backlog/drop counts every five seconds. The measurements distinguish missing input
+frames from decoder backlog without recording screen content, keys or credentials.
+
+
+## Host packetization bottleneck (Desktop Development 6)
+
+The user reports no improvement with Android Preview 15. The corrected symptom is
+that video and cursor problems go away when video playback is paused; the cursor
+itself does not disappear. Physical S23 logs show direct LAN UDP to
+192.168.100.130, 4–11 received video frames/sec during playback, zero reported
+packet loss and no invalid, assembly-dropped or socket-dropped packets. This is
+not evidence for another decoder-queue adjustment.
+
+The host packetizer constructed a ReedSolomon instance for every block of every
+frame. That creates/inverts a coding matrix, synchronously on the video thread
+that also polls cursor updates. A synthetic test in the same Windows host debug
+build profile measured:
+
+| Encoded frame bytes | Before (ms/frame) | Matrix cache + optimized shared crate (ms/frame) |
+| --- | ---: | ---: |
+| 16,384 | 1.961 | 0.216 |
+| 65,536 | 71.466 | 1.631 |
+| 196,608 | 237.353 | 5.391 |
+
+Each measurement averages 60 frames of the same size, including initial cache
+construction. No capture, installed service, actual screen content, network or
+encoder was involved. These are packetization timings, not end-to-end latency or
+a promise of physical stream performance. The fix uses a bounded 128-entry shared
+LRU of coding matrices and optimizes secpar-stream in debug preview packages.
+Uncached-versus-cached wire-byte comparisons and concurrent loss recovery tests
+pass; Android and the on-wire protocol are unchanged. The PC needs the updated
+single Secpar installer to receive this fix. Physical comparison remains pending.

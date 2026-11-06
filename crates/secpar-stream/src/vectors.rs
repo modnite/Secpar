@@ -157,3 +157,17 @@ fn matches_android_wire_vectors() {
         assert_eq!(hex(data), shard["data"].as_str().unwrap());
     }
 }
+
+/// Synthetic payloads only: no capture, network or installed host involved.
+#[test]
+#[ignore]
+fn packetization_throughput_diagnostic() {
+    use std::time::Instant;
+    for size in [16_384, 65_536, 196_608] {
+        let data=vec![123u8;size];
+        let header=frame::FrameHeader {len:size as u32,capture_us:0,keyframe:false,codec:frame::Codec::Hevc};
+        let start=Instant::now();
+        for i in 0..60 { std::hint::black_box(frame::packetize(i,&header,&data,15)); }
+        eprintln!("packetize bytes={size} mean_ms={:.3}",start.elapsed().as_secs_f64()*1000.0/60.0);
+    }
+}

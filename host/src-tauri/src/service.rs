@@ -85,7 +85,8 @@ fn supervise() {
                 crate::log::line(&format!("service: server in session {s}: {}", if server.is_some() { "started" } else { "FAILED" }));
             }
         }
-        if Instant::now() >= next_update {
+        let unified = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.join("secpar-desktop.exe"))).is_some_and(|p| p.is_file());
+        if !unified && Instant::now() >= next_update {
             next_update = Instant::now() + UPDATE_EVERY;
             std::thread::spawn(|| {
                 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");

@@ -42,21 +42,26 @@ data class Header(val typ: Int, val flags: Int = 0, val k: Int = 0, val seq: Int
     }
 }
 
-/** AES-256-GCM per packet. Nonce = session ‖ dir ‖ 000000 ‖ seq; AAD = the 16-byte header. Not thread-safe. */
+/**
+ * AES-256-GCM per packet. Nonce = session ‖ dir ‖ 000000 ‖ seq; AAD = the header.
+ * One sender and one receiver may run concurrently. Each direction's calls must
+ * still be serialized (Receiver's send lock and single receive thread do this).
+ */
 class Crypt(key: ByteArray, private val session: Int) {
     private val spec = SecretKeySpec(key.also { require(it.size == 32) }, "AES")
     private val enc = Cipher.getInstance("AES/GCM/NoPadding")
     private val dec = Cipher.getInstance("AES/GCM/NoPadding")
-    private val nonce = ByteArray(12)
+    private val sendNonce = ByteArray(12)
+    private val receiveNonce = ByteArray(12)
 
-    private fun nonce(dir: Int, seq: Int): GCMParameterSpec {
-        ByteBuffer.wrap(nonce).putInt(session).put(dir.toByte()).put(0).put(0).put(0).putInt(seq)
-        return GCMParameterSpec(128, nonce)
+    private fun nonce(buffer: ByteArray, dir: Int, seq: Int): GCMParameterSpec {
+        ByteBuffer.wrap(buffer).putInt(session).put(dir.toByte()).put(0).put(0).put(0).putInt(seq)
+        return GCMParameterSpec(128, buffer)
     }
 
     fun seal(dir: Int, h: Header, plain: ByteArray): ByteArray {
         val hb = h.encode()
-        enc.init(Cipher.ENCRYPT_MODE, spec, nonce(dir, h.seq))
+        enc.init(Cipher.ENCRYPT_MODE, spec, nonce(sendNonce, dir, h.seq))
         enc.updateAAD(hb)
         return hb + enc.doFinal(plain)
     }
@@ -66,7 +71,7 @@ class Crypt(key: ByteArray, private val session: Int) {
         val h = Header.decode(pkt, len) ?: return null
         if (len < 32) return null
         return try {
-            dec.init(Cipher.DECRYPT_MODE, spec, nonce(dir, h.seq))
+            dec.init(Cipher.DECRYPT_MODE, spec, nonce(receiveNonce, dir, h.seq))
             dec.updateAAD(pkt, 0, 16)
             h to dec.doFinal(pkt, 16, len - 16)
         } catch (_: java.security.GeneralSecurityException) { null }

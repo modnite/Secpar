@@ -39,8 +39,8 @@ class V3Test {
     }
 
     @Test fun `release json picks the apk`() {
-        val r = Updater.parse("""{"tag_name":"v3.1.0","assets":[{"name":"PC-Remote-Host-3.1.0-setup.exe","browser_download_url":"x"},{"name":"PC-Remote-3.1.0.apk","browser_download_url":"https://a/apk"}]}""")
-        assertEquals("3.1.0", r?.version); assertEquals("https://a/apk", r?.apkUrl)
+        val r = Updater.parse("""{"tag_name":"v3.1.0","assets":[{"name":"Secpar.apk","browser_download_url":"https://github.com/modnite/Secpar/releases/download/v3.1.0/Secpar.apk","digest":"sha256:${"a".repeat(64)}","size":100}]}""")
+        assertEquals("3.1.0", r?.version); assertEquals("https://github.com/modnite/Secpar/releases/download/v3.1.0/Secpar.apk", r?.apkUrl)
         assertNull(Updater.parse("""{"tag_name":"v1","assets":[]}"""))
         assertTrue(Updater.isNewer("3.0.1", "3.0.0")); assertTrue(Updater.isNewer("3.1", "3.0.9"))
         assertFalse(Updater.isNewer("3.0.0", "3.0.0")); assertFalse(Updater.isNewer("2.9", "3.0.0"))

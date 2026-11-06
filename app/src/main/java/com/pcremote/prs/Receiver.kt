@@ -12,17 +12,21 @@ interface Transport {
     fun receive(buf: ByteArray, timeoutMs: Int): Int
     /** The packet just received authenticated: its source is the peer. */
     fun confirm() {}
+    fun backlog(): Int = 0
+    fun droppedPackets(): Int = 0
     fun close()
 }
 
 data class AudioPacket(val id: Int, val captureUs: Long, val opus: ByteArray)
 data class Cursor(val x: Int, val y: Int, val visible: Boolean)
-data class Stats(val rttMs: Int = 0, val lossPct: Float = 0f, val kbps: Int = 0, val fps: Int = 0, val dropped: Int = 0, val jitterMs: Int = 0, val decodeMs: Int = 0)
+data class Stats(val rttMs: Int = 0, val lossPct: Float = 0f, val kbps: Int = 0, val fps: Int = 0, val dropped: Int = 0, val jitterMs: Int = 0, val decodeMs: Int = 0,
+    val invalidPackets: Int = 0, val processPeakMs: Int = 0, val packetBacklog: Int = 0, val socketDrops: Int = 0, val audioMissing: Int = 0, val audioReordered: Int = 0)
 
 interface ReceiverListener {
     fun onFrame(f: Frame)
     fun onAudio(a: AudioPacket) {}
     fun onBye() {}
+    fun onStats(stats: Stats) {}
 }
 
 /**
@@ -56,6 +60,7 @@ class Receiver(
     private var peerT = 0L
     private var rttUs = 0L
     private var bestRttUs = Long.MAX_VALUE
+    @Volatile private var clockReady = false
     @Volatile private var offsetUs = 0L // host clock − our clock
     private var maxSeq = -1
     private var periodStartSeq = -1
@@ -65,15 +70,25 @@ class Receiver(
     private var jitterUs = 0.0
     private var prevArrival = 0L
     private var prevCapture = 0L
+    private var lastAudioId: Int? = null
+    private var audioMissing = 0
+    private var audioReordered = 0
     private var statFrames = 0
     private var statBytes = 0L
+    private var invalidPackets = 0
+    private var processPeakUs = 0L
     @Volatile private var running = true
 
     fun run() {
         val buf = ByteArray(2048)
+        lastStatsUs = clock()
         while (running) {
             val n = runCatching { transport.receive(buf, 5) }.getOrElse { if (running) -1 else break }
-            if (n > 0) onPacket(buf, n, clock())
+            if (n > 0) {
+                val before = clock()
+                onPacket(buf, n, before)
+                processPeakUs = maxOf(processPeakUs, clock() - before)
+            }
             step(clock())
         }
     }
@@ -103,9 +118,10 @@ class Receiver(
 
     /** Converts a host capture timestamp to our clock (PROBE-estimated offset). */
     fun hostToLocalUs(hostUs: Long) = hostUs - offsetUs
+    fun audioCaptureToLocalUs(hostUs: Long): Long? = if (clockReady) hostToLocalUs(hostUs) else null
 
     internal fun onPacket(buf: ByteArray, len: Int, nowUs: Long) {
-        val (h, plain) = crypt.open(Crypt.HOST_TO_PHONE, buf, len) ?: return
+        val (h, plain) = crypt.open(Crypt.HOST_TO_PHONE, buf, len) ?: run { invalidPackets++; return }
         transport.confirm()
         // Loss counts from the first video packet: before that the host punches to several
         // addresses, and those PROBEs' sequence numbers never reach us (they'd look like loss).
@@ -117,7 +133,15 @@ class Receiver(
         statBytes += len
         when (h.typ) {
             Prs.VIDEO, Prs.FEC -> { lastVideoUs = nowUs; assembler.onShard(h, plain, nowUs) }
-            Prs.AUDIO -> if (plain.size > 8) listener.onAudio(AudioPacket(h.frameId, ByteBuffer.wrap(plain).getLong(0), plain.copyOfRange(8, plain.size)))
+            Prs.AUDIO -> if (plain.size > 8) {
+                val gap = lastAudioId?.let { h.frameId - it - 1 }
+                if (gap != null) {
+                    if (gap >= 0) audioMissing += gap
+                    else audioReordered++
+                }
+                if (lastAudioId == null || h.frameId - lastAudioId!! > 0) lastAudioId = h.frameId
+                listener.onAudio(AudioPacket(h.frameId, ByteBuffer.wrap(plain).getLong(0), plain.copyOfRange(8, plain.size)))
+            }
             Prs.CURSOR -> if (plain.size >= 5) {
                 val b = ByteBuffer.wrap(plain)
                 _cursor.value = Cursor(b.getShort(0).toInt(), b.getShort(2).toInt(), plain[4].toInt() != 0)
@@ -128,7 +152,7 @@ class Receiver(
                 val echo = b.getLong(8)
                 if (echo != 0L && nowUs - echo in 0..10_000_000) {
                     rttUs = nowUs - echo
-                    if (rttUs <= bestRttUs) { bestRttUs = rttUs; offsetUs = peerT + rttUs / 2 - nowUs }
+                    if (rttUs <= bestRttUs) { bestRttUs = rttUs; offsetUs = peerT + rttUs / 2 - nowUs; clockReady = true }
                 }
             }
             Prs.BYE -> listener.onBye()
@@ -147,7 +171,10 @@ class Receiver(
         if (nowUs - lastStatsUs >= 1_000_000) {
             val secs = (nowUs - lastStatsUs) / 1e6
             _stats.value = Stats((rttUs / 1000).toInt(), lossPermille / 10f, (statBytes * 8 / 1000 / secs).toInt(),
-                (statFrames / secs).toInt(), assembler.dropped, (jitterUs / 1000).toInt(), decodeMs)
+                (statFrames / secs).toInt(), assembler.dropped, (jitterUs / 1000).toInt(), decodeMs,
+                invalidPackets, (processPeakUs / 1000).toInt(), transport.backlog(), transport.droppedPackets(), audioMissing = audioMissing, audioReordered = audioReordered)
+            listener.onStats(_stats.value)
+            processPeakUs = 0
             lastStatsUs = nowUs; statFrames = 0; statBytes = 0
         }
     }

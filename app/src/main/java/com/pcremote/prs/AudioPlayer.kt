@@ -10,28 +10,60 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
 
-/** Opus (48 kHz stereo, 10 ms packets) → MediaCodec → low-latency AudioTrack, with a 20–60 ms buffer. */
-class AudioPlayer {
-    private val exec = Executors.newSingleThreadExecutor { Thread(it, "pcr-audio").apply { priority = Thread.MAX_PRIORITY } }
+/** Opus (48 kHz stereo, 10 ms packets) → MediaCodec → low-latency AudioTrack, with a 30–60 ms buffer. */
+class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
+    private val exec = Executors.newSingleThreadScheduledExecutor { task -> Thread({
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
+        task.run()
+    }, "pcr-audio") }
     private var codec: MediaCodec? = null
-    private var track: AudioTrack? = null
-    private var written = 0L // frames written to the track
+    private var pump: java.util.concurrent.ScheduledFuture<*>? = null
+    @Volatile private var track: AudioTrack? = null
+    private var writer = PcmWriter()
+    private var head = PlaybackHead()
+    private var playing = false
+    private var lastUnderruns = 0
+    private var fading = true
+    private var previousLeft = 0
+    private var previousRight = 0
+    private var gapCaptureUs: Long? = null
+    private var firstBufferedCaptureUs: Long? = null
+    private var lastPacketId: Int? = null
+    @Volatile internal var recoveries = 0; private set
+    @Volatile internal var staleFrames = 0; private set
+    @Volatile internal var lastQueuedAgeUs = 0L; private set
+    private var statsAt = System.nanoTime()
+    private var inputWaits = 0
+    private val pending = java.util.concurrent.atomic.AtomicInteger()
+    private val overflowPackets = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile internal var acceptedFrames = 0L; private set
     private val info = MediaCodec.BufferInfo()
     private var pcm = ByteArray(0)
     @Volatile private var dead = false
 
     fun play(a: AudioPacket) {
-        if (!dead) exec.execute { runCatching { decode(a.opus) }.onFailure { Log.w(TAG, "audio", it); shutdown() } }
+        if (dead) return
+        // Bound encoded backlog as well as the hardware queue after a network stall.
+        if (pending.incrementAndGet() > 12) {
+            pending.decrementAndGet(); overflowPackets.incrementAndGet(); return
+        }
+        runCatching { exec.execute {
+            try { runCatching { decode(a) }.onFailure { Log.w(TAG, "audio", it); shutdown() } }
+            finally { pending.decrementAndGet() }
+        } }.onFailure { pending.decrementAndGet() }
     }
 
     fun release() {
         dead = true
-        exec.execute { shutdown() }
+        // Pause wakes a blocking write, so release cannot wait behind output backpressure.
+        runCatching { track?.pause() }
+        runCatching { exec.execute { shutdown() } }
         exec.shutdown()
     }
 
     private fun start() {
         val fmt = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, RATE, 2).apply {
+            setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
             setByteBuffer("csd-0", ByteBuffer.wrap(opusHead()))
             setByteBuffer("csd-1", ByteBuffer.allocate(8).order(ByteOrder.nativeOrder()).putLong(0).flip() as ByteBuffer)
             setByteBuffer("csd-2", ByteBuffer.allocate(8).order(ByteOrder.nativeOrder()).putLong(0).flip() as ByteBuffer)
@@ -44,36 +76,115 @@ class AudioPlayer {
             .setBufferSizeInBytes(bufferBytes(min))
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .build().apply { play() }
+            .build().apply {
+                if (android.os.Build.VERSION.SDK_INT >= 31) setStartThresholdInFrames(PRIME_FRAMES)
+            }
+        Log.i(TAG, "start decoder=${codec!!.name} bufferFrames=${track!!.bufferSizeInFrames} primeFrames=$PRIME_FRAMES")
+        pump = exec.scheduleWithFixedDelay({
+            if (!dead) runCatching { checkUnderrun(track!!); drain(codec!!, track!!, 0) }
+                .onFailure { Log.w(TAG, "audio output", it); shutdown() }
+        }, 5, 5, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
-    private fun decode(opus: ByteArray) {
+    private fun decode(packet: AudioPacket) {
+        val opus = packet.opus
         if (dead) return
+        if (lastPacketId?.let { packet.id - it <= 0 } == true) return
+        if (lastPacketId?.let { packet.id - it > 1 } == true) gapCaptureUs = packet.captureUs
+        lastPacketId = packet.id
         if (codec == null) start()
         val c = codec!!
         val t = track!!
-        val inIdx = c.dequeueInputBuffer(5_000)
-        if (inIdx >= 0) {
-            c.getInputBuffer(inIdx)!!.apply { clear(); put(opus) }
-            c.queueInputBuffer(inIdx, 0, opus.size, 0, 0)
+        // Free decoded output before waiting for another input slot. Never silently
+        // discard an Opus packet because the asynchronous decoder is briefly busy.
+        checkUnderrun(t)
+        drain(c, t, 0)
+        val deadline = System.nanoTime() + 100_000_000
+        var inIdx = c.dequeueInputBuffer(5_000)
+        while (inIdx < 0 && !dead) {
+            inputWaits++
+            drain(c, t, 1_000)
+            check(System.nanoTime() < deadline) { "Audio decoder stopped accepting packets" }
+            inIdx = c.dequeueInputBuffer(5_000)
         }
-        while (true) {
-            val outIdx = c.dequeueOutputBuffer(info, 0)
+        if (dead) return
+        c.getInputBuffer(inIdx)!!.apply { clear(); put(opus) }
+        c.queueInputBuffer(inIdx, 0, opus.size, packet.captureUs, 0)
+        drain(c, t, 1_000)
+        if (System.nanoTime() - statsAt >= 5_000_000_000) {
+            val queued = queuedFrames(t)
+            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()} recoveries=$recoveries staleFrames=$staleFrames captureAgeMs=${lastQueuedAgeUs / 1000}")
+            statsAt = System.nanoTime()
+        }
+    }
+
+    private fun drain(c: MediaCodec, t: AudioTrack, timeoutUs: Long) {
+        while (!dead) {
+            val outIdx = c.dequeueOutputBuffer(info, timeoutUs)
+            if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) continue
             if (outIdx < 0) break
-            val buf = c.getOutputBuffer(outIdx)!!
-            if (pcm.size < info.size) pcm = ByteArray(info.size)
-            buf.position(info.offset); buf.get(pcm, 0, info.size)
-            c.releaseOutputBuffer(outIdx, false)
-            // keep at most 60 ms queued: drop rather than let latency grow
-            val queued = written - t.playbackHeadPosition.toLong()
-            if (queued > RATE * 60 / 1000) continue
-            t.write(pcm, 0, info.size, AudioTrack.WRITE_NON_BLOCKING)
-            written += info.size / 4
+            try {
+                val buf = c.getOutputBuffer(outIdx)!!
+                if (pcm.size < info.size) pcm = ByteArray(info.size)
+                buf.position(info.offset); buf.get(pcm, 0, info.size)
+                val captureUs = captureToLocalUs(info.presentationTimeUs)
+                val nowUs = System.nanoTime() / 1000
+                if (!playing && firstBufferedCaptureUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t)
+                val queued = queuedFrames(t)
+                val decision = AudioPlayout.decide(captureUs, nowUs, queued, false)
+                if (decision.reset && (playing || writer.writtenFrames > 0)) resetOutput(t)
+                if (decision.discard) { staleFrames++; continue }
+                if (gapCaptureUs?.let { info.presentationTimeUs >= it } == true) {
+                    PcmFade.bridge(pcm, info.size, previousLeft, previousRight)
+                    gapCaptureUs = null
+                } else if (fading) PcmFade.bridge(pcm, info.size)
+                fading = false
+                val before = writer.writtenFrames
+                val deadlineUs = captureUs?.plus(AudioPlayout.MAX_LATENCY_US) ?: (nowUs + AudioPlayout.MAX_LATENCY_US)
+                writer.write(pcm, info.size, { !dead && System.nanoTime() / 1000 <= deadlineUs }, { Thread.sleep(1) }) { data, offset, size ->
+                    t.write(data, offset, size, AudioTrack.WRITE_NON_BLOCKING)
+                }
+                val accepted = writer.writtenFrames - before
+                acceptedFrames += accepted
+                if (!dead && accepted * 4 < info.size) { staleFrames++; resetOutput(t); continue }
+                if (info.size >= 4) {
+                    previousLeft = PcmFade.sample(pcm, info.size - 4)
+                    previousRight = PcmFade.sample(pcm, info.size - 2)
+                }
+                if (firstBufferedCaptureUs == null) firstBufferedCaptureUs = captureUs
+                lastQueuedAgeUs = captureUs?.let { (System.nanoTime() / 1000 - it).coerceAtLeast(0) } ?: 0
+                if (!playing && !dead && writer.writtenFrames >= PRIME_FRAMES) {
+                    t.play()
+                    playing = true
+                }
+            } finally { c.releaseOutputBuffer(outIdx, false) }
         }
+    }
+
+    private fun queuedFrames(t: AudioTrack) = if (playing) (writer.writtenFrames - head.frames(t.playbackHeadPosition)).coerceAtLeast(0) else writer.writtenFrames
+
+    private fun checkUnderrun(t: AudioTrack) {
+        val count = t.underrunCount
+        if (playing && count > lastUnderruns) resetOutput(t)
+        lastUnderruns = count
+    }
+
+    private fun resetOutput(t: AudioTrack) {
+        t.pause()
+        t.flush()
+        writer = PcmWriter()
+        head = PlaybackHead()
+        playing = false
+        fading = true
+        previousLeft = 0; previousRight = 0
+        firstBufferedCaptureUs = null
+        lastUnderruns = t.underrunCount
+        recoveries++
     }
 
     private fun shutdown() {
         dead = true
+        pump?.cancel(false); pump = null
         runCatching { track?.stop() }; runCatching { track?.release() }; track = null
         runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
     }
@@ -81,10 +192,11 @@ class AudioPlayer {
     companion object {
         private const val TAG = "PcrAudio"
         const val RATE = 48_000
+        private const val PRIME_FRAMES = RATE * 30 / 1000
         private const val BYTES_PER_MS = RATE / 1000 * 4
 
-        /** Track buffer: the platform minimum, at least 20 ms (queueing is capped at 60 ms in [decode]). */
-        fun bufferBytes(min: Int) = maxOf(min, 20 * BYTES_PER_MS) // the minimum wins over the 60 ms cap: a smaller track stutters
+        /** Keep the platform's allocation minimum; prime 30 ms before playback. */
+        fun bufferBytes(min: Int) = maxOf(min, 30 * BYTES_PER_MS) // the minimum wins over the 60 ms cap: a smaller track stutters
 
         /** RFC 7845 identification header: stereo, 48 kHz, no pre-skip, mapping family 0. */
         fun opusHead(): ByteArray = ByteBuffer.allocate(19).order(ByteOrder.LITTLE_ENDIAN)
