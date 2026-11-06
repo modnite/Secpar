@@ -253,6 +253,17 @@
   tests: 19 passed. Windows/Linux CI pass in run 42142493406; Mac jobs pending.
   User asked to test Preview 17 via the new in-app updater. The physical phone and
   installed Windows service have not been modified by tools.
+- Preview 17 physical result: occasional hiccups produce permanent music lag;
+  video stays synchronized and Moonlight does not hiccup on the same desktop.
+  Read-only S23 logs show 60–70 ms queued PCM, up to eight pending packets, 15
+  underruns, six overflow packets and six observed audio gaps. No short writes or
+  decoder input waits in that session. Do not claim Preview 17 fixed audio.
+- Preview 18 work uses host capture timestamps and PRS clock conversion, rejects
+  audio older than 40 ms, flushes projected latency over 80 ms, and resets/reprimes
+  on real underruns. Five-ms restart fades and gap crossfades soften transitions;
+  full Opus PLC is not implemented. Android tests cover a real 180 ms starvation,
+  ten delayed packets and return to live audio. Both device tests pass; physical
+  S23 comparison is pending. No video or PC engine changes.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux

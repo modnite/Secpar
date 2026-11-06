@@ -140,11 +140,13 @@ class ReceiverTest {
     }
 
     @Test fun measuresRttFromProbeEcho() {
+        assertTrue(r.audioCaptureToLocalUs(50_000_000L) == null)
         r.step(1_000_000) // probe t=1_000_000
         val probe = sentOf(Prs.PROBE).last().second
         assertEquals(1_000_000L, ByteBuffer.wrap(probe).getLong(0))
         fromHost(Header(Prs.PROBE), ByteBuffer.allocate(16).putLong(50_000_000).putLong(1_000_000).array(), 1_030_000)
         assertEquals(1_030_000L - 15_000, r.hostToLocalUs(50_000_000L) + 0) // host 50 s == our 1.015 s
+        assertEquals(r.hostToLocalUs(50_000_000L), r.audioCaptureToLocalUs(50_000_000L))
         r.step(1_200_000)
         assertEquals("echoes the host's t", 50_000_000L, ByteBuffer.wrap(sentOf(Prs.PROBE).last().second).getLong(8))
     }

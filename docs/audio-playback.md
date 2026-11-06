@@ -36,3 +36,38 @@ Android MediaCodec Opus → AudioTrack test with a synthetic 10 ms stereo fixtur
 The device test feeds 300 packets in 20 ms batches and confirms all 144,000 expected
 sample frames are accepted. This does not prove rare physical S23 crackles are
 resolved. Synthetic audio belongs only to androidTest assets, never the release APK.
+
+
+## Preview 18: real-time recovery and transition smoothing
+
+The user reports Preview 17 hiccups cause permanent audio lag while video recovers;
+Moonlight on the same desktop does not have the fault. S23 logs show hardware video
+still active, audio underruns rising to 15, a 60–70 ms PCM queue, up to eight pending
+audio packets, six overflow packets and six observed audio packet gaps. Partial
+writes and decoder input waits remain zero in that session. Preserving delayed
+PCM alone was insufficient: capture timestamps were ignored and no recovery reset
+existed. Preview 17 is not considered a successful audio fix.
+
+Preview 18 carries the host capture timestamp through MediaCodec and converts it
+with the existing PRS clock synchronization. Before the clock handshake completes,
+it avoids using an invalid host/local offset. Audio older than 40 ms is discarded;
+projected capture-to-output queue delay above 80 ms flushes stale output. Actual
+AudioTrack underruns pause/flush/reprime rather than accumulating shifted playback.
+An incomplete nonblocking write has a deadline and retains accurate accepted-frame
+accounting. The Opus decoder continues consuming stale input so its decode state
+can recover without an unsafe asynchronous codec flush. Old/duplicate packet IDs
+are ignored. The priming buffer itself is checked for age, including silence gaps.
+
+Five-millisecond fades soften restart edges. A short crossfade from the previous
+stereo sample softens a detected sequence gap. These are transition smoothing, not
+full Opus packet-loss concealment, and cannot recreate missing music. Video and the
+PC host are unchanged.
+
+Five pure timing-policy cases cover starvation, late input, excessive output lag,
+underrun and an unsynchronized clock. Two PCM smoothing cases verify silence/previous
+sample boundaries, channel balance and untouched steady audio. Real Android tests
+cover normal complete sample acceptance and an actual 180 ms starvation followed
+by ten stale packets and resumed live input. Both pass: recovery occurs, delayed
+packets are rejected, and recent capture age is restored. Physical S23 success is
+still pending. The Android audio implementation is MediaCodec/AudioTrack; video
+logs independently confirm the Qualcomm low-latency HEVC hardware decoder.

@@ -36,7 +36,7 @@ class PrsPipeline(
     private val onDecoderFailed: () -> Unit,
     private val onEnded: () -> Unit,
 ) : Pipeline {
-    private val audio = AudioPlayer()
+    private val audio: AudioPlayer
     @Volatile private lateinit var decoder: VideoDecoder
     private val receiver: Receiver
     @Volatile private var closed = false
@@ -55,6 +55,7 @@ class PrsPipeline(
             }
         }
         receiver = Receiver(sock, Crypt(Base64.decode(ready.key, Base64.DEFAULT), ready.session.toInt()), listener)
+        audio = AudioPlayer(receiver::audioCaptureToLocalUs)
         decoder = newDecoder(ready)
         thread(name = "pcr-rx", priority = Thread.MAX_PRIORITY) { receiver.run() }
         if (relay != null) thread(name = "pcr-turn-start") {

@@ -60,6 +60,7 @@ class Receiver(
     private var peerT = 0L
     private var rttUs = 0L
     private var bestRttUs = Long.MAX_VALUE
+    @Volatile private var clockReady = false
     @Volatile private var offsetUs = 0L // host clock − our clock
     private var maxSeq = -1
     private var periodStartSeq = -1
@@ -117,6 +118,7 @@ class Receiver(
 
     /** Converts a host capture timestamp to our clock (PROBE-estimated offset). */
     fun hostToLocalUs(hostUs: Long) = hostUs - offsetUs
+    fun audioCaptureToLocalUs(hostUs: Long): Long? = if (clockReady) hostToLocalUs(hostUs) else null
 
     internal fun onPacket(buf: ByteArray, len: Int, nowUs: Long) {
         val (h, plain) = crypt.open(Crypt.HOST_TO_PHONE, buf, len) ?: run { invalidPackets++; return }
@@ -150,7 +152,7 @@ class Receiver(
                 val echo = b.getLong(8)
                 if (echo != 0L && nowUs - echo in 0..10_000_000) {
                     rttUs = nowUs - echo
-                    if (rttUs <= bestRttUs) { bestRttUs = rttUs; offsetUs = peerT + rttUs / 2 - nowUs }
+                    if (rttUs <= bestRttUs) { bestRttUs = rttUs; offsetUs = peerT + rttUs / 2 - nowUs; clockReady = true }
                 }
             }
             Prs.BYE -> listener.onBye()
