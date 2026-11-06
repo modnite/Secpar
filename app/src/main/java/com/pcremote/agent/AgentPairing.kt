@@ -8,14 +8,15 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 
 /** Adapts [AgentConnection.pair] to the onboarding model. The connection is closed afterwards. */
-suspend fun agentPair(scope: CoroutineScope, uri: PairUri, device: String, pin: String): Result<AgentPaired> {
+suspend fun agentPair(scope: CoroutineScope, uri: PairUri, device: String, pin: String, preferLan: Boolean = false): Result<AgentPaired> {
     val factory = WsFactory { host, port, fp, listener ->
         if (host == RELAY_HOST && uri.relayUrl != null) RelayWs.openUrl(uri.relayUrl, listener)
         else OkHttpWs.open(host, port, fp, listener)
     }
     // Fresh remote-capable QR codes try the relay first; old QR codes keep the direct path.
-    val hosts = listOfNotNull(uri.relayUrl?.let { RELAY_HOST }) + uri.hosts
-    val c = AgentConnection(hosts, uri.port, uri.fingerprint, scope, factory)
+    val relay = listOfNotNull(uri.relayUrl?.let { RELAY_HOST })
+    val hosts = if (preferLan) uri.hosts + relay else relay + uri.hosts
+    val c = AgentConnection(hosts, uri.port, uri.fingerprint, scope, factory, continueAfterPinMismatch = preferLan)
     try {
         val token = c.pair(uri.otp, device, pin).getOrElse {
             val reason = (c.state.value as? AgentState.Failed)?.reason ?: FailReason.UNREACHABLE

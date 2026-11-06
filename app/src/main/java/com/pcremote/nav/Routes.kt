@@ -8,6 +8,7 @@ object Routes {
     const val ONBOARDING = "onboarding"
     const val HOME = "home"
     const val SETTINGS = "settings"
+    const val ACCOUNT = "account"
     const val ARG_ID = "id"
 
     fun start(pcCount: Int, onboarded: Boolean) = if (pcCount == 0 && !onboarded) ONBOARDING else HOME

@@ -46,6 +46,13 @@ class AccountStore(private val kv: KeyValue, private val box: SecretBox, private
         return true
     }
 
+    /** Serialized local logout, including an expired saved session. */
+    @Synchronized
+    fun clearSavedSession() {
+        readSession()?.let { kv.put(ownedKey(it.user.id), null) }
+        kv.put(SESSION, null)
+    }
+
     @Synchronized
     fun owned(expected: AccountSession): List<OwnedAccess> {
         if (!matches(session(), expected)) return emptyList()

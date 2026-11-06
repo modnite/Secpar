@@ -196,7 +196,8 @@ class MainActivity : ComponentActivity() {
                         OnboardingScreen(pairing,
                             onDone = { pairing.reset(); finishOnboarding() },
                             onManual = ::manualPairing,
-                            onSkip = ::finishOnboarding)
+                            onSkip = ::finishOnboarding,
+                            onAccount = { nav.navigate(Routes.ACCOUNT) })
                     }
                     composable(Routes.modePattern(Mode.SCREEN)) { e ->
                         com.pcremote.stream2.StreamScreen(modeId(e), onBack = { nav.popBackStack() })
@@ -216,12 +217,26 @@ class MainActivity : ComponentActivity() {
                     composable(Routes.modePattern(Mode.FILES)) { e ->
                         com.pcremote.modes.FilesScreen(modeId(e), onBack = { nav.popBackStack() })
                     }
+                    composable(Routes.ACCOUNT) {
+                        com.pcremote.account.AccountScreen(com.pcremote.account.AccountRuntime.get(this@MainActivity).controller,
+                            onBack = { nav.popBackStack() }, onOpen = { id ->
+                                prefs.edit().putBoolean(PREF_ONBOARDED, true).apply()
+                                nav.navigate(Routes.HOME) { popUpTo(nav.graph.startDestinationId) { inclusive = true }; launchSingleTop = true }
+                                nav.navigate(Routes.mode(id, Mode.SCREEN))
+                            })
+                    }
                     composable(Routes.SETTINGS) {
                         com.pcremote.settings.SettingsScreen(settings, onBack = { nav.popBackStack() },
                             onThemeChanged = { themeTick++; if (settings.theme == com.pcremote.settings.ThemeChoice.LIGHT) recreate() })
                     }
                     composable(Routes.HOME) {
-                        LifecycleResumeEffect(Unit) { home.start(); onPauseOrDispose { home.stop() } }
+                        val account = com.pcremote.account.AccountRuntime.get(this@MainActivity).controller
+                        LifecycleResumeEffect(account) {
+                            val poll = lifecycleScope.launch { while (true) { account.refresh(); kotlinx.coroutines.delay(30_000) } }
+                            onPauseOrDispose { poll.cancel() }
+                        }
+                        val accountRevision by account.revision.collectAsState()
+                        LifecycleResumeEffect(accountRevision) { home.start(); onPauseOrDispose { home.stop() } }
                         val cards by home.cards.collectAsState()
                         val thumbs by home.thumbs.collectAsState()
                         val pairState by pairing.state.collectAsState()
@@ -242,6 +257,7 @@ class MainActivity : ComponentActivity() {
                             },
                             addPc = { scanQr(this@MainActivity, onUnavailable = ::manualPairing) { raw -> scope.launch { pairing.onScanned(raw) } } },
                             settings = { nav.navigate(Routes.SETTINGS) },
+                            account = { nav.navigate(Routes.ACCOUNT) },
                             refresh = { home.stop(); home.start() },
                             rename = { card, name -> home.rename(card.id, name) },
                             remove = { card -> home.remove(card) },

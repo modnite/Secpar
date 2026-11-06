@@ -451,3 +451,14 @@ This list is a work record, not a claim that the app family is complete.
   corrupt storage and encrypted-grant relocation. No existing streaming/input/audio
   sources changed. Not integrated into the UI or released; controller/home/session
   integration and an actual account-to-host test remain required.
+
+- Android account UI/controller/store integration implemented locally.252 JVM tests
+  pass, eight layout/input/PiP/video instrumented cases pass, and an actual pinned
+  TLS owner pairing/reconnect/sign-out between Android5556 and an isolated native
+  Windows test host passes. Backend responses in that bridge are scripted; no live
+  user account/auth claim. Two storage/lifecycle bugs from one bounded read-only
+  agent review fixed, plus explicit account credential routing beside manual pairs.
+  No audio/video engine changes, no installed-app updates or published artifacts.
+  Compact600x420 and360x640 screenshots saved with synthetic names. Additional
+  cancellation-generation/expiry fixes unit-tested after the instrumented gate;
+  final production APK still needs rebuilding and matching native account release.

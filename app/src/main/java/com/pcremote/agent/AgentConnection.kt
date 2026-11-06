@@ -110,6 +110,7 @@ class AgentConnection(
     private val fingerprint: String,
     private val scope: CoroutineScope,
     private val factory: WsFactory = OkHttpWs,
+    private val continueAfterPinMismatch: Boolean = false,
 ) {
     private val _state = MutableStateFlow<AgentState>(AgentState.Closed)
     val state: StateFlow<AgentState> = _state
@@ -156,7 +157,14 @@ class AgentConnection(
             }
             when (result) {
                 Open.OK -> { ws = s; connectedHost = h; return s }
-                Open.MISMATCH -> { session++; _state.value = AgentState.Failed(FailReason.CERT_MISMATCH); return null }
+                Open.MISMATCH -> {
+                    s.close()
+                    if (!continueAfterPinMismatch) {
+                        session++; _state.value = AgentState.Failed(FailReason.CERT_MISMATCH); return null
+                    }
+                    // No authentication is sent before pinned TLS opens. An overlapping LAN
+                    // address may belong to another machine; try the next pinned route safely.
+                }
                 Open.REFUSED -> s.close()
             }
         }
@@ -318,7 +326,7 @@ class AgentConnection(
 
     companion object {
         /** A connection to a paired PC: its LAN/public hosts, then the rendezvous relay. */
-        fun forPc(pc: PairedPc, scope: CoroutineScope) = AgentConnection(pc.allHosts, pc.port, pc.fingerprint, scope, RoutingWs(pc.relay))
+        fun forPc(pc: PairedPc, scope: CoroutineScope) = AgentConnection(pc.allHosts, pc.port, pc.fingerprint, scope, RoutingWs(pc.relay), continueAfterPinMismatch = pc.accountOwner != null)
 
         private val BACKOFF_MS = longArrayOf(1_000, 2_000, 5_000, 10_000)
         private const val PING_MS = 10_000L

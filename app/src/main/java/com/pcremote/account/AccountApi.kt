@@ -91,7 +91,19 @@ sealed interface OwnerPairPoll {
     }
 }
 
-class AccountApi(sessionToken: String? = null, private val transport: AccountTransport = OkHttpAccountTransport()) {
+/** One instance belongs to one login generation; never reuse it across sign-in/sign-out. */
+interface AccountService {
+    suspend fun beginSignIn(name: String): DeviceSignIn
+    suspend fun pollSignIn(deviceCode: String): SignInPoll
+    suspend fun me(): AccountUser
+    suspend fun computers(): List<OwnedComputer>
+    suspend fun beginOwnerPair(computerId: String, deviceName: String): OwnerPairPending
+    suspend fun pollOwnerPair(requestId: String): OwnerPairPoll
+    suspend fun cancelOwnerPair(requestId: String)
+    suspend fun logout()
+}
+
+class AccountApi(sessionToken: String? = null, private val transport: AccountTransport = OkHttpAccountTransport()) : AccountService {
     @Volatile private var bearer: String? = null
     init { setSession(sessionToken) }
     fun setSession(token: String?) {
@@ -99,7 +111,7 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         bearer = token
     }
 
-    suspend fun beginSignIn(name: String): DeviceSignIn {
+    override suspend fun beginSignIn(name: String): DeviceSignIn {
         inputName(name, 60)
         val o = call("POST", "/auth/device", obj("name" to name), authenticated = false).objectValue()
         val code = o.text("user_code")
@@ -111,7 +123,7 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         return DeviceSignIn(secret, code, uri, expiry, interval)
     }
 
-    suspend fun pollSignIn(deviceCode: String): SignInPoll {
+    override suspend fun pollSignIn(deviceCode: String): SignInPoll {
         argument(HEX64.matches(deviceCode))
         val o = try { call("POST", "/auth/device/token", obj("device_code" to deviceCode), authenticated = false).objectValue() }
         catch (e: AccountException) { return when (e.kind) {
@@ -126,12 +138,12 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         return SignInPoll.Authorized(token, expires)
     }
 
-    suspend fun me(): AccountUser {
+    override suspend fun me(): AccountUser {
         val o = call("GET", "/v1/me").objectValue()
         return AccountUser(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) })
     }
 
-    suspend fun computers(): List<OwnedComputer> {
+    override suspend fun computers(): List<OwnedComputer> {
         val rows = call("GET", "/v1/computers") as? JsonArray ?: invalid()
         valid(rows.size <= 256)
         return rows.map { row ->
@@ -146,14 +158,14 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         }
     }
 
-    suspend fun beginOwnerPair(computerId: String, deviceName: String): OwnerPairPending {
+    override suspend fun beginOwnerPair(computerId: String, deviceName: String): OwnerPairPending {
         pathId(computerId); inputName(deviceName, 80)
         val o = call("POST", "/v1/owner-pairings", obj("computer" to computerId, "device" to deviceName)).objectValue()
         valid(o.text("state") == "pending")
         return OwnerPairPending(o.text("id").also { valid(UUID.matches(it)) }, o.positive("expires"))
     }
 
-    suspend fun pollOwnerPair(requestId: String): OwnerPairPoll {
+    override suspend fun pollOwnerPair(requestId: String): OwnerPairPoll {
         pathId(requestId)
         val o = call("GET", "/v1/owner-pairings/$requestId").objectValue()
         valid(o.text("id") == requestId)
@@ -164,13 +176,13 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         return OwnerPairPoll.Ready(pair, fp, expires)
     }
 
-    suspend fun cancelOwnerPair(requestId: String) {
+    override suspend fun cancelOwnerPair(requestId: String) {
         pathId(requestId)
         valid(call("DELETE", "/v1/owner-pairings/$requestId").objectValue()["cancelled"] == JsonPrimitive(true))
     }
 
     /** Clears the in-memory bearer even if server revocation cannot be reached. */
-    suspend fun logout() {
+    override suspend fun logout() {
         try { if (bearer != null) call("POST", "/auth/logout", obj()) }
         finally { bearer = null }
     }

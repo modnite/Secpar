@@ -38,7 +38,7 @@ fun scanQr(ctx: android.content.Context, onUnavailable: () -> Unit = {}, onResul
 }
 
 @Composable
-fun OnboardingScreen(model: PairingModel, onDone: (String) -> Unit, onManual: () -> Unit, onSkip: () -> Unit) {
+fun OnboardingScreen(model: PairingModel, onDone: (String) -> Unit, onManual: () -> Unit, onSkip: () -> Unit, onAccount: () -> Unit = {}) {
     val c = LocalMidnight.current
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -52,7 +52,8 @@ fun OnboardingScreen(model: PairingModel, onDone: (String) -> Unit, onManual: ()
     Box(Modifier.fillMaxSize().background(c.bg)) {
         Aurora()
         Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(onClick = onAccount) { Text("Sign in") }
                 TextButton(onClick = onSkip) { Text(stringResource(R.string.pcr_ob_skip), color = c.textDim) }
             }
             HorizontalPager(pager, Modifier.weight(1f)) { page ->

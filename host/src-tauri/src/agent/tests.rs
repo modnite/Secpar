@@ -275,6 +275,41 @@ async fn concurrent_account_pairs_are_independent_and_unlink_preserves_manual_ac
     assert_eq!(store.auth(&token_a),Err("revoked")); assert_eq!(store.auth(&token_b),Err("revoked"));
 }
 
+/// Local Android integration fixture; never touches the installed host, display or input.
+#[tokio::test]
+#[ignore = "requires the explicitly started Android account bridge instrumented test"]
+async fn android_owner_pairing_fixture() {
+    use std::io::Write;
+    let path = std::path::PathBuf::from(std::env::var("SECPAR_ANDROID_OWNER_FIXTURE").expect("fixture output path required"));
+    assert!(path.is_absolute() && path.parent().unwrap().is_dir());
+    let done = path.with_extension("done");
+    assert!(!done.exists(), "Use a fresh fixture output path");
+    struct Cleanup(std::path::PathBuf, std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); let _ = std::fs::remove_file(&self.1); }
+    }
+    let r = rig("android-account-bridge", Duration::from_secs(60)).await;
+    let owner = "11111111-1111-4111-8111-111111111111";
+    let otp = {
+        let mut store = r.store.lock().unwrap();
+        store.set_account_owner(Some(owner.into()));
+        store.owner_otp("33333333-3333-4333-8333-333333333333", owner).unwrap()
+    };
+    let link = format!("secpar://pair?n=Review%20PC&h=10.0.2.2&p={}&fp={}&t={otp}&pc=pc", r.handle.addr.port(), r.fp);
+    let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    let _cleanup = Cleanup(path.clone(), done.clone());
+    output.write_all(json!({"link":link,"certificate_fp":r.fp}).to_string().as_bytes()).unwrap();
+    drop(output);
+    let deadline = std::time::Instant::now() + Duration::from_secs(110);
+    while !done.exists() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(done.exists(), "Android bridge did not report completion");
+    let mut store = r.store.lock().unwrap();
+    assert_eq!(store.devices().len(), 1);
+    assert_eq!(store.set_account_owner(None).len(), 1, "The Android credential must carry owner provenance");
+}
+
 #[tokio::test]
 async fn idle_timeout_closes() {
     let r = rig("idle", Duration::from_millis(300)).await;

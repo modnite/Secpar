@@ -35,6 +35,8 @@ class HomeController(private val ctx: Context, private val scope: CoroutineScope
     val thumbs: StateFlow<Map<String, ImageBitmap>> = _thumbs
     private val conns = mutableMapOf<String, AgentConnection>()
     private val jobs = mutableListOf<Job>()
+    private var active = false
+    private var generation = 0L
 
     val cards: StateFlow<List<PcCardUi>> = combine(paired, live, streaming, locked) { agents, l, s, lk ->
         HomeModel.cards(agents, l, s, lk)
@@ -55,10 +57,14 @@ class HomeController(private val ctx: Context, private val scope: CoroutineScope
     }
 
     fun start() {
+        if (active) return
+        active = true
+        val epoch = ++generation
         lan.start()
         // Keystore decryption happens off the main thread
         scope.launch {
             val pcs = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { store.all() }
+            if (!active || generation != epoch) return@launch
             paired.value = pcs
             for (pc in pcs) if (pc.id !in conns) open(pc)
         }
@@ -102,6 +108,8 @@ class HomeController(private val ctx: Context, private val scope: CoroutineScope
     }
 
     fun stop() {
+        active = false
+        generation++
         lan.stop()
         jobs.forEach { it.cancel() }; jobs.clear()
         conns.values.forEach { it.close() }; conns.clear()

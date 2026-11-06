@@ -77,6 +77,7 @@ class HomeActions(
     val remove: (PcCardUi) -> Unit,
     val send: (PcCardUi, com.pcremote.agent.Msg) -> Unit = { _, _ -> },
     val connection: (PcCardUi) -> AgentConnection? = { null },
+    val account: () -> Unit = {},
 )
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -93,6 +94,8 @@ fun HomeScreen(cards: List<PcCardUi>, thumbs: Map<String, ImageBitmap>, implemen
             Row(Modifier.fillMaxWidth().padding(20.dp, 12.dp, 16.dp, 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 SecparWordmark(Modifier.width(142.dp).height(34.dp))
                 Spacer(Modifier.weight(1f))
+                GlassIconButton(Icons.Rounded.AccountCircle, "Account", a.account)
+                Spacer(Modifier.width(4.dp))
                 GlassIconButton(Icons.Rounded.Add, stringResource(R.string.pcr_add_pc), a.addPc)
                 Spacer(Modifier.width(10.dp))
                 GlassIconButton(Icons.Rounded.Settings, stringResource(R.string.pcr_settings), a.settings)

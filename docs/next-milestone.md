@@ -2,6 +2,34 @@
 
 ## CURRENT: supersedes historical statuses below
 
+- Android account integration IMPLEMENTED on main, not yet published: browser device
+  sign-in, owned-computer list, automatic bootstrap on Connect, encrypted per-account
+  access overlay beside manual PcStore, explicit owned navigation routes (a stale
+  manual pairing cannot mask new account access), LAN-first pinned TLS for owned
+  pairing/reconnect, cancellation/expiry/logout isolation and cached-session cleanup.
+  In-memory owner gate hides access immediately; a second revision follows durable
+  removal. Main-thread controller uses separate AccountApi per login generation.
+  AccountScreen cancels pairing/navigation on Back, pause and disposal.
+- Validation:252 Android JVM tests pass. Earlier latest production-code APK passed
+  eight emulator layout/input/PiP/video gates; actual Android -> isolated Windows
+  native-host owner-pair TLS/reconnect/logout passed, including old manual duplicate
+  and host-side account provenance check. Account service in that bridge is SCRIPTED,
+  not a live account sign-in. Final added connection-attempt generation/expiry timer
+  have JVM gates; rebuild final APK before release. Native fixture is ignored by
+  default and requires explicit SECPAR_ANDROID_OWNER_FIXTURE; deletes its OTP file.
+- Synthetic account screenshots reviewed at600x420 and360x640, all three entries fit:
+  outputs/ui-review/account-computers-{600x420,360x640}.png. Capture fixture now waits
+  for actual Compose draw then presentation; old two-frame-only phone capture was
+  stale and replaced. Debug package is com.pcremote.app.debug; instrumentation uses
+  com.pcremote.app.debug.test.5556 is our emulator;5554 and physical S23 untouched.
+  Physical S23 is visible via adb again, but do not install/debug builds onto it.
+- Next release must include matching desktop/host account foundation. Installed
+  Windows3.7 cannot yet serve automatic owner bootstrap; do not ship Android alone
+  as finished account access. Desktop initial pairing still relay-first; add a
+  separate LAN-first owned route without altering the approved manual stream path.
+  Host engine and desktop audio source match v3.7 exactly. Main release validation,
+  native builds and live user account sign-in remain before claiming release ready.
+
 - User requested a parallel Claude handoff. Prepared sibling worktree
   ../secpar-claude-macos on claude/macos-host at f2cb44e and sibling file
   ../secpar-claude-handoff.md. User launches Claude separately; not running yet.

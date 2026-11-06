@@ -17,6 +17,7 @@ private class FakeWs(
     private val reply: (Msg) -> List<Msg>,
 ) : WsFactory {
     val opened = mutableListOf<String>()
+    val sockets = mutableListOf<FakeSocket>()
     var live: FakeSocket? = null
     var slow: FakeSocket? = null
 
@@ -38,6 +39,7 @@ private class FakeWs(
     override fun open(host: String, port: Int, fingerprint: String, listener: WsListener): Ws {
         opened += host
         val s = FakeSocket(listener)
+        sockets += s
         when (behaviour[host]) {
             "ok" -> { live = s; listener.onOpen() }
             "slow" -> slow = s // opens only when the test says so
@@ -89,6 +91,18 @@ class AgentConnectionTest {
         val c = conn(f)
         c.hello("good", "Pixel")
         assertEquals(AgentState.Online(pc, setOf("input")), c.state.value)
+    }
+
+    @Test fun ownedRouteSkipsUnrelatedLanCertificateWithoutSendingCredentials() = runTest {
+        val f = FakeWs(mapOf("h1" to "mismatch", "h2" to "ok"), server)
+        val c = AgentConnection(listOf("h1", "h2"), 47999, fp, backgroundScope, f, continueAfterPinMismatch = true)
+        c.hello("good", "Review Android")
+        assertEquals(listOf("h1", "h2"), f.opened)
+        assertTrue(f.sockets.first().sent.isEmpty())
+        assertEquals(AgentState.Online(pc, setOf("input")), c.state.value)
+        f.sockets.first().deliverClose()
+        assertEquals(AgentState.Online(pc, setOf("input")), c.state.value)
+        c.close()
     }
 
     @Test fun revokedErrorGoesFailedRevoked() = runTest {

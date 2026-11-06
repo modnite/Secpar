@@ -46,13 +46,15 @@ class AgentSession(val pc: PairedPc, val conn: AgentConnection) {
 fun rememberAgentSession(pcId: String): AgentSession? {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val pc = remember(pcId) { PcStore.get(ctx).all().firstOrNull { it.id == pcId } } ?: return null
-    val session = remember(pcId) { AgentSession(pc, AgentConnection.forPc(pc, scope)) }
+    val accountRevision by com.pcremote.account.AccountRuntime.get(ctx).controller.revision.collectAsState()
+    val pc = remember(pcId, accountRevision) { PcStore.get(ctx).find(pcId) } ?: return null
+    // Ordinary account refreshes must not restart an existing manual stream.
+    val session = remember(pcId, pc.accountOwner, pc.token, pc.fingerprint) { AgentSession(pc, AgentConnection.forPc(pc, scope)) }
     DisposableEffect(session) {
-        scope.launch { session.conn.hello(pc.token, Build.MODEL) }
+        val hello = scope.launch { session.conn.hello(pc.token, Build.MODEL) }
         // PC → phone files are received in the background, whichever screen is open
-        scope.launch { session.conn.incoming.collect { if (it is Msg.FileOffer) com.pcremote.modes.TransferHub.get(ctx, pcId).offer(it) } }
-        onDispose { session.conn.close() }
+        val incoming = scope.launch { session.conn.incoming.collect { if (it is Msg.FileOffer) com.pcremote.modes.TransferHub.get(ctx, pcId).offer(it) } }
+        onDispose { hello.cancel(); incoming.cancel(); session.conn.close() }
     }
     return session
 }
