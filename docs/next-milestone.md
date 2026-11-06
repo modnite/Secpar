@@ -1,4 +1,4 @@
-# Active Secpar work — 2026-11-06
+# Active Secpar work â€” 2026-11-06
 
 Keep working, solo. User wants completed releases, check-ins and actual screenshots.
 Never lose the broader Windows/Linux/macOS host+client scope; Android client only.
@@ -7,7 +7,7 @@ Never lose the broader Windows/Linux/macOS host+client scope; Android client onl
 
 - 3.6.0 is published at https://github.com/modnite/Secpar/releases/tag/v3.6.0.
   Source tag is commit 23dd11f on fix/shared-capture in adjacent worktree
-  ../secpar-stream-fix. Main contains uncommitted account work; don't build its
+  ../secpar-stream-fix. Main contains committed but unreleased account work; don't build its
   current Windows tree as a release or overwrite it with the release worktree.
 - Windows installer and Android APK staged in D:/Secpar-CI/publish-3.6.0 alongside
   the Linux AppImage and checksums. Lean optimized binaries; APK same certificate,
@@ -22,12 +22,13 @@ Never lose the broader Windows/Linux/macOS host+client scope; Android client onl
   hardware test now passes three streams, fourth refused, replacement after a
   disconnect, capture stops after last viewer. Do not claim physical multiplayer
   validation or desktop gamepad forwarding is finished.
-- Windows 3.6.0 installation launched with RunAs /S, exec session 28826. Still
-  waiting at OS UAC as last checked; installed UI version 3.5.0, service running.
-  Poll/read back installed host/UI 3.6.0 before claiming installed. User explicitly
+- Windows 3.6.0 installation completed with exit 0; installed UI and host both
+  read back as 3.6.0. User confirms simultaneous physical streams now connect.
+  PERFORMANCE FAILED on Android and Linux even with one viewer; audio recovery
+  still fails. UI is better. Linux branding also aliases badly when downscaled. User explicitly
   authorized updating/running Windows releases; do not ask permission again.
   Only Secpar may restart; preserve independent PC Remote/Sunshine.
-- 3.6 UI: default 540×400, version by logo, Client settings tab for resolution,
+- 3.6 UI: default 540Ã—400, version by logo, Client settings tab for resolution,
   FPS, bitrate, audio and capture shortcut; Ctrl+Alt+G default plus alternatives.
   Legacy Ctrl+F12 remains an unadvertised fallback. Android defaults Ctrl+Alt+G,
   explicit saved choices retained, Moonlight shortcut still accepted. Hosting
@@ -36,7 +37,7 @@ Never lose the broader Windows/Linux/macOS host+client scope; Android client onl
   Screenshots outputs/ui-review/client-settings-540.png, hosting-settings-540.png.
 - Release installer extracted to D:/Secpar-CI/release-verify-3.6.0; UI exact match
   to worktree unified exe. Host differs from target only expected three-byte
-  Tauri UNK→NSS marker. No .debug sections, debug/review/PDB payloads. PE CodeView
+  Tauri UNKâ†’NSS marker. No .debug sections, debug/review/PDB payloads. PE CodeView
   directory may exist even in optimized stripped MSVC output; don't mistake that
   external reference metadata for a debug build.
 - Linux release built on OMV in /tmp/secpar-core.JBPqA6/repo with release-worktree
@@ -120,8 +121,8 @@ Never lose the broader Windows/Linux/macOS host+client scope; Android client onl
   stale tabs. Website screenshots outputs/ui-review/secpar-site-short-copy.jpg
   and -mobile.jpg (mobile shot before final font-size change; refresh it).
 - C: filled mid-build. Relocated ONLY own build directories to D:, with junctions:
-  host/src-tauri/target → D:/Secpar-CI/archived-original-host-target;
-  app/build → D:/Secpar-CI/android-app-build. C: recovered ~10 GB. Zero-byte new
+  host/src-tauri/target â†’ D:/Secpar-CI/archived-original-host-target;
+  app/build â†’ D:/Secpar-CI/android-app-build. C: recovered ~10 GB. Zero-byte new
   account.rs and tracked core Cargo.lock were recovered before continuing.
   Keep builds/cache on D:, CARGO_INCREMENTAL=0, TEMP/TMP=D:/Secpar-CI/secpar-build-temp.
 - Kotlin incremental cache became stale after relocation. A full nonincremental

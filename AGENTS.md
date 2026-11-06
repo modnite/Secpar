@@ -96,3 +96,11 @@ is poor during playback; current desktop software OpenH264 decoder is a clear
 limitation. Add real hardware decoding with capability-based client choices and
 verify on the user's ThinkPad X250/CachyOS KDE Wayland. Detect actual hardware and
 driver support; do not pretend a decoder is accelerated because a plugin exists.
+
+Latest validation: Windows 3.6.0 is installed (UI and service). User confirms two
+physical clients can stream concurrently and the UI is better. Performance is a
+regression on BOTH Android and Linux even with only ONE stream connected. Audio
+recovery still fails; do not call it fixed. Prioritize shared host regression and
+real audio recovery, then Linux decoder acceleration. Linux wordmark/logo look
+jagged: fix high-quality physical-pixel downsampling while retaining approved art.
+Additional prompts accumulate; never drop previous scope due to steering.
