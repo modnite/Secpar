@@ -1,5 +1,11 @@
 //! macOS bindings. Compiled on macOS only; not exercised by any non-Mac check.
-use crate::platform::{Permission, Permissions, Platform, Sink, StreamHandle, StreamRequest};
+use crate::{
+    backend::local_addresses,
+    media::{AudioSource, InputSink, MediaStream, Sources},
+    native_input::MacInput,
+    native_media::Capture,
+    platform::{Permission, Permissions, Platform, Sink, StreamHandle, StreamRequest},
+};
 use secpar_host_core::{account::CredentialStorage, agent::BoxFut, limits::StreamPermit, proto::ServerMsg, Display};
 use std::sync::Arc;
 
@@ -119,8 +125,8 @@ impl CredentialStorage for KeychainStorage {
     }
 }
 
-/// Real permissions and displays. Capture, encoding and input are NOT implemented yet,
-/// so starting a stream fails with an honest message instead of pretending to stream.
+/// Real permissions, displays, ScreenCaptureKit capture, VideoToolbox H.264, system audio
+/// and CGEvent input. H.264 only: a request without "h264" is refused, not silently changed.
 pub struct MacPlatform;
 impl Platform for MacPlatform {
     fn machine_name(&self) -> String {
@@ -137,10 +143,31 @@ impl Platform for MacPlatform {
     }
     fn start_stream(
         &self,
-        _: StreamRequest,
-        _: Arc<dyn Sink>,
-        _: StreamPermit,
+        request: StreamRequest,
+        sink: Arc<dyn Sink>,
+        guard: StreamPermit,
     ) -> BoxFut<Result<(Box<dyn StreamHandle>, ServerMsg), String>> {
-        Box::pin(async { Err("Screen capture and encoding are not available in this Secpar build yet".to_string()) })
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                if !request.codecs.iter().any(|c| c == "h264") {
+                    return Err("This Mac host streams H.264; the device did not offer it".to_string());
+                }
+                let shown = displays();
+                let display = shown.iter().find(|d| d.primary).or(shown.first()).cloned().ok_or("No display is available")?;
+                let id: u32 = display.id.parse().map_err(|_| "Invalid display")?;
+                let (capture, audio) = Capture::start(id, (request.width, request.height), request.fps, request.kbps, request.audio)?;
+                let input: Option<Box<dyn InputSink>> = request.input_allowed.then(|| Box::new(MacInput::new(display.rect)) as Box<dyn InputSink>);
+                let sources = Sources {
+                    video: Box::new(capture),
+                    audio: audio.map(|a| Box::new(a) as Box<dyn AudioSource>),
+                    input,
+                    display,
+                };
+                let (stream, ready) = MediaStream::start(sources, request.candidates, local_addresses(), sink, guard)?;
+                Ok((Box::new(stream) as Box<dyn StreamHandle>, ready))
+            })
+            .await
+            .map_err(|_| "Video initialization failed".to_string())?
+        })
     }
 }

@@ -1,7 +1,9 @@
 //! Native macOS hosting engine for the one Secpar desktop app.
 //! The control, admission and session logic is platform neutral and tested anywhere;
 //! only `native` talks to macOS and it is compiled on macOS alone.
+pub mod annexb;
 pub mod backend;
+pub mod convert;
 pub mod keymap;
 pub mod media;
 pub mod platform;
@@ -9,6 +11,10 @@ pub mod session;
 
 #[cfg(target_os = "macos")]
 pub mod native;
+#[cfg(target_os = "macos")]
+mod native_input;
+#[cfg(target_os = "macos")]
+mod native_media;
 
 /// Per-user private data directory (`~/Library/Application Support/secpar`).
 pub fn config_directory(home: Option<std::ffi::OsString>) -> Result<std::path::PathBuf, String> {

@@ -18,6 +18,8 @@ url = "2"
 get_if_addrs = "0.5.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = { version = "11.1.2", features = ["macos_13_0"] }
+core-foundation = "0.10"
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "crypto-rust"] }
 
 [dev-dependencies]
