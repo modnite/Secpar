@@ -16,6 +16,9 @@ on:
       - 'docs/prs-vectors.json'
       - '.github/workflows/portable-stream.yml'
   workflow_dispatch:
+concurrency:
+  group: secpar-platform-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:

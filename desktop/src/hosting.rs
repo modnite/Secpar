@@ -230,12 +230,15 @@ impl Panel {
             ui.colored_label(Color32::from_rgb(255, 170, 120), &self.error);
         }
         ui.add_space(10.);
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.settings_open, false, "Paired devices");
-            if cfg!(windows) { ui.selectable_value(&mut self.settings_open, true, "Settings"); }
-        });
         if cfg!(target_os = "linux") {
-            ui.label(egui::RichText::new("Local network hosting. Choose a screen and allow control in the desktop sharing dialog.").small().color(design::MUTED));
+            ui.label(egui::RichText::new("Local network hosting").color(design::MUTED));
+            ui.add_space(6.);
+            ui.label("Paired devices");
+        } else {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.settings_open, false, "Paired devices");
+                ui.selectable_value(&mut self.settings_open, true, "Settings");
+            });
         }
         ui.add_space(6.);
         egui::ScrollArea::vertical().show(ui, |ui| {
