@@ -155,12 +155,13 @@ class ReceiverTest {
         fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(50_000_000).putLong(1_000_000).array(),1_010_000)
         assertEquals(1_005_000L,r.audioCaptureToLocalUs(50_000_000))
         // The old lifetime minimum rejected this forever, making fresh audio
-        // appear 195 ms late after a changed clock/path until reconnection.
-        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(60_200_000).putLong(11_000_000).array(),11_020_000)
-        assertEquals(11_010_000L,r.audioCaptureToLocalUs(60_200_000))
+        // appear 205 ms late after a changed clock/path until reconnection.
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(59_800_000).putLong(11_000_000).array(),11_020_000)
+        assertEquals(11_010_000L,r.audioCaptureToLocalUs(59_800_000))
+        assertTrue(!AudioPlayout.decide(r.audioCaptureToLocalUs(59_800_000),11_020_000,0,false).discard)
         // Preserve the best recent sample instead of following every slow echo.
-        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(60_210_000).putLong(11_030_000).array(),11_080_000)
-        assertEquals(11_010_000L,r.audioCaptureToLocalUs(60_200_000))
+        fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(59_810_000).putLong(11_030_000).array(),11_080_000)
+        assertEquals(11_010_000L,r.audioCaptureToLocalUs(59_800_000))
     }
 
     @Test fun keepsProbingAfterAddressChange() {
