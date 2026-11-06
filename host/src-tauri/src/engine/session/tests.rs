@@ -5,6 +5,49 @@ use std::sync::mpsc;
 
 const KEY: [u8; 32] = [7; 32];
 
+/// Exercises actual concurrent capture/encoding, rather than only the slot counter.
+#[test]
+#[ignore = "Requires an unlocked Windows desktop and hardware encoders; run explicitly"]
+fn concurrent_hardware_streams_deliver_independent_video() {
+    fn start(codecs: Vec<String>) -> (StreamSession, Arc<AtomicBool>, std::thread::JoinHandle<u32>) {
+        let params=Params{w:640,h:360,fps:30,codecs,max_kbps:3000,audio:false,cands:vec![],public:None,display:String::new()};
+        let (ready,session)=StreamSession::start(params,IpAddr::from([127,0,0,1]),Arc::new(|_|{}),Box::new(|_|{})).expect("Concurrent hardware stream must start");
+        let ServerMsg::StreamReady{port,session:sid,key,codec,..}=ready else {panic!("Missing stream readiness")};
+        eprintln!("Concurrent hardware stream opened: {codec}");
+        let key:[u8;32]=STANDARD.decode(key).unwrap().try_into().unwrap();
+        let mut peer=Phone::new(&key,sid); peer.sock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        let stop=Arc::new(AtomicBool::new(false)); let done=stop.clone();
+        let worker=std::thread::spawn(move || {
+            let address=SocketAddr::from(([127,0,0,1],port)); let mut packets=0; let mut probe=Instant::now()-Duration::from_secs(1);
+            while !done.load(Ordering::Relaxed) {
+                if probe.elapsed()>Duration::from_millis(200) {peer.probe(address,1);probe=Instant::now();}
+                if let Some((header,_))=peer.recv() {if header.typ==Type::Video {packets+=1;}}
+            }
+            packets
+        });
+        (session,stop,worker)
+    }
+    let (first,stop_first,read_first)=start(vec!["av1".into(),"hevc".into(),"h264".into()]);
+    let (second,stop_second,read_second)=start(vec!["h264".into()]);
+    let (third,stop_third,read_third)=start(vec!["h264".into()]);
+    assert_eq!(SharedCapture::active_source_count(),1,"All viewers share one monitor capture");
+    let overflow=Params{w:640,h:360,fps:30,codecs:vec!["h264".into()],max_kbps:3000,audio:false,cands:vec![],public:None,display:String::new()};
+    assert!(matches!(StreamSession::start(overflow,IpAddr::from([127,0,0,1]),Arc::new(|_|{}),Box::new(|_|{})),Err(ServerMsg::StreamError{code,..}) if code=="connection_limit"));
+    std::thread::sleep(Duration::from_secs(1));
+    stop_first.store(true,Ordering::Relaxed); let first_packets=read_first.join().unwrap(); drop(first);
+    let (replacement,stop_replacement,read_replacement)=start(vec!["h264".into()]);
+    std::thread::sleep(Duration::from_millis(300));
+    stop_second.store(true,Ordering::Relaxed); let second_packets=read_second.join().unwrap(); drop(second);
+    stop_third.store(true,Ordering::Relaxed); let third_packets=read_third.join().unwrap(); drop(third);
+    stop_replacement.store(true,Ordering::Relaxed); let replacement_packets=read_replacement.join().unwrap(); drop(replacement);
+    assert!(first_packets>0,"First session received no video");
+    assert!(second_packets>0,"Second session received no video");
+    assert!(third_packets>0,"Third session received no video");
+    assert!(replacement_packets>0,"Replacement session received no video");
+    assert_eq!(SharedCapture::active_source_count(),0,"Capture stops after the last viewer leaves");
+    eprintln!("Independent video packets received: {first_packets}, {second_packets}, {third_packets}; replacement {replacement_packets}");
+}
+
 struct Phone {
     sock: UdpSocket,
     crypt: Crypt,

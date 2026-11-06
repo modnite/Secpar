@@ -2,7 +2,7 @@
 //! input, REPORT-driven bitrate and the 5 s timeout. Dropping it ends everything.
 
 use super::bitrate::{notch_size, notches_below, Bitrate, Target};
-use super::capture::{self, Capture, Dxgi};
+use super::capture::{self, SharedCapture};
 use super::convert::{fit, Convert};
 use super::encode::{codec_name, codecs_available, parse_codec, Encoder};
 use super::input::Dedup;
@@ -16,7 +16,7 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+
 
 pub const TIMEOUT: Duration = Duration::from_secs(5);
 const IDR_EVERY: Duration = Duration::from_millis(250);
@@ -364,7 +364,7 @@ struct Video {
     dev: windows::Win32::Graphics::Direct3D11::ID3D11Device,
     ctx: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     luid: i64,
-    cap: Capture<Dxgi>,
+    cap: SharedCapture,
     enc: Encoder,
     /// Stream size at notch 0.
     base: (u32, u32),
@@ -378,9 +378,8 @@ impl Video {
     fn open(p: &Params, kbps: u32) -> Result<Video, ServerMsg> {
         let err = |code: &str, msg: &str| ServerMsg::StreamError { code: code.into(), msg: msg.into() };
         crate::win::desk::wake_display(); // a display asleep from inactivity has nothing to capture
-        let (dev, ctx, out, luid) = capture::device(&p.display).ok_or_else(|| err("capture_failed", "no display to capture"))?;
-        let shown = capture::describe(&out).ok_or_else(|| err("capture_failed", "no display to capture"))?;
-        let first = Dxgi::open(&dev, &ctx, &out).ok_or_else(|| err("capture_failed", "the desktop can't be captured right now (locked?)"))?;
+        let cap = SharedCapture::open(&p.display).ok_or_else(|| err("capture_failed", "the desktop can't be captured right now (locked?)"))?;
+        let (dev, ctx, luid, shown) = cap.device();
         let avail = codecs_available(luid);
         let codec = p
             .codecs
@@ -388,12 +387,9 @@ impl Video {
             .filter_map(|c| parse_codec(c))
             .find(|c| avail.contains(c))
             .ok_or_else(|| err("no_encoder", "this PC's GPU can't encode any codec the phone decodes"))?;
-        use capture::Duplicator as _;
-        let base = fit(first.size(), (p.w, p.h));
+        let base = fit(cap.size().unwrap_or((1,1)), (p.w, p.h));
         let fps = p.fps.clamp(1, 240);
         let enc = Encoder::new(&dev, luid, codec, base, fps, kbps).map_err(|e| err("no_encoder", &e.message()))?;
-        let (d, c) = (dev.clone(), ctx.clone());
-        let cap = Capture::new(Some(first), move || Dxgi::open(&d, &c, &out));
         Ok(Video { dev, ctx, luid, cap, enc, base, fps, shown })
     }
 
@@ -409,7 +405,7 @@ impl Video {
         // Token bucket: at most `fps` frames per second on average, bursts of 2. A fixed frame
         // clock would beat against the display's own refresh and hold frames up to a frame.
         let (mut tokens, mut refill) = (2.0f64, Instant::now());
-        let mut img: Option<ID3D11Texture2D> = None;
+        let mut img: Option<Arc<capture::FrameTexture>> = None;
         let mut conv: Option<Convert> = None;
         let (mut frame_id, mut cap_us) = (0u32, 0u64);
         let mut applied = *sh.target.lock().unwrap();
@@ -511,7 +507,7 @@ impl Video {
 }
 
 /// The next capture event, or None at `until`.
-fn poll(cap: &mut Capture<Dxgi>, until: Instant, sh: &Shared) -> Option<capture::GpuFrame> {
+fn poll(cap: &mut SharedCapture, until: Instant, sh: &Shared) -> Option<capture::GpuFrame> {
     loop {
         let f = cap.next(Duration::ZERO);
         if f.is_some() || Instant::now() >= until || sh.stopped() {

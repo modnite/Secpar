@@ -21,7 +21,8 @@ installed PC Remote/Secpar services to validate a development build. Keep the
 original project's installations and identities separate.
 
 Use the approved mint/orange triangle and Secpar wordmark. Desktop app icons must
-use the triangle on transparency; Android icons use white with safe padding.
+use the triangle on transparency; Android icons use BLACK with safe padding
+(latest user correction on 2026-11-06 overrides the earlier white background).
 Keep the approved geometry and colours when resizing. Never include QR
 pairing credentials, account tokens, private keys or personal data in screenshots.
 
@@ -79,3 +80,19 @@ report the connection limit when all three slots are occupied. Keep per-client
 controllers and sessions independent. Linux client launch/sign-in/streaming to
 Windows were confirmed working by the user after the 3.4 launch fix; native Linux
 hosting and multiplayer still need real device validation.
+
+Latest user corrections, 2026-11-06: 3.5.0 still refuses a second stream with the
+misleading locked-screen/capture error, in either phone/laptop connection order.
+Reproduced with real hardware streams: Windows permits only one DXGI duplication
+per output/process. Share capture among viewers; slot-count tests alone did not
+validate this. Fix and verify actual concurrent video before claiming it works.
+UI changes shown in review captures were not yet shipped in 3.5.0.
+Required UI: narrower default window, version beside logo, explicit host/client
+settings, resolution and FPS labels instead of Smooth/Sharp/Battery saver, and a
+configurable one-hand capture-release shortcut without function keys. Ctrl+F12 is
+unacceptable. Keep device focus/release safety. Remove website prose/fluff and
+model its writing as well as layout on Parsec. Linux client video/cursor performance
+is poor during playback; current desktop software OpenH264 decoder is a clear
+limitation. Add real hardware decoding with capability-based client choices and
+verify on the user's ThinkPad X250/CachyOS KDE Wayland. Detect actual hardware and
+driver support; do not pretend a decoder is accelerated because a plugin exists.

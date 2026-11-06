@@ -7,6 +7,9 @@ use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::*;
+use std::sync::Arc;
+mod shared;
+pub use shared::SharedCapture;
 
 /// Lost the duplication: re-open it.
 #[derive(Debug)]
@@ -58,12 +61,14 @@ impl<D: Duplicator> Capture<D> {
     }
 }
 
+#[derive(Clone)]
 pub struct Pointer {
     pub x: i32,
     pub y: i32,
     pub visible: bool,
 }
 
+#[derive(Clone)]
 pub struct Shape {
     pub typ: u32,
     pub w: u32,
@@ -75,13 +80,22 @@ pub struct Shape {
 }
 
 pub struct GpuFrame {
-    /// The new desktop image (always the same texture, overwritten on the GPU), or None
-    /// when only the pointer moved.
-    pub tex: Option<ID3D11Texture2D>,
+    /// A leased image. The shared producer cannot overwrite it while a viewer
+    /// still holds this Arc. None when only the pointer changed.
+    pub tex: Option<Arc<FrameTexture>>,
     pub capture_us: u64,
     pub pointer: Option<Pointer>,
     pub shape: Option<Shape>,
 }
+pub struct FrameTexture(pub ID3D11Texture2D);
+impl std::ops::Deref for FrameTexture {
+    type Target = ID3D11Texture2D;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+// SAFETY: D3D11 resources are free-threaded. Leased textures are immutable;
+// all GPU commands use their device's multithread-protected immediate context.
+unsafe impl Send for FrameTexture {}
+unsafe impl Sync for FrameTexture {}
 
 pub use secpar_host_core::Display;
 
@@ -149,7 +163,7 @@ pub struct Dxgi {
     dup: IDXGIOutputDuplication,
     w: u32,
     h: u32,
-    copy: Option<ID3D11Texture2D>,
+    copy: Option<Arc<FrameTexture>>,
 }
 
 impl Dxgi {
@@ -200,10 +214,10 @@ impl Duplicator for Dxgi {
                             let _ = self.dup.ReleaseFrame();
                             return Err(Lost);
                         }
-                        self.copy = t;
+                        self.copy = t.map(|texture| Arc::new(FrameTexture(texture)));
                     }
                     let copy = self.copy.clone().expect("created above");
-                    self.ctx.CopyResource(&copy, &src);
+                    self.ctx.CopyResource(&copy.0, &src);
                     f.tex = Some(copy);
                     f.capture_us = qpc_to_us(info.LastPresentTime);
                 }
