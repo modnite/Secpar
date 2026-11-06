@@ -42,4 +42,13 @@ class DesktopCaptureTest {
         assertFalse(CaptureShortcut.CTRL_F12.matches(141, true, false, false, false))
         assertTrue(CaptureShortcut.MOONLIGHT.matches(54, true, true, true, false))
     }
+    @Test fun oneHandShortcutsRequireTheirExactModifiers() {
+        assertTrue(CaptureShortcut.CTRL_ALT_G.matches(35,true,true,false,false))
+        assertFalse(CaptureShortcut.CTRL_ALT_G.matches(35,true,false,false,false))
+        assertFalse(CaptureShortcut.CTRL_ALT_G.matches(35,true,true,true,false))
+        assertFalse(CaptureShortcut.CTRL_ALT_G.matches(35,true,true,false,true))
+        assertTrue(CaptureShortcut.CTRL_SHIFT_G.matches(35,true,false,true,false))
+        assertTrue(CaptureShortcut.CTRL_ALT_Z.matches(54,true,true,false,false))
+        assertFalse(CaptureShortcut.CTRL_ALT_Z.matches(54,true,true,true,false))
+    }
 }
