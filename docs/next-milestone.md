@@ -2,6 +2,14 @@
 
 ## CURRENT: supersedes historical statuses below
 
+- User requested a parallel Claude handoff. Prepared sibling worktree
+  ../secpar-claude-macos on claude/macos-host at f2cb44e and sibling file
+  ../secpar-claude-handoff.md. User launches Claude separately; not running yet.
+  Scope: new macOS native host adapter with narrow macOS-only desktop/package/CI
+  integration. Codex retains Android account integration and other active work.
+  Do not edit Claude-owned files or merge unreviewed work; no release/install
+  permission delegated to Claude. Review handoff commits/tests before integration.
+
 - Android account SDK/storage foundation added on MAIN ONLY;19 focused JVM tests
   pass (11 API +8 vault). Fixed accounts.secpar.win origin/system TLS/no redirects,
   bounded responses, validated browser approval and owner-bootstrap links; encrypted
