@@ -369,3 +369,16 @@ fn ready_candidates_in_order() {
     let refl = Some("198.51.100.4:6100".parse().unwrap());
     assert_eq!(host_cands(&lan[..1], 50000, pub_ip, refl), ["192.168.0.126:50000", "198.51.100.4:6100"], "UPnP maps only 48998");
 }
+
+/// Measures the installed package's build profile without capture or a service restart.
+#[test]
+#[ignore]
+fn packetization_throughput_diagnostic() {
+    for size in [16_384, 65_536, 196_608] {
+        let data=vec![123u8;size];
+        let header=FrameHeader {len:size as u32,capture_us:0,keyframe:false,codec:Codec::Hevc};
+        let start=Instant::now();
+        for i in 0..60 { std::hint::black_box(packetize(i,&header,&data,15)); }
+        eprintln!("host packetize bytes={size} mean_ms={:.3}",start.elapsed().as_secs_f64()*1000.0/60.0);
+    }
+}

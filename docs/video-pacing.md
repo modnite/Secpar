@@ -61,3 +61,33 @@ PcrReceive now logs receive fps/bitrate, packet loss, cumulative frame-assembly
 losses, invalid packet count, maximum per-packet processing wall time and socket
 backlog/drop counts every five seconds. The measurements distinguish missing input
 frames from decoder backlog without recording screen content, keys or credentials.
+
+
+## Host packetization bottleneck (Desktop Development 6)
+
+The user reports no improvement with Android Preview 15. The corrected symptom is
+that video and cursor problems go away when video playback is paused; the cursor
+itself does not disappear. Physical S23 logs show direct LAN UDP to
+192.168.100.130, 4–11 received video frames/sec during playback, zero reported
+packet loss and no invalid, assembly-dropped or socket-dropped packets. This is
+not evidence for another decoder-queue adjustment.
+
+The host packetizer constructed a ReedSolomon instance for every block of every
+frame. That creates/inverts a coding matrix, synchronously on the video thread
+that also polls cursor updates. A synthetic test in the same Windows host debug
+build profile measured:
+
+| Encoded frame bytes | Before (ms/frame) | Matrix cache + optimized shared crate (ms/frame) |
+| --- | ---: | ---: |
+| 16,384 | 1.961 | 0.216 |
+| 65,536 | 71.466 | 1.631 |
+| 196,608 | 237.353 | 5.391 |
+
+Each measurement averages 60 frames of the same size, including initial cache
+construction. No capture, installed service, actual screen content, network or
+encoder was involved. These are packetization timings, not end-to-end latency or
+a promise of physical stream performance. The fix uses a bounded 128-entry shared
+LRU of coding matrices and optimizes secpar-stream in debug preview packages.
+Uncached-versus-cached wire-byte comparisons and concurrent loss recovery tests
+pass; Android and the on-wire protocol are unchanged. The PC needs the updated
+single Secpar installer to receive this fix. Physical comparison remains pending.
