@@ -38,6 +38,7 @@ pub struct Panel {
     busy: bool,
     pairing: bool,
     settings_open: bool,
+    account_open: bool,
     link: String,
     expires: Instant,
     qr: Option<qrcode::QrCode>,
@@ -96,7 +97,9 @@ impl Panel {
             });
         }
         #[cfg(target_os = "linux")]
-        if !sample { let _ = tx.try_send(Command::Refresh); }
+        if !sample {
+            let _ = tx.try_send(Command::Refresh);
+        }
         Self {
             tx,
             events: rx,
@@ -116,6 +119,7 @@ impl Panel {
                 && std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("pair")),
             settings_open: sample
                 && std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("settings")),
+            account_open: false,
             link: String::new(),
             expires: Instant::now(),
             qr: None,
@@ -173,7 +177,7 @@ impl Panel {
         }
         ctx.request_repaint_after(Duration::from_secs(1));
         ui.heading("Hosting");
-        ui.add_space(8.);
+        ui.add_space(if self.settings_open { 0. } else { 8. });
         if !self.settings_open {
             design::surface().show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -229,7 +233,7 @@ impl Panel {
         if !self.error.is_empty() {
             ui.colored_label(Color32::from_rgb(255, 170, 120), &self.error);
         }
-        ui.add_space(10.);
+        ui.add_space(if self.settings_open { 0. } else { 10. });
         if cfg!(target_os = "linux") {
             ui.label(egui::RichText::new("Local network hosting").color(design::MUTED));
             ui.add_space(6.);
@@ -238,13 +242,17 @@ impl Panel {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.settings_open, false, "Paired devices");
                 ui.selectable_value(&mut self.settings_open, true, "Settings");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Account").clicked() {
+                        self.account_open = true;
+                    }
+                });
             });
         }
-        ui.add_space(6.);
+        ui.add_space(2.);
         egui::ScrollArea::vertical().show(ui, |ui| {
             if self.settings_open {
                 self.settings_ui(ui);
-                egui::CollapsingHeader::new("Account link").show(ui, |ui| account.host_ui(ui));
             } else if let Some(state) = self.state.clone() {
                 if state.devices.is_empty() {
                     ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
@@ -281,6 +289,16 @@ impl Panel {
                 }
             }
         });
+        if self.account_open {
+            egui::Modal::new(egui::Id::new("hosting-account")).show(ctx, |ui| {
+                ui.set_width(420_f32.min(ctx.content_rect().width() - 48.));
+                account.host_ui(ui);
+                ui.add_space(8.);
+                if ui.button("Close").clicked() {
+                    self.account_open = false;
+                }
+            });
+        }
         if self.pairing {
             egui::Modal::new(egui::Id::new("host-pairing")).show(ctx, |ui| {
                 let size = (ctx.content_rect().height() - 100.).clamp(160., 320.);
@@ -377,68 +395,125 @@ impl Panel {
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         let config = self.settings["config"].clone();
         ui.add_enabled_ui(self.state.is_some() && !self.busy, |ui| {
-            ui.spacing_mut().interact_size.y = 24.;
-            egui::Grid::new("host-settings")
-                .num_columns(2)
-                .spacing([24., 4.])
-                .show(ui, |ui| {
-                    for (key, label) in [
-                        ("autostart", "Start at sign-in"),
-                        ("allow_files", "Receive files"),
-                        ("allow_clip", "Share clipboard"),
-                        ("anywhere", "Direct remote access (UPnP)"),
-                    ] {
-                        ui.label(label);
-                        let mut checked = config[key].as_bool().unwrap_or(false);
-                        if ui.checkbox(&mut checked, "").changed() {
-                            self.send(Command::Patch(json!({key:checked})));
-                        }
-                        ui.end_row();
-                    }
-                    ui.label("Display");
+            ui.spacing_mut().item_spacing.y = 4.;
+            design::surface().inner_margin(10).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new("Streaming").strong());
+                ui.add_space(6.);
+                ui.columns(2, |columns| {
+                    let left = &mut columns[0];
+                    left.label(egui::RichText::new("Display").size(12.).color(design::MUTED));
                     let mut display = config["display"].as_str().unwrap_or("").to_string();
                     let old = display.clone();
-                    egui::ComboBox::from_id_salt("host-display")
-                        .selected_text(if display.is_empty() {
-                            "Primary display"
-                        } else {
-                            &display
-                        })
-                        .show_ui(ui, |ui| {
+                    let selected = if display.is_empty() { "Primary display" } else {
+                        self.settings["displays"].as_array().into_iter().flatten()
+                            .find(|d| d["id"].as_str() == Some(&display))
+                            .and_then(|d| d["name"].as_str()).unwrap_or("Display unavailable")
+                    };
+                    egui::ComboBox::from_id_salt("host-display").width(left.available_width())
+                        .selected_text(selected).show_ui(left, |ui| {
                             ui.selectable_value(&mut display, String::new(), "Primary display");
                             for d in self.settings["displays"].as_array().into_iter().flatten() {
-                                if let (Some(id), Some(name)) =
-                                    (d["id"].as_str(), d["name"].as_str())
-                                {
+                                if let (Some(id), Some(name)) = (d["id"].as_str(), d["name"].as_str()) {
                                     ui.selectable_value(&mut display, id.into(), name);
                                 }
                             }
                         });
-                    if display != old {
-                        self.send(Command::Patch(json!({"display":display})));
-                    }
-                    ui.end_row();
-                    ui.label("Maximum quality");
+                    if display != old { self.send(Command::Patch(json!({"display":display}))); }
+                    let right = &mut columns[1];
+                    right.label(egui::RichText::new("Quality limit").size(12.).color(design::MUTED));
                     let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
                     let old = quality.clone();
-                    egui::ComboBox::from_id_salt("host-quality")
-                        .selected_text(&quality)
-                        .show_ui(ui, |ui| {
-                            for (value, label) in [
-                                ("auto", "Auto"),
-                                ("smooth", "Smooth"),
-                                ("sharp", "Sharp"),
-                                ("battery", "Battery saver"),
-                            ] {
-                                ui.selectable_value(&mut quality, value.into(), label);
-                            }
+                    let choices = [("auto", "Automatic"), ("smooth", "Smooth"), ("sharp", "Sharp"), ("battery", "Battery saver")];
+                    let label = choices.iter().find(|(value,_)| *value == quality).map(|(_,label)| *label).unwrap_or("Custom");
+                    egui::ComboBox::from_id_salt("host-quality").width(right.available_width())
+                        .selected_text(label).show_ui(right, |ui| {
+                            for (value,label) in choices { ui.selectable_value(&mut quality,value.into(),label); }
                         });
-                    if quality != old {
-                        self.send(Command::Patch(json!({"max_quality":quality})));
-                    }
-                    ui.end_row();
+                    if quality != old { self.send(Command::Patch(json!({"max_quality":quality}))); }
                 });
+            });
+            ui.add_space(4.);
+            ui.columns(2, |columns| {
+                design::surface().inner_margin(10).show(&mut columns[0], |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new("Device access").strong());
+                    self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
+                    self.setting_toggle(ui,&config,"allow_clip","Share clipboard","Allow clipboard exchange with paired devices.");
+                });
+                design::surface().inner_margin(10).show(&mut columns[1], |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new("Connections & startup").strong());
+                    self.setting_toggle(ui,&config,"anywhere","Router ports","Use UPnP to request a router port for direct remote connections. Relay connections are separate.");
+                    self.setting_toggle(ui,&config,"autostart","Start in tray","Open Secpar in the system tray when you sign in. The hosting service runs independently.");
+                });
+            });
         });
+    }
+    fn setting_toggle(
+        &mut self,
+        ui: &mut egui::Ui,
+        config: &Value,
+        key: &str,
+        label: &str,
+        help: &str,
+    ) {
+        let mut value = config[key].as_bool().unwrap_or(false);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 28.),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(label).on_hover_text(help);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (rect, mut response) =
+                        ui.allocate_exact_size(egui::vec2(34., 28.), egui::Sense::click());
+                    if response.clicked() {
+                        value = !value;
+                        response.mark_changed();
+                    }
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(
+                            egui::WidgetType::Checkbox,
+                            ui.is_enabled(),
+                            value,
+                            label,
+                        )
+                    });
+                    let track = egui::Rect::from_center_size(rect.center(), egui::vec2(32., 18.));
+                    let fill = if value {
+                        design::ACCENT
+                    } else {
+                        egui::Color32::from_rgb(62, 73, 87)
+                    };
+                    ui.painter().rect_filled(track, 9, fill);
+                    let x = if value {
+                        track.right() - 9.
+                    } else {
+                        track.left() + 9.
+                    };
+                    ui.painter().circle_filled(
+                        egui::pos2(x, track.center().y),
+                        6.,
+                        if value {
+                            egui::Color32::from_rgb(7, 38, 30)
+                        } else {
+                            egui::Color32::from_rgb(205, 216, 226)
+                        },
+                    );
+                    if response.has_focus() {
+                        ui.painter().rect_stroke(
+                            rect.expand(2.),
+                            5,
+                            egui::Stroke::new(1_f32, design::ACCENT),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                    if response.on_hover_text(help).changed() {
+                        self.send(Command::Patch(json!({key:value})));
+                    }
+                });
+            },
+        );
     }
 }
 fn paint_qr(ui: &mut egui::Ui, qr: &qrcode::QrCode) {
