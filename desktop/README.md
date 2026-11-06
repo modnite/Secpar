@@ -63,8 +63,7 @@ linked state without accessing the account service or local host.
 ## Single Windows application package
 
 Build the desktop Windows binary with `-C target-feature=+crt-static`, copy it to
-`host/src-tauri/unified/secpar-desktop.exe`, then run `npm run tauri build --
---debug --config src-tauri/tauri.unified.conf.json` from `host`. The one Secpar
+`host/src-tauri/unified/secpar-desktop.exe`, then run `scripts/build-windows-release.ps1` from the repository root. The one Secpar
 installer contains the desktop UI and background service. Normal shortcuts and
 sign-in autostart launch the desktop UI. `--service` and `--server` retain the
 existing engine; Explorer file offers go through that same service.

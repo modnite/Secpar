@@ -1,4 +1,5 @@
 use eframe::egui::{Context, ViewportCommand};
+use crate::native_window::Opener;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -9,9 +10,12 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIc
 pub struct Tray {
     _icon: TrayIcon,
     quitting: Arc<AtomicBool>,
+    opener: Opener,
 }
 impl Tray {
-    pub fn new(ctx: &Context) -> Option<Self> {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Option<Self> {
+        let ctx = &cc.egui_ctx;
+        let opener = Opener::new(cc)?;
         if cfg!(feature = "ui-review") {
             return None;
         }
@@ -37,16 +41,18 @@ impl Tray {
         let ctx_menu = ctx.clone();
         let should_quit = quitting.clone();
         let open_id = open.id().clone();
+        let menu_opener = opener.clone();
         let quit_id = quit.id().clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if event.id == quit_id {
                 should_quit.store(true, Ordering::Relaxed);
+                menu_opener.open();
                 ctx_menu.send_viewport_cmd(ViewportCommand::Close);
             } else if event.id == open_id {
-                show(&ctx_menu);
+                menu_opener.open();
             }
         }));
-        let ctx_tray = ctx.clone();
+        let tray_opener = opener.clone();
         TrayIconEvent::set_event_handler(Some(move |event| {
             if matches!(
                 event,
@@ -56,26 +62,24 @@ impl Tray {
                     ..
                 }
             ) {
-                show(&ctx_tray);
+                tray_opener.open();
             }
         }));
         Some(Self {
             _icon: tray,
             quitting,
+            opener,
         })
     }
+    #[cfg(feature="tray-review")]
+    pub fn opener(&self) -> Opener {self.opener.clone()}
     pub fn hide_on_close(&self, ctx: &Context) -> bool {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting.load(Ordering::Relaxed) {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+            self.opener.hide();
             true
         } else {
             false
         }
     }
-}
-fn show(ctx: &Context) {
-    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
-    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
-    ctx.send_viewport_cmd(ViewportCommand::Focus);
 }

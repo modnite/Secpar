@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "0.1.0"
+version = "3.1.0"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
@@ -43,10 +43,12 @@ opt-level = 3
 tauri-winres = "0.3.6"
 
 [target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6.2"
 tray-icon = { version = "0.25.1", default-features = false }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Security"] }
 
 [features]
+tray-review = []
 ui-review = ["eframe/__screenshot"]
 
 [[bin]]
@@ -56,3 +58,8 @@ required-features = ["ui-review"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 secpar-host-linux = { path = "../crates/secpar-host-linux" }
+
+[[bin]]
+name = "secpar-tray-review"
+path = "src/tray_review_main.rs"
+required-features = ["tray-review"]

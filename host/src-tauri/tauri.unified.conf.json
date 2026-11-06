@@ -2,6 +2,9 @@
   "productName": "Secpar",
   "bundle": {
     "shortDescription": "Host and connect to your computers",
-    "resources": {"unified/secpar-desktop.exe": "secpar-desktop.exe"}
+    "resources": {
+      "unified/secpar-desktop.exe": "secpar-desktop.exe",
+      "icons/icon.ico": "secpar-icon-d55a811c41e4.ico"
+    }
   }
 }

@@ -6,6 +6,41 @@
 !define PCR_FW_RULE "Secpar Host"
 !define PCR_SVC "Secpar"
 
+!include "${__FILEDIR__}\icon-resource.nsh"
+
+; Explicit icon paths avoid cached legacy executable icons. Preserve the user's
+; choice not to have a desktop shortcut: repair it only when it exists.
+!macro SecparSetShortcutIcon shortcut
+  !insertmacro ComHlpr_CreateInProcInstance ${CLSID_ShellLink} ${IID_IShellLink} r0 ""
+  ${If} $0 P<> 0
+    ${IUnknown::QueryInterface} $0 '("${IID_IPersistFile}",.r1)'
+    ${If} $1 P<> 0
+      ${IPersistFile::Load} $1 '("${shortcut}", ${STGM_READWRITE})'
+      ${IShellLink::SetIconLocation} $0 '(w "$INSTDIR\${SECPAR_ICON_FILE}", i 0)'
+      ${IPersistFile::Save} $1 '("${shortcut}",1)'
+      ${IUnknown::Release} $1 ""
+    ${EndIf}
+    ${IUnknown::Release} $0 ""
+  ${EndIf}
+!macroend
+
+Function SecparRepairShortcuts
+  IfFileExists "$INSTDIR\${SECPAR_ICON_FILE}" 0 secpar_icons_done
+  IfFileExists "$SMPROGRAMS\Secpar.lnk" 0 secpar_icons_desktop
+    !insertmacro SecparSetShortcutIcon "$SMPROGRAMS\Secpar.lnk"
+  secpar_icons_desktop:
+  IfFileExists "$DESKTOP\Secpar.lnk" 0 secpar_icons_notify
+    !insertmacro SecparSetShortcutIcon "$DESKTOP\Secpar.lnk"
+  secpar_icons_notify:
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  secpar_icons_done:
+FunctionEnd
+
+; The interactive finish page may create its desktop link after POSTINSTALL.
+Function .onGUIEnd
+  Call SecparRepairShortcuts
+FunctionEnd
+
 ; Stop the service (it ends its server) and the tray before the files are replaced. Runs before
 ; Tauri's own "app is running" check, so that check finds nothing to kill.
 !macro NSIS_HOOK_PREINSTALL
@@ -67,6 +102,7 @@
 
   ; Only Secpar is started. No PC Remote, Sunshine, power or adapter settings are changed.
   nsExec::Exec 'sc.exe start "${PCR_SVC}"'
+  Call SecparRepairShortcuts
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

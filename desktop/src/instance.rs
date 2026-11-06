@@ -15,13 +15,14 @@ impl Instance {
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 CloseHandle(mutex);
                 if !std::env::args().any(|a| a == "--hidden") {
-                    let title: Vec<u16> = "Secpar Desktop · Development"
+                    let title: Vec<u16> = "Secpar"
                         .encode_utf16()
                         .chain([0])
                         .collect();
                     let window = FindWindowW(std::ptr::null(), title.as_ptr());
                     if !window.is_null() {
-                        ShowWindow(window, SW_RESTORE);
+                        ShowWindowAsync(window, SW_RESTORE);
+                        ShowWindowAsync(window, SW_SHOW);
                         SetForegroundWindow(window);
                     }
                 }
