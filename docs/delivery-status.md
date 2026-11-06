@@ -363,3 +363,5 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 - Account sign-in: https://accounts.secpar.win/auth/sign-in
 
 This list is a work record, not a claim that the app family is complete.
+
+- 2026-11-06: 3.1.0 Windows release built from optimized release profiles for both UI and host (6,501,246-byte installer). Isolated native tray check passed hidden→Open and minimized→Open. Desktop tests: 20 passed, one OS-vault integration check ignored. Installer payloads matched release binaries (expected NSIS marker patch only), transparent content-addressed ICO included, no debug/review binaries or PDBs. Shortcut icon repair covers upgrades and the finish-page desktop shortcut. Linux launcher identity/cache and Mac versioned-icon packaging corrected; native Mac runtime remains unverified. Installation/publication pending. User release/version rules are in docs/versioning.md.
