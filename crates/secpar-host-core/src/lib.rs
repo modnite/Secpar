@@ -1,7 +1,10 @@
 //! Platform-neutral control/pairing engine shared by every Secpar desktop host.
 pub mod agent;
+pub mod account;
+pub mod account_link;
 pub mod audio;
 pub mod limits;
+pub mod pairing_codes;
 pub mod proto;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -23,6 +26,12 @@ pub trait IdentitySource: Send + Sync {
 pub trait PairingStore: Send {
     fn take_otp(&mut self, otp: &str) -> bool;
     fn add_device(&mut self, name: &str) -> std::io::Result<(String, String)>;
+    /// Authorization and device creation run under one store lock, so concurrent
+    /// pairings cannot exchange the account context of their one-use codes.
+    fn pair_device(&mut self, otp: &str, name: &str) -> Result<(String, String), &'static str> {
+        if !self.take_otp(otp) { return Err("bad_otp"); }
+        self.add_device(name).map_err(|_| "internal")
+    }
     fn auth(&self, token: &str) -> Result<String, &'static str>;
     fn revoke(&mut self, device: &str) -> std::io::Result<()>;
     fn ticket(&self, device: &str) -> [u8; 32];

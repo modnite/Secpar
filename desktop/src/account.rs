@@ -2,6 +2,7 @@
 use crate::{local_host, vault};
 use reqwest::{Client, Method, StatusCode};
 use secpar_client::control::Computer;
+use secpar_client::pairing::Pairing;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -22,6 +23,19 @@ pub struct Friend {
     pub state: String,
     pub requester: String,
 }
+#[derive(Clone, Deserialize)]
+pub struct OwnedComputer {
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+    pub certificate_fp: Option<String>,
+    pub linked: u8,
+    pub online: u8,
+}
+pub enum OwnedConnection {
+    Cached { owner: String, computer: Computer },
+    Pair { owner: String, id: String, pairing: Pairing },
+}
 pub enum Action {
     Invite(String),
     Accept(String),
@@ -40,6 +54,8 @@ pub enum Command {
     SignOut,
     Remember(Computer),
     ForgetComputer,
+    ConnectOwned(String),
+    RememberOwned { owner: String, id: String, computer: Computer },
 }
 pub enum Event {
     Host(Result<local_host::State, String>),
@@ -59,6 +75,8 @@ pub enum Event {
     Restored(Computer),
     ForgotComputer,
     StorageNote(String),
+    Owned(Vec<OwnedComputer>),
+    OwnedConnection(OwnedConnection),
 }
 
 pub struct Panel {
@@ -67,6 +85,9 @@ pub struct Panel {
     pub forgot_computer: bool,
     pub storage_note: Option<String>,
     pub user: Option<User>,
+    pub computers: Vec<OwnedComputer>,
+    pub owned_connection: Option<OwnedConnection>,
+    pub signed_out: bool,
     friends: Vec<Friend>,
     blocked: Vec<User>,
     waiting: Option<(String, String)>,
@@ -88,7 +109,7 @@ impl Panel {
                 let own = "00000000-0000-4000-8000-000000000001".to_string();
                 return Self {
                     host: Some(Ok(
-                        if std::env::var("SECPAR_REVIEW_PAGE").as_deref() == Ok("host-sample") {
+                        if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p=="host-sample" || p.contains("owned")) {
                             local_host::State {
                                 computer: Some("00000000-0000-4000-8000-000000000010".into()),
                                 owner: Some(own.clone()),
@@ -100,6 +121,11 @@ impl Panel {
                         },
                     )),
                     restored_computer: None,
+                    computers: if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("owned")) {
+                        [("00000000-0000-4000-8000-000000000010","Studio PC","windows",1),("00000000-0000-4000-8000-000000000011","Linux laptop","linux",1),("00000000-0000-4000-8000-000000000012","Workshop","linux",0)].into_iter().map(|(id,name,platform,online)|OwnedComputer{id:id.into(),name:name.into(),platform:platform.into(),certificate_fp:Some("ab".repeat(32)),linked:1,online}).collect()
+                    }else{vec![]},
+                    owned_connection: None,
+                    signed_out: false,
                     forgot_computer: false,
                     storage_note: None,
                     user: sample.then(|| User {
@@ -144,6 +170,9 @@ impl Panel {
         Self {
             host: None,
             restored_computer: None,
+            computers: vec![],
+            owned_connection: None,
+            signed_out: false,
             forgot_computer: false,
             storage_note: None,
             user: None,
@@ -170,11 +199,69 @@ impl Panel {
     pub fn forget_computer(&mut self) {
         self.send(Command::ForgetComputer);
     }
+    pub fn connect_owned(&mut self, id: String) { self.send(Command::ConnectOwned(id)); }
+    pub fn remember_owned(&mut self, owner: String, id: String, computer: Computer) {
+        self.send(Command::RememberOwned { owner, id, computer });
+    }
+    pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use crate::design;
+        use eframe::egui;
+        design::page_header(ui,"Computers",|ui| {
+            if let Some(user) = self.user.clone() {
+                if ui.add_enabled(!self.busy,egui::Button::new("Sign out")).clicked() { self.send(Command::SignOut); }
+                ui.add(egui::Label::new(user.handle).truncate());
+            } else if ui.add_enabled(!self.busy && self.waiting.is_none(),egui::Button::new("Sign in")).clicked() {
+                self.send(Command::SignIn);
+            }
+        });
+        ui.add_space(6.);
+        if let Some((code,url)) = self.waiting.clone() {
+            design::surface().show(ui,|ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Confirm in your browser:"); ui.strong(code);
+                    if ui.button("Open browser").clicked() { std::thread::spawn(move || { let _=open::that(url); }); }
+                    if ui.button("Cancel").clicked() { self.send(Command::Cancel); }
+                });
+            });
+        }
+        if self.user.is_some() {
+            let local = self.host.as_ref().and_then(|state|state.as_ref().ok()).and_then(|state|state.computer.as_deref());
+            let mut connect = None;
+            egui::ScrollArea::vertical().id_salt("owned-computers").max_height((ui.available_height()-82.).max(80.)).show(ui,|ui| {
+                for computer in &self.computers {
+                    let is_local = local == Some(computer.id.as_str());
+                    design::surface().inner_margin(8).show(ui,|ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            design::dot(ui,if computer.online==1 || is_local {design::ACCENT} else {design::MUTED});
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y=2.;
+                                ui.add(egui::Label::new(egui::RichText::new(&computer.name).strong()).truncate());
+                                ui.label(egui::RichText::new(if is_local {"This computer"} else if computer.online==1 {"Online"} else {"Offline"}).size(12.).color(design::MUTED));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                                if !is_local && ui.add_enabled(!self.busy && computer.linked==1,design::primary("Connect")).clicked() { connect=Some(computer.id.clone()); }
+                                let platform=match computer.platform.as_str(){"windows"=>"Windows","linux"=>"Linux","macos"=>"macOS",_=>""};
+                                ui.label(egui::RichText::new(platform).size(12.).color(design::MUTED));
+                            });
+                        });
+                    });
+                }
+                if self.computers.is_empty() { ui.label(egui::RichText::new("No computers linked yet").color(design::MUTED)); }
+            });
+            if let Some(id)=connect { self.connect_owned(id); }
+            if !self.note.is_empty() { ui.label(&self.note); }
+            ui.add_space(6.);
+        }
+    }
     pub fn poll(&mut self) {
         while let Ok(event) = self.events.try_recv() {
             match event {
                 Event::Host(state) => self.host = Some(state),
                 Event::SignedOut(note) => {
+                    self.computers.clear();
+                    self.owned_connection = None;
+                    self.signed_out = true;
                     self.user = None;
                     self.friends.clear();
                     self.blocked.clear();
@@ -203,6 +290,8 @@ impl Panel {
                 Event::Restored(computer) => self.restored_computer = Some(computer),
                 Event::ForgotComputer => self.forgot_computer = true,
                 Event::StorageNote(note) => self.storage_note = Some(note),
+                Event::Owned(computers) => self.computers = computers,
+                Event::OwnedConnection(connection) => self.owned_connection = Some(connection),
             }
         }
     }
@@ -664,6 +753,22 @@ impl Api {
             }
         }
     }
+    async fn ensure_host_via<F, Fut>(&self, owner: &str, enroll: bool, mut host: F) -> Result<local_host::State, (StatusCode,String)>
+    where F: FnMut(&'static str,Value) -> Fut, Fut: std::future::Future<Output=Result<Value,String>> {
+        let state: local_host::State = serde_json::from_value(host("host_account_state",Value::Null).await.map_err(|note| (StatusCode::BAD_GATEWAY,note))?).map_err(|_| (StatusCode::BAD_GATEWAY,"Invalid local host state".into()))?;
+        if state.owner.as_deref().is_some_and(|current| current != owner) {
+            return Err((StatusCode::CONFLICT,"This host is linked to another account. Unlink it first.".into()));
+        }
+        if state.computer.is_some() || !enroll { return Ok(state); }
+        self.link_host_via(host).await
+    }
+    async fn computers(&self) -> Result<Vec<OwnedComputer>, (StatusCode,String)> {
+        let computers: Vec<OwnedComputer> = serde_json::from_value(self.call(Method::GET,"/v1/computers",None).await?).map_err(|_| (StatusCode::BAD_GATEWAY,"Invalid computer list".into()))?;
+        if computers.len() > 256 || computers.iter().any(|c| path_id(&c.id).is_err() || c.name.len()>320 || c.platform.len()>16 || c.linked>1 || c.online>1 || c.certificate_fp.as_ref().is_some_and(|fp| secpar_client::pairing::fingerprint(fp).is_err())) {
+            return Err((StatusCode::BAD_GATEWAY,"Invalid computer list".into()));
+        }
+        Ok(computers)
+    }
     async fn snapshot(&self) -> Result<(User, Vec<Friend>, Vec<User>), (StatusCode, String)> {
         let user = serde_json::from_value(self.call(Method::GET, "/v1/me", None).await?)
             .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid account profile".into()))?;
@@ -689,6 +794,23 @@ fn path_id(value: &str) -> Result<&str, String> {
     }
     Ok(value)
 }
+fn owned_key(owner: &str, id: &str) -> Result<String,String> {
+    path_id(owner)?; path_id(id)?;
+    Ok(format!("owned-pairing:{owner}:{id}"))
+}
+struct PendingPair {
+    id: String, owner: String, computer: String, fingerprint: [u8;32],
+    expires: Instant, next: Instant,
+}
+async fn synchronize_owned(api: &Api, owner: &str, enroll: bool, events: &mpsc::Sender<Event>) -> bool {
+    let _ = events.send(Event::Host(api.ensure_host_via(owner,enroll,local_host::call).await.map_err(|(_,note)|note))).await;
+    match api.computers().await {
+        Ok(computers) => { let _ = events.send(Event::Owned(computers)).await; }
+        Err((StatusCode::UNAUTHORIZED,note)) => { let _=events.send(Event::SignedOut(note)).await; return false; }
+        Err((_,note)) => { let _ = events.send(Event::Message(note)).await; }
+    }
+    true
+}
 pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiver<Event>) {
     let (tx, mut rx) = mpsc::channel(16);
     let (events, output) = mpsc::channel(32);
@@ -713,9 +835,13 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let _=events.send(Event::Host(local_host::state().await)).await;
             ctx.request_repaint();
             let mut api=Api{client,token,base:ORIGIN.into()}; let mut pending: Option<Pending>=None;
+            let mut pending_pair: Option<PendingPair> = None;
+            let mut signed_owner: Option<String> = None;
+            let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
+            let mut next_owned = Instant::now();
             if api.token.is_some() {
                 match api.snapshot().await {
-                    Ok((user,friends,blocked))=>{let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;}
+                    Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;}
                     Err((status,note))=>{
                         if status==StatusCode::UNAUTHORIZED {api.token=None;let _=vault::forget(CREDENTIAL);}
                         let _=events.send(Event::SignedOut(note)).await;
@@ -728,16 +854,16 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 let command=tokio::select! { command=rx.recv()=>{let Some(command)=command else {break};Some(command)}, _=timer.tick()=>None };
                 if let Some(command)=command {
                     let _=events.send(Event::Busy(true)).await;
-                    let skip_refresh=matches!(&command,Command::Remember(_)|Command::ForgetComputer|Command::HostRefresh|Command::LinkHost|Command::UnlinkHost);
+                    let skip_refresh=matches!(&command,Command::Remember(_)|Command::ForgetComputer|Command::HostRefresh|Command::LinkHost|Command::UnlinkHost|Command::ConnectOwned(_)|Command::RememberOwned{..});
                     let result: Result<String,(StatusCode,String)>= match command {
                         Command::HostRefresh=>{let _=events.send(Event::Host(local_host::state().await)).await;let _=events.send(Event::Message(String::new())).await;Ok(String::new())},
                         Command::LinkHost=>match api.link_host().await {
-                            Ok(state)=>{let _=events.send(Event::Host(Ok(state))).await;let _=events.send(Event::Message("Host linked. Friend access remains off.".into())).await;Ok(String::new())},
+                            Ok(state)=>{suppressed_owner=None;let _=vault::forget("host-auto-link-disabled");let _=events.send(Event::Host(Ok(state))).await;let _=events.send(Event::Message("Host linked. Friend access remains off.".into())).await;Ok(String::new())},
                             Err(e)=>Err(e)
                         },
                         Command::UnlinkHost=>{
                             match local_host::call("host_account_unlink",Value::Null).await {
-                                Ok(value)=>{let state=serde_json::from_value(value).map_err(|_|"Invalid host response".to_string());let _=events.send(Event::Host(state)).await;let _=events.send(Event::Message("Host unlinked".into())).await;Ok(String::new())},
+                                Ok(value)=>{suppressed_owner=signed_owner.clone();if let Some(owner)=&suppressed_owner {let _=vault::save("host-auto-link-disabled",owner);}let state=serde_json::from_value(value).map_err(|_|"Invalid host response".to_string());let _=events.send(Event::Host(state)).await;let _=events.send(Event::Message("Host unlinked".into())).await;Ok(String::new())},
                                 Err(e)=>Err((StatusCode::BAD_GATEWAY,e))
                             }
                         },
@@ -766,6 +892,8 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                         Command::Cancel=>{pending=None;let _=events.send(Event::SignedOut(String::new())).await;Ok(String::new())}
                         Command::SignOut=>{
                             pending=None;
+                            pending_pair=None;
+                            signed_owner=None;
                             // Revoke remotely first. Offline logout still forgets locally and reports the limit.
                             let revoked=if api.token.is_some(){api.call(Method::POST,"/auth/logout",None).await.is_ok()}else{true};
                             api.token=None;
@@ -779,6 +907,46 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                             }
                         },
                         Command::ForgetComputer=>{match vault::forget("paired-computer"){Ok(())=>{let _=events.send(Event::ForgotComputer).await;},Err(note)=>{let _=events.send(Event::StorageNote(note)).await;}}Ok(String::new())},
+                        Command::RememberOwned{owner,id,computer}=>{
+                            if signed_owner.as_deref()!=Some(&owner) {Ok(String::new())} else {
+                                match owned_key(&owner,&id).and_then(|key| serde_json::to_string(&computer).map_err(|_|"Could not remember this computer".into()).and_then(|value| vault::save(&key,&value))) {
+                                    Ok(())=>Ok(String::new()),Err(note)=>{let _=events.send(Event::StorageNote(note)).await;Ok(String::new())}
+                                }
+                            }
+                        }
+                        Command::ConnectOwned(id)=>{
+                            if let Some(old)=pending_pair.take() { let _=api.call(Method::DELETE,&format!("/v1/owner-pairings/{}",old.id),None).await; }
+                            if let Some(owner)=signed_owner.clone().filter(|_| api.token.is_some()) {
+                                match api.computers().await {
+                                    Ok(computers)=>match computers.into_iter().find(|c| c.id==id && c.linked==1) {
+                                        Some(computer)=>{
+                                            let fp=computer.certificate_fp.as_deref().and_then(|fp| secpar_client::pairing::fingerprint(fp).ok());
+                                            if let Some(fingerprint)=fp {
+                                                let saved=owned_key(&owner,&id).ok().and_then(|key| vault::load(&key).ok().flatten()).and_then(|value|serde_json::from_str::<Computer>(&value).ok()).filter(|saved|saved.fingerprint==fingerprint);
+                                                if let Some(computer)=saved {
+                                                    pending_pair=None;
+                                                    let _=events.send(Event::OwnedConnection(OwnedConnection::Cached{owner,computer})).await;
+                                                    Ok(String::new())
+                                                } else {
+                                                    match api.call(Method::POST,"/v1/owner-pairings",Some(json!({"computer":id,"device":crate::device_name()}))).await {
+                                                        Ok(value)=>{
+                                                            if let Some(request)=value["id"].as_str().filter(|id|path_id(id).is_ok()) {
+                                                                pending_pair=Some(PendingPair{id:request.into(),owner,computer:id,fingerprint,expires:Instant::now()+Duration::from_secs(120),next:Instant::now()+Duration::from_secs(2)});
+                                                                let _=events.send(Event::Message(format!("Waiting for {}…",computer.name))).await;
+                                                                Ok(String::new())
+                                                            }else{Err((StatusCode::BAD_GATEWAY,"Invalid pairing response".into()))}
+                                                        }
+                                                        Err(e)=>Err(e)
+                                                    }
+                                                }
+                                            }else{Err((StatusCode::BAD_GATEWAY,"This computer has no verified host identity".into()))}
+                                        }
+                                        None=>Err((StatusCode::NOT_FOUND,"This computer is no longer linked to your account".into()))
+                                    }
+                                    Err(e)=>Err(e)
+                                }
+                            }else{Err((StatusCode::UNAUTHORIZED,"Sign in to connect to your computers".into()))}
+                        }
                         Command::Refresh=>Ok(String::new()),
                         Command::Action(action)=>{
                             let (method,id,suffix)=match &action {
@@ -796,7 +964,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                             else {let _=events.send(Event::Message(note)).await;}
                         }
                         Ok(note) if api.token.is_some()&&!skip_refresh=>match api.snapshot().await {
-                            Ok((user,friends,blocked))=>{let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;}
+                            Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;}
                             Err((status,note))=>{if status==StatusCode::UNAUTHORIZED{api.token=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}else{let _=events.send(Event::Message(note)).await;}}
                         },_=>{}
                     }
@@ -812,13 +980,40 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                             if token.len()!=64 || !token.bytes().all(|b|b.is_ascii_hexdigit()) {pending=None;let _=events.send(Event::SignedOut("Invalid account session".into())).await;}
                             else {
                                 let note=vault::save(CREDENTIAL,token).err().unwrap_or_default();api.token=Some(token.into());pending=None;
-                                match api.snapshot().await {Ok((user,friends,blocked))=>{let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;},Err((status,note))=>{if status==StatusCode::UNAUTHORIZED{api.token=None;let _=vault::forget(CREDENTIAL);}let _=events.send(Event::SignedOut(note)).await;}}
+                                match api.snapshot().await {Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;},Err((status,note))=>{if status==StatusCode::UNAUTHORIZED{api.token=None;let _=vault::forget(CREDENTIAL);}let _=events.send(Event::SignedOut(note)).await;}}
                             }
                         }
                         Err((_,code)) if code=="authorization_pending"=>{},
                         Err((_,code)) if code=="slow_down"=>{p.interval+=Duration::from_secs(5);p.next=Instant::now()+p.interval;},
                         Err((status,note)) if status.is_server_error()=>{let _=events.send(Event::Message(note)).await;},
                         Err((_,note))=>{pending=None;let _=events.send(Event::SignedOut(note)).await;}
+                    }
+                    ctx.request_repaint();
+                }
+                if api.token.is_none() { pending_pair=None; signed_owner=None; }
+                if let Some(owner)=signed_owner.as_deref().filter(|_| api.token.is_some() && Instant::now()>=next_owned) {
+                    next_owned=Instant::now()+Duration::from_secs(30);
+                    if !synchronize_owned(&api,owner,suppressed_owner.as_deref()!=Some(owner),&events).await { api.token=None; signed_owner=None; pending_pair=None;let _=vault::forget(CREDENTIAL); }
+                    ctx.request_repaint();
+                }
+                if pending_pair.as_ref().is_some_and(|p|Instant::now()>=p.next) {
+                    let p=pending_pair.as_mut().unwrap();
+                    if Instant::now()>=p.expires {
+                        pending_pair=None;let _=events.send(Event::Message("Computer did not respond. Check that Secpar is open there.".into())).await;
+                    } else {
+                        p.next=Instant::now()+Duration::from_secs(2);
+                        match api.call(Method::GET,&format!("/v1/owner-pairings/{}",p.id),None).await {
+                            Ok(value) if value["state"]=="pending"=>{},
+                            Ok(value)=>{
+                                let result=value["link"].as_str().and_then(|link|Pairing::parse(link).ok()).filter(|pairing|pairing.fingerprint==p.fingerprint && value["certificate_fp"].as_str().and_then(|fp|secpar_client::pairing::fingerprint(fp).ok())==Some(p.fingerprint));
+                                if let Some(pairing)=result {
+                                    let _=events.send(Event::OwnedConnection(OwnedConnection::Pair{owner:p.owner.clone(),id:p.computer.clone(),pairing})).await;
+                                }else{let _=events.send(Event::Message("Computer identity did not match its account registration".into())).await;}
+                                pending_pair=None;
+                            }
+                            Err((status,_)) if status.is_server_error()=>{},
+                            Err((_,note))=>{pending_pair=None;let _=events.send(Event::Message(note)).await;}
+                        }
                     }
                     ctx.request_repaint();
                 }
@@ -831,6 +1026,32 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn automatic_enrollment_reuses_a_current_link_and_cannot_transfer_other_accounts() {
+        let api=Api{base:ORIGIN.into(),client:Client::new(),token:Some("d".repeat(64))};
+        let state=json!({"computer":"00000000-0000-4000-8000-000000000010","owner":"alice","online":true});
+        let result=api.ensure_host_via("alice",true,|command,_| {
+            assert_eq!(command,"host_account_state"); std::future::ready(Ok(state.clone()))
+        }).await.unwrap();
+        assert!(result.online);
+        assert!(api.ensure_host_via("bob",true,|command,_| {
+            assert_eq!(command,"host_account_state"); std::future::ready(Ok(state.clone()))
+        }).await.is_err());
+        let unlinked=api.ensure_host_via("alice",false,|command,_| {
+            assert_eq!(command,"host_account_state"); std::future::ready(Ok(json!({"online":false})))
+        }).await.unwrap();
+        assert!(unlinked.owner.is_none());
+    }
+    #[test]
+    fn saved_owner_access_is_namespaced_by_both_account_and_computer() {
+        let alice="00000000-0000-4000-8000-000000000001";
+        let bob="00000000-0000-4000-8000-000000000002";
+        let pc="00000000-0000-4000-8000-000000000010";
+        assert_ne!(owned_key(alice,pc).unwrap(),owned_key(bob,pc).unwrap());
+        assert_ne!(owned_key(alice,pc).unwrap(),owned_key(alice,bob).unwrap());
+        assert!(owned_key("../account",pc).is_err());
+        assert!(owned_key(alice,"../../paired-computer").is_err());
+    }
     #[test]
     fn friend_codes_cannot_inject_account_paths() {
         assert!(path_id("d0d12c4d-13f1-4fbc-b113-a89d901ac34b").is_ok());

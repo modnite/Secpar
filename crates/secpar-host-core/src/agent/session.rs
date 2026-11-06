@@ -107,11 +107,11 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
     let device = match first {
         Some(ClientMsg::Pair { otp, device, .. }) => {
             let device: String = device.trim().chars().take(40).collect();
-            if !ctx.store.lock().unwrap().take_otp(&otp) {
-                return fail(&mut ws, "bad_otp", "pairing code is wrong or expired").await;
-            }
-            let Ok((id, token)) = ctx.store.lock().unwrap().add_device(&device) else {
-                return fail(&mut ws, "internal", "could not save the device").await;
+            let paired = ctx.store.lock().unwrap().pair_device(&otp, &device);
+            let (id, token) = match paired {
+                Ok(paired) => paired,
+                Err("bad_otp") => return fail(&mut ws, "bad_otp", "pairing code is wrong or expired").await,
+                Err(_) => return fail(&mut ws, "internal", "could not save the device").await,
             };
             let _ = ctx.events.send(Event::Paired { device: id.clone() });
             let pc = ctx.handlers.pc_info().await;
@@ -146,7 +146,7 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                     }
                     id
                 }
-                Err(code) => return fail(&mut ws, code, "this phone is not paired").await,
+                Err(code) => return fail(&mut ws, code, "this device is not paired").await,
             }
         }
         _ => {

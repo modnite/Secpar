@@ -86,6 +86,14 @@ fn new_qr(app: &App) -> PairCode {
 pub fn pair_url(app: &App) -> String {
     let mut store = app.store.lock().unwrap();
     let otp = store.new_otp();
+    pair_url_using(app, &store, &otp)
+}
+pub fn owner_pair_url(app: &App, request: &str, owner: &str) -> Result<String,String> {
+    let mut store = app.store.lock().unwrap();
+    let otp = store.owner_otp(request,owner)?;
+    Ok(pair_url_using(app, &store, &otp))
+}
+fn pair_url_using(app: &App, store: &crate::store::Store, otp: &str) -> String {
     let mut link = qr_payload(&crate::win::sys::pc_name(), &rank_ips(crate::win::sys::adapters().0), PORT, &app.fp, &otp);
     if let Some(base) = crate::remote::url().filter(|_| store.relay_registered()) {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
@@ -187,8 +195,18 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
             app.account.as_ref().map_err(Clone::clone)?.allow_owner(&challenge.owner).await?;
             to_value(crate::account_link::prove(&app.identity, challenge, &crate::win::sys::pc_name())?)
         }
-        "host_account_install" => to_value(app.account.as_ref().map_err(Clone::clone)?.install(arg(&args, "registration")?).await?),
-        "host_account_unlink" => to_value(app.account.as_ref().map_err(Clone::clone)?.unlink().await?),
+        "host_account_install" => {
+            let state = app.account.as_ref().map_err(Clone::clone)?.install(arg(&args, "registration")?).await?;
+            let revoked = app.store.lock().unwrap().set_account_owner(state.owner.clone());
+            for device in revoked { app.agent.revoke(&device); }
+            to_value(state)
+        }
+        "host_account_unlink" => {
+            let state = app.account.as_ref().map_err(Clone::clone)?.unlink().await?;
+            let revoked = app.store.lock().unwrap().set_account_owner(None);
+            for device in revoked { app.agent.revoke(&device); }
+            to_value(state)
+        }
         "new_qr" => to_value(new_qr(&app)),
         "revoke" => {
             app.agent.revoke(&arg::<String>(&args, "id")?);

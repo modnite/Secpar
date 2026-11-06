@@ -402,3 +402,34 @@ This list is a work record, not a claim that the app family is complete.
   relinking, ciphertext swapping and sign-out. Local workerd/D1 runtime verifies
   the actual AES-GCM/database roundtrip. Native applications still need integration;
   no claim that automatic pairing is available in current releases.
+
+- Windows 3.5.0 installation completed (exit 0); installed host/UI both 3.5.0,
+  Secpar service running. Installed host hash matches the verified installer
+  payload. User then confirmed a second device fails with capture/locked-screen
+  error in either connection order. New strict hardware regression reproduced it:
+  first HEVC stream starts, second capture fails. DXGI permits one duplication per
+  output/process, irrespective of the new three-slot capacity counter.
+- Shared Windows capture now uses one producer per monitor, latest-frame delivery,
+  bounded immutable GPU texture leases and independent client encoders/transports.
+  Actual hardware regression passes three concurrent streams (HEVC + H.264 + H.264),
+  fourth rejected at the connection limit, disconnect/replacement succeeds, and
+  capture closes after the last viewer. Received 89/285/263 video packets plus 46
+  replacement packets in the checked run. This fix is not yet in a public binary.
+- UNRELEASED account integration is in the main working tree: shared machine
+  enrollment/proof/heartbeat/pair-request polling; Windows DPAPI adapter preserves
+  existing file format; Linux private machine credential storage and enrollment;
+  independent owner pairing codes beside the manual QR; atomic code/context/device
+  creation; account-tagged device credentials and account unlink revocation;
+  desktop automatic enrollment, owned-computer list and account-namespaced saved
+  access. Native GUI sample fits 640×400. Shared tests 21 passed, desktop 22 passed
+  (one vault test ignored), Windows agent 15 passed (one live relay test ignored),
+  including concurrent actual TLS pairing and manual-access preservation on unlink.
+  Linux earlier baseline passed 11 host and 20 desktop tests before the latest
+  account test additions; refresh those checks. Android accounts and Linux remote
+  relay/media integration remain unfinished. Do not ship this tree as completed 4.0.
+- Latest user steering: source requirements are recorded in AGENTS.md. Narrow the
+  app, version beside logo, separate host/client settings, presets labeled by real
+  resolution/FPS, configurable one-hand shortcut replacing Ctrl+F12, less website
+  prose and real client hardware decode options. X250/Linux playback/cursor is poor;
+  current desktop OpenH264 decoding is CPU-only. Restore Android icon background
+  to BLACK, keeping the existing padding/geometry. These additions remain required.

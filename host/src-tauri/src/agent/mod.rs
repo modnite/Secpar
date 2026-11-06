@@ -25,6 +25,9 @@ impl secpar_host_core::PairingStore for crate::store::Store {
     fn add_device(&mut self, name: &str) -> std::io::Result<(String, String)> {
         self.add_device(name)
     }
+    fn pair_device(&mut self, otp: &str, name: &str) -> Result<(String, String), &'static str> {
+        self.pair_device(otp, name)
+    }
     fn auth(&self, token: &str) -> Result<String, &'static str> {
         self.auth(token)
     }

@@ -6,10 +6,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub type DeviceId = String;
-const OTP_TTL: Duration = Duration::from_secs(120);
+
 
 pub fn random<const N: usize>() -> [u8; N] {
     let mut b = [0u8; N];
@@ -55,6 +55,8 @@ pub struct Device {
     token_sha256: String,
     #[serde(default)]
     revoked: bool,
+    #[serde(default)]
+    account_owner: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,7 +77,8 @@ struct Data {
 pub struct Store {
     path: PathBuf,
     data: Data,
-    otp: Option<(String, Instant)>,
+    codes: secpar_host_core::pairing_codes::PairingCodes,
+    account_owner: Option<String>,
 }
 
 fn uuid4() -> String {
@@ -105,7 +108,7 @@ impl Store {
             }
             Err(e) => return Err(e),
         };
-        let mut s = Store { path, data, otp: None };
+        let mut s = Store { path, data, codes: Default::default(), account_owner: None };
         if s.data.relay_key.is_empty() {
             s.data.relay_key = b64url(&random::<32>());
         }
@@ -128,31 +131,35 @@ impl Store {
         self.new_otp_at(Instant::now())
     }
 
-    /// Issues a fresh 128-bit pairing token, replacing any earlier one.
-    pub fn new_otp_at(&mut self, now: Instant) -> String {
-        let otp = b64url(&random::<16>());
-        self.otp = Some((otp.clone(), now));
-        otp
+    /// A new manual QR replaces only the previous manual QR.
+    pub fn new_otp_at(&mut self, now: Instant) -> String { self.codes.manual(now) }
+    pub fn take_otp(&mut self, otp: &str) -> bool { self.take_otp_at(otp, Instant::now()) }
+    pub fn take_otp_at(&mut self, otp: &str, now: Instant) -> bool { self.codes.take(otp, now) }
+    pub fn owner_otp(&mut self, request: &str, owner: &str) -> Result<String, String> {
+        if self.account_owner.as_deref() != Some(owner) { return Err("Host account changed".into()); }
+        self.codes.owner(request, owner, Instant::now()).map_err(str::to_owned)
     }
-
-    pub fn take_otp(&mut self, otp: &str) -> bool {
-        self.take_otp_at(otp, Instant::now())
+    pub fn set_account_owner(&mut self, owner: Option<String>) -> Vec<String> {
+        if self.account_owner != owner { self.codes.clear_owner(); }
+        self.account_owner = owner;
+        self.data.devices.iter().filter(|d| !d.revoked && d.account_owner.is_some() && d.account_owner != self.account_owner).map(|d| d.id.clone()).collect()
     }
-
-    pub fn take_otp_at(&mut self, otp: &str, now: Instant) -> bool {
-        match &self.otp {
-            Some((cur, at)) if cur == otp && now.duration_since(*at) < OTP_TTL => {
-                self.otp = None;
-                true
-            }
-            _ => false,
-        }
+    pub fn pair_device(&mut self, otp: &str, name: &str) -> Result<(String,String), &'static str> {
+        let origin = self.codes.consume(otp, Instant::now()).ok_or("bad_otp")?;
+        let owner = match origin {
+            secpar_host_core::pairing_codes::Origin::Manual => None,
+            secpar_host_core::pairing_codes::Origin::Account(owner) if self.account_owner.as_deref() == Some(&owner) => Some(owner),
+            _ => return Err("bad_otp"),
+        };
+        self.add_device_owned(name, owner).map_err(|_| "internal")
     }
-
     pub fn add_device(&mut self, name: &str) -> std::io::Result<(DeviceId, String)> {
+        self.add_device_owned(name, None)
+    }
+    fn add_device_owned(&mut self, name: &str, owner: Option<String>) -> std::io::Result<(DeviceId, String)> {
         let token = b64url(&random::<32>());
         let id = hex(&random::<8>());
-        self.data.devices.push(Device { id: id.clone(), name: name.into(), token_sha256: token_hash(&token), revoked: false });
+        self.data.devices.push(Device { id: id.clone(), name: name.into(), token_sha256: token_hash(&token), revoked: false, account_owner: owner });
         self.save()?;
         Ok((id, token))
     }
@@ -161,7 +168,7 @@ impl Store {
     pub fn auth(&self, token: &str) -> Result<DeviceId, &'static str> {
         let h = token_hash(token);
         match self.data.devices.iter().find(|d| d.token_sha256 == h) {
-            Some(d) if d.revoked => Err("revoked"),
+            Some(d) if d.revoked || (d.account_owner.is_some() && d.account_owner != self.account_owner) => Err("revoked"),
             Some(d) => Ok(d.id.clone()),
             None => Err("unauthorized"),
         }

@@ -246,6 +246,36 @@ async fn revoke_closes_only_that_device() {
 }
 
 #[tokio::test]
+async fn concurrent_account_pairs_are_independent_and_unlink_preserves_manual_access() {
+    let r = rig("account-pairs", Duration::from_secs(30)).await;
+    let (manual, first, second) = {
+        let mut store = r.store.lock().unwrap();
+        store.set_account_owner(Some("fixture-owner".into()));
+        (store.new_otp(), store.owner_otp("00000000-0000-4000-8000-000000000001","fixture-owner").unwrap(), store.owner_otp("00000000-0000-4000-8000-000000000002","fixture-owner").unwrap())
+    };
+    async fn pair(r: &Rig, otp: String, name: &str) -> (Ws,String) {
+        let mut ws = connect(r.handle.addr,&r.fp).await;
+        send(&mut ws,json!({"t":"pair","otp":otp,"device":name})).await;
+        let reply=recv(&mut ws).await.unwrap(); assert_eq!(reply["t"],"paired");
+        send(&mut ws,json!({"t":"ping"})).await; assert_eq!(recv(&mut ws).await.unwrap()["t"],"pong");
+        (ws,reply["token"].as_str().unwrap().to_string())
+    }
+    let ((mut a, token_a),(mut b, token_b)) = tokio::join!(pair(&r,first,"Laptop"),pair(&r,second,"Android"));
+    let (mut manual, token_manual) = pair(&r,manual,"Manual device").await;
+    assert_ne!(token_a,token_b);
+    let ids=r.store.lock().unwrap().set_account_owner(None);
+    assert_eq!(ids.len(),2);
+    for id in ids { r.handle.revoke(&id); }
+    assert_eq!(recv(&mut a).await.unwrap()["code"],"revoked");
+    assert_eq!(recv(&mut b).await.unwrap()["code"],"revoked");
+    send(&mut manual,json!({"t":"ping"})).await; assert_eq!(recv(&mut manual).await.unwrap()["t"],"pong");
+    let mut store=r.store.lock().unwrap();
+    assert!(store.auth(&token_manual).is_ok());
+    store.set_account_owner(Some("fixture-owner".into()));
+    assert_eq!(store.auth(&token_a),Err("revoked")); assert_eq!(store.auth(&token_b),Err("revoked"));
+}
+
+#[tokio::test]
 async fn idle_timeout_closes() {
     let r = rig("idle", Duration::from_millis(300)).await;
     let (_, tok) = r.store.lock().unwrap().add_device("A").unwrap();

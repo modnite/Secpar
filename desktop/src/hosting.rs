@@ -235,7 +235,12 @@ impl Panel {
         }
         ui.add_space(if self.settings_open { 0. } else { 10. });
         if cfg!(target_os = "linux") {
-            ui.label(egui::RichText::new("Local network hosting").color(design::MUTED));
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Local network hosting").color(design::MUTED));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Account").clicked() { self.account_open = true; }
+                });
+            });
             ui.add_space(6.);
             ui.label("Paired devices");
         } else {

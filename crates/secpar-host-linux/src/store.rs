@@ -122,6 +122,8 @@ pub struct Device {
     token_sha256: String,
     #[serde(default)]
     revoked: bool,
+    #[serde(default)]
+    account_owner: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Data {
@@ -135,7 +137,8 @@ struct Data {
 pub struct Store {
     path: PathBuf,
     data: Data,
-    otp: Option<(String, Instant)>,
+    codes: secpar_host_core::pairing_codes::PairingCodes,
+    account_owner: Option<String>,
 }
 impl Store {
     pub fn open(dir: &Path) -> io::Result<Self> {
@@ -155,7 +158,7 @@ impl Store {
         let s = Self {
             path,
             data,
-            otp: None,
+            codes: Default::default(), account_owner: None,
         };
         s.save()?;
         Ok(s)
@@ -201,48 +204,45 @@ impl Store {
     pub fn new_otp(&mut self) -> String {
         self.new_otp_at(Instant::now())
     }
-    fn new_otp_at(&mut self, now: Instant) -> String {
-        let s = URL_SAFE_NO_PAD.encode(random::<16>());
-        self.otp = Some((s.clone(), now));
-        s
+    fn new_otp_at(&mut self, now: Instant) -> String { self.codes.manual(now) }
+    fn take_at(&mut self, otp: &str, now: Instant) -> bool { self.codes.take(otp,now) }
+    pub fn owner_otp(&mut self, request: &str, owner: &str) -> Result<String, String> {
+        if self.account_owner.as_deref() != Some(owner) { return Err("Host account changed".into()); }
+        self.codes.owner(request, owner, Instant::now()).map_err(str::to_owned)
     }
-    fn take_at(&mut self, otp: &str, now: Instant) -> bool {
-        if self.otp.as_ref().is_some_and(|(s, at)| {
-            s == otp && now.saturating_duration_since(*at) < Duration::from_secs(120)
-        }) {
-            self.otp = None;
-            true
-        } else {
-            false
-        }
+    pub fn set_account_owner(&mut self, owner: Option<String>) -> Vec<String> {
+        if self.account_owner != owner { self.codes.clear_owner(); }
+        self.account_owner = owner;
+        self.data.devices.iter().filter(|d| !d.revoked && d.account_owner.is_some() && d.account_owner != self.account_owner).map(|d| d.id.clone()).collect()
     }
+    fn add_device_owned(&mut self, name: &str, owner: Option<String>) -> io::Result<(String,String)> {
+        if self.data.devices.len() >= 128 { return Err(io::Error::other("Device limit reached")); }
+        let id = hex(&random::<8>());
+        let token = URL_SAFE_NO_PAD.encode(random::<32>());
+        self.data.devices.push(Device { id:id.clone(), name:name.chars().take(40).collect(), token_sha256:hash(&token), revoked:false, account_owner:owner });
+        if let Err(e) = self.save() { self.data.devices.pop(); return Err(e); }
+        Ok((id,token))
+    }
+
 }
 impl PairingStore for Store {
     fn take_otp(&mut self, otp: &str) -> bool {
         self.take_at(otp, Instant::now())
     }
-    fn add_device(&mut self, name: &str) -> io::Result<(String, String)> {
-        if self.data.devices.len() >= 128 {
-            return Err(io::Error::other("Device limit reached"));
-        }
-        let id = hex(&random::<8>());
-        let token = URL_SAFE_NO_PAD.encode(random::<32>());
-        self.data.devices.push(Device {
-            id: id.clone(),
-            name: name.chars().take(40).collect(),
-            token_sha256: hash(&token),
-            revoked: false,
-        });
-        if let Err(e) = self.save() {
-            self.data.devices.pop();
-            return Err(e);
-        }
-        Ok((id, token))
+    fn add_device(&mut self, name: &str) -> io::Result<(String,String)> { self.add_device_owned(name,None) }
+    fn pair_device(&mut self, otp: &str, name: &str) -> Result<(String,String), &'static str> {
+        let origin = self.codes.consume(otp, Instant::now()).ok_or("bad_otp")?;
+        let owner = match origin {
+            secpar_host_core::pairing_codes::Origin::Manual => None,
+            secpar_host_core::pairing_codes::Origin::Account(owner) if self.account_owner.as_deref() == Some(&owner) => Some(owner),
+            _ => return Err("bad_otp"),
+        };
+        self.add_device_owned(name,owner).map_err(|_| "internal")
     }
     fn auth(&self, token: &str) -> Result<String, &'static str> {
         let h = hash(token);
         match self.data.devices.iter().find(|d| d.token_sha256 == h) {
-            Some(d) if d.revoked => Err("revoked"),
+            Some(d) if d.revoked || (d.account_owner.is_some() && d.account_owner != self.account_owner) => Err("revoked"),
             Some(d) => Ok(d.id.clone()),
             None => Err("unauthorized"),
         }
@@ -276,6 +276,23 @@ impl PairingStore for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_pairing_is_private_per_device_and_revoked_when_unlinked() {
+        let dir=tempfile::tempdir().unwrap(); let mut store=Store::open(dir.path()).unwrap();
+        store.set_account_owner(Some("alice".into()));
+        let manual=store.new_otp();
+        let code=store.owner_otp("00000000-0000-4000-8000-000000000001","alice").unwrap();
+        assert!(store.owner_otp("00000000-0000-4000-8000-000000000002","bob").is_err());
+        let (id,token)=store.pair_device(&code,"Laptop").unwrap();
+        assert!(store.pair_device(&code,"Replay").is_err());
+        let (_,manual_token)=store.pair_device(&manual,"Manual").unwrap();
+        assert!(store.auth(&token).is_ok());
+        assert_eq!(store.set_account_owner(None),vec![id.clone()]);
+        assert_eq!(store.auth(&token),Err("revoked")); assert!(store.auth(&manual_token).is_ok());
+        store.revoke(&id).unwrap(); drop(store);
+        let mut restored=Store::open(dir.path()).unwrap(); restored.set_account_owner(Some("alice".into()));
+        assert_eq!(restored.auth(&token),Err("revoked")); assert!(restored.auth(&manual_token).is_ok());
+    }
     #[test]
     fn owner_credentials_survive_restart_without_plaintext_tokens() {
         let dir = tempfile::tempdir().unwrap();

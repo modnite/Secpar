@@ -61,9 +61,28 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(start_tray(store.clone()));
 
     // Account-link failure must never interrupt existing owner connections.
-    let account = crate::host_account::Account::open(&dir, &identity.fingerprint_hex);
+    let account = crate::host_account::open(&dir, &identity.fingerprint_hex);
     if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
     let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net });
+    let weak = Arc::downgrade(&app);
+    tokio::spawn(async move {
+        let mut timer = tokio::time::interval(Duration::from_secs(3));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            timer.tick().await;
+            let Some(app) = weak.upgrade() else { break };
+            let Ok(account) = &app.account else { continue };
+            let owner = account.state().await.owner;
+            let revoked = app.store.lock().unwrap().set_account_owner(owner.clone());
+            for device in revoked { app.agent.revoke(&device); }
+            if let Some(owner) = owner {
+                let _ = account.poll_pairings(|id| {
+                    let app = app.clone(); let owner = owner.clone();
+                    async move { crate::commands::owner_pair_url(&app,&id,&owner) }
+                }).await;
+            }
+        }
+    });
     let handler: ipc::Handler = Arc::new(move |cmd, args| Box::pin(crate::commands::dispatch(app.clone(), cmd, args)));
     ipc::serve(ipc::PIPE, handler, ui).await?;
     Ok(())

@@ -47,6 +47,7 @@ struct Backend {
     name: String,
     agent: Mutex<Option<AgentHandle>>,
     active: Arc<secpar_host_core::limits::StreamSlots>,
+    account: Result<Arc<secpar_host_core::account::Account>, String>,
 }
 impl Backend {
     async fn start(directory: PathBuf) -> Result<Arc<Self>, String> {
@@ -54,16 +55,52 @@ impl Backend {
             Store::open(&directory).map_err(|_| "Could not open private Secpar host settings")?;
         let identity =
             Identity::open(&directory).map_err(|_| "Could not open Secpar host identity")?;
+        // An account failure must not interrupt existing manually paired devices.
+        let account = crate::account::open(&directory, &identity.fingerprint());
+        if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
         let host = Arc::new(Self {
             store: Arc::new(Mutex::new(store)),
             identity,
             name: machine_name(),
             agent: Mutex::new(None),
             active: Arc::default(),
+            account,
         });
         let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),"0.0.0.0:48999".parse().unwrap(),Duration::from_secs(60),None).await.map_err(|_|"Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
         *host.agent.lock().unwrap() = Some(handle);
+        let weak = Arc::downgrade(&host);
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(Duration::from_secs(3));
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                timer.tick().await;
+                let Some(host) = weak.upgrade() else { break };
+                let Ok(account) = &host.account else { continue };
+                let owner = account.state().await.owner;
+                host.sync_account_owner(owner.clone());
+                if let Some(owner) = owner {
+                    let _ = account.poll_pairings(|id| {
+                        let host = host.clone(); let owner = owner.clone();
+                        async move { host.owner_pair_link(&id,&owner) }
+                    }).await;
+                }
+            }
+        });
         Ok(host)
+    }
+    fn sync_account_owner(&self, owner: Option<String>) {
+        let revoked = self.store.lock().unwrap().set_account_owner(owner);
+        if let Some(agent) = self.agent.lock().unwrap().as_ref() {
+            for device in revoked { agent.revoke(&device); }
+        }
+    }
+    fn owner_pair_link(&self, id: &str, owner: &str) -> Result<String,String> {
+        let addresses = stream::local_addresses();
+        if addresses.is_empty() { return Err("Connect this computer to a network before pairing".into()); }
+        let otp = self.store.lock().unwrap().owner_otp(id,owner)?;
+        let mut link = url::Url::parse("secpar://pair").unwrap();
+        link.query_pairs_mut().append_pair("n",&self.name).append_pair("h",&addresses.join(",")).append_pair("p","48999").append_pair("fp",&self.identity.fingerprint()).append_pair("t",&otp);
+        Ok(link.to_string())
     }
     async fn command(&self, command: &str, args: Value) -> Result<Value, String> {
         match command {
@@ -108,9 +145,23 @@ impl Backend {
                 agent.as_ref().ok_or("Host is not running")?.revoke(id);
                 Ok(Value::Null)
             }
-            "host_account_state" => Ok(
-                json!({"computer":null,"owner":null,"online":false,"note":"Local owner streaming"}),
-            ),
+            "host_account_state" => Ok(json!(self.account.as_ref().map_err(Clone::clone)?.state().await)),
+            "host_enrollment_proof" => {
+                let challenge = serde_json::from_value::<secpar_host_core::account_link::Challenge>(args["challenge"].clone()).map_err(|_| "Invalid account enrollment challenge")?;
+                self.account.as_ref().map_err(Clone::clone)?.allow_owner(&challenge.owner).await?;
+                Ok(json!(secpar_host_core::account_link::prove(&self.identity, challenge, &self.name)?))
+            }
+            "host_account_install" => {
+                let registration = serde_json::from_value(args["registration"].clone()).map_err(|_| "Invalid host registration")?;
+                let state = self.account.as_ref().map_err(Clone::clone)?.install(registration).await?;
+                self.sync_account_owner(state.owner.clone());
+                Ok(json!(state))
+            }
+            "host_account_unlink" => {
+                let state = self.account.as_ref().map_err(Clone::clone)?.unlink().await?;
+                self.sync_account_owner(None);
+                Ok(json!(state))
+            }
             _ => Err("This host action is not available on Linux yet".into()),
         }
     }

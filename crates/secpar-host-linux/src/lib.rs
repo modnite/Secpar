@@ -1,5 +1,7 @@
 //! Native hosting engine embedded in the one Secpar Linux desktop app.
 #[cfg(target_os = "linux")]
+pub mod account;
+#[cfg(target_os = "linux")]
 pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod capture;

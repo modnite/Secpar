@@ -27,6 +27,15 @@ use secpar_client::{
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
+fn device_name() -> String {
+    let name=std::env::var("COMPUTERNAME").or_else(|_|std::env::var("HOSTNAME")).ok();
+    #[cfg(unix)]
+    let name=name.or_else(||std::fs::read_to_string("/etc/hostname").ok());
+    let name=name.unwrap_or_else(||"Secpar Desktop".into());
+    let name:String=name.trim().chars().filter(|c|!c.is_control()).take(40).collect();
+    if name.is_empty() { "Secpar Desktop".into() } else { name }
+}
+
 /// Explorer file offers use the same hosting service without opening a second UI.
 pub fn offer_file(path: String) -> Result<(), String> {
     tokio::runtime::Builder::new_current_thread()
@@ -111,6 +120,9 @@ struct App {
     command: Option<mpsc::Sender<Command>>,
     events: Option<mpsc::Receiver<Event>>,
     computer: Option<Computer>,
+    computer_account: Option<String>,
+    session_account: Option<String>,
+    owned_connecting: Option<(String,String)>,
     decoder: Option<Decoder>,
     audio: Option<audio::Audio>,
     texture: Option<TextureHandle>,
@@ -156,6 +168,9 @@ impl App {
             command: None,
             events: None,
             computer: None,
+            computer_account: None,
+            session_account: None,
+            owned_connecting: None,
             decoder: None,
             audio: None,
             texture: None,
@@ -251,6 +266,12 @@ impl App {
                 }
             }
         };
+        if !reconnect { self.computer_account=None; self.owned_connecting=None; }
+        self.connect(ctx,pairing);
+    }
+    fn connect(&mut self, ctx: &egui::Context, pairing: Option<Pairing>) {
+        if self.command.is_some() { return; }
+        self.session_account=self.computer_account.clone();
         let computer = self.computer.clone();
         self.audio = audio::Audio::new().ok();
         let options = Options {
@@ -284,9 +305,9 @@ impl App {
             };
             runtime.block_on(async move {
                 let connection = if let Some(p) = pairing {
-                    Connected::pair(p, "Secpar Desktop").await
+                    Connected::pair(p, &device_name()).await
                 } else if let Some(c) = computer {
-                    Connected::reconnect(c, "Secpar Desktop").await
+                    Connected::reconnect(c, &device_name()).await
                 } else {
                     Err("Pair a computer first".into())
                 };
@@ -339,7 +360,16 @@ impl App {
         for event in messages {
             match event {
                 Event::Paired(c) => {
-                    self.account.remember(c.clone());
+                    // A response may arrive after logout while the worker drains.
+                    // Never save that account credential as a manual/global pair.
+                    if self.session_account.as_ref().is_some_and(|owner|self.account.user.as_ref().is_none_or(|user|user.id!=*owner)) {
+                        self.send(Command::Stop); continue;
+                    }
+                    if let Some((owner,id))=self.owned_connecting.take() {
+                        self.account.remember_owned(owner,id,c.clone());
+                    } else if self.computer_account.is_none() {
+                        self.account.remember(c.clone());
+                    }
                     self.computer = Some(c);
                     self.pair_link.clear();
                 }
@@ -397,6 +427,7 @@ impl App {
                 }
                 Event::Cursor { x, y, visible } => self.cursor = (x, y, visible),
                 Event::Ended(s) => {
+                    self.session_account=None;
                     self.capture(ctx, false);
                     self.command = None;
                     self.events = None;
@@ -489,6 +520,23 @@ impl eframe::App for App {
         }
         self.poll(ctx);
         self.account.poll();
+        if std::mem::take(&mut self.account.signed_out) && self.computer_account.is_some() {
+            self.capture(ctx,false); self.send(Command::Stop);
+            self.computer=None; self.computer_account=None; self.owned_connecting=None;
+        }
+        if self.command.is_none() {
+            if let Some(connection)=self.account.owned_connection.take() {
+                match connection {
+                    account::OwnedConnection::Cached{owner,computer} if self.account.user.as_ref().is_some_and(|user|user.id==owner) => {
+                        self.computer_account=Some(owner);self.owned_connecting=None;self.computer=Some(computer);self.connect(ctx,None);
+                    }
+                    account::OwnedConnection::Pair{owner,id,pairing} if self.account.user.as_ref().is_some_and(|user|user.id==owner) => {
+                        self.computer_account=Some(owner.clone());self.owned_connecting=Some((owner,id));self.connect(ctx,Some(pairing));
+                    }
+                    _=>{}
+                }
+            }
+        } else { self.account.owned_connection=None; }
         if std::mem::take(&mut self.account.forgot_computer) {
             self.computer = None;
         }
@@ -675,9 +723,8 @@ impl eframe::App for App {
                     } else if self.page == Page::Friends {
                         self.account.ui(ui);
                     } else {
-                        ui.heading("Computers");
-                        ui.add_space(8.);
-                        if let Some(computer) = &self.computer {
+                        self.account.computers_ui(ui);
+                        if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none()) {
                             let name = computer.name.clone();
                             design::surface().show(ui, |ui| {
                                 ui.set_width(ui.available_width());
@@ -706,6 +753,8 @@ impl eframe::App for App {
                             ui.add_space(8.);
                             egui::CollapsingHeader::new("Pair another computer")
                                 .show(ui, |ui| self.pairing_ui(ui, ctx));
+                        } else if self.account.user.is_some() {
+                            egui::CollapsingHeader::new("Pair with a code").show(ui,|ui|self.pairing_ui(ui,ctx));
                         } else {
                             self.pairing_ui(ui, ctx);
                         }
