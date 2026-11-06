@@ -264,6 +264,14 @@
   full Opus PLC is not implemented. Android tests cover a real 180 ms starvation,
   ten delayed packets and return to live audio. Both device tests pass; physical
   S23 comparison is pending. No video or PC engine changes.
+- Published Preview 18 from f0d6dde, version code 518. APK 24,024,539 bytes,
+  SHA-256 834a38bd267bf4e55f7308c5c073e9a0918b1795d77f1a2a8dc55ac561f7e37d,
+  matching the GitHub digest; both release assets return HTTP 200. Same signing
+  certificate and no synthetic test assets in release. Release/vital lint and all
+  202 unit tests pass. Both Android audio tests pass, including actual starvation,
+  ten stale packets and live recovery. Published P17 regression notice pointing to
+  P18. Physical audio comparison requested asynchronously. The Secpar emulator was
+  stopped after tests; physical phone and installed host left untouched.
 - Linux port checkpoint is on branch linux-host, commit 7135571, in the adjacent
   worktree work/secpar-linux-host. Shared host protocol/control code passes eight
   portable wire-model tests and 14 Windows TLS/pairing/relay tests. Native Linux
@@ -310,7 +318,8 @@ strand existing connections. LiveKit was discussed, not selected as a replacemen
 - Desktop development 7: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.7
 - Previous desktop development 6: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.6
 - Previous desktop development 5: https://github.com/modnite/Secpar/releases/tag/v0.1.0-secpar-desktop-dev.5
-- Android Preview 17: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.17
+- Android Preview 18: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.18
+- Previous Android Preview 17: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.17
 - Previous Android Preview 16: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.16
 - Previous Android Preview 15: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.15
 - Previous Android Preview 14: https://github.com/modnite/Secpar/releases/tag/v3.0.3-secpar-preview.14
