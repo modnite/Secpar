@@ -2,6 +2,50 @@
 
 ## CURRENT: supersedes historical statuses below
 
+- NEWEST:3.9.0 is PUBLIC at https://github.com/modnite/Secpar/releases/tag/v3.9.0,
+  source99b8762, release/3.9.0 branch/tag pushed. Website42308784762 passed.
+  Android/Windows/Linux release packages +checksums match GitHub asset digests.
+  Stage D:/Secpar-CI/publish-3.9.0; Windows6582865bytes, APK24112771, Linux23497208.
+  APK v3.9/code524, unchanged signing cert, R8/non-debuggable, no review/test media.
+- WINDOWS INSTALL PENDING OS UAC approval, exec session41501. User asked ONCE via
+  async question after consent.exe observed. Published silent installer launched
+  with RunAs only after TWO checks showed0 connected Secpar devices. Do not launch
+  another installer. Read session/result and installed PE versions before claiming
+  installed. Result D:/Secpar-CI/publish-3.9.0/install-exit-code.txt. Original PC Remote
+  and Sunshine services were STOPPED already; preserve them. Prior installed3.7.
+- Final gates:252 Android units;5 real audio cases incl180s uninterrupted playback
+  passed in193.978s; final3.9 debug actual TLS/native owner pairing+reconnect+Ping+
+  logout/manual preservation passed in9.106s, native host proves account provenance.
+  Bridge ACCOUNT HTTP IS SCRIPTED, actual host/TLS is real. Optimized production APK
+  cold-launch, Account screen, LIVE HTTPS device-approval startup and cancellation
+  passed (no credentials approved). Input4/PiP2/video1/layout1 passed earlier.
+- Windows15 agent+1 real DPAPI test; client10 incl actual LAN-first trap-relay case;
+  desktop25 pass/1 keychain ignored. Linux21 core+12 host+10 client+28 desktop pass
+  (1 keychain ignored); optimized AppImage passed actual Arch native Wayland/EGL.
+  Native owned desktop pairing now LAN-first; manual QR routing retained.
+- Source prs/stream2/Windows engine/desktop audio is unchanged from user-approved
+  Android3.8/Windows3.7 baseline. No new physical3.9 acceptance yet. Linux remote
+  HOST relay/STUN/TURN still missing, Linux physical KDE/X250 validation unavailable,
+  Mac hosting remains Claude scope. Do not describe app family as complete.
+- Public SHA256: APK e00727878c8402911aa7c5d7dacd6ff7365092529681a529e75ed7ace2ce8b56;
+  Linux f46512062238571f8c3a364dba370ccfcb97f25376442d684e552edd1f09b064;
+  installer6735523660683724810dca2668dbdf09e357b620b363db216bf1ef3d3258c890.
+  Installer payload hosteb3bb789c1c00395188163611e153945531affbb5f65dde7b78d135b5a09cf69;
+  UI58149593c7ce2ddce4f8c5655124a7452fb50289c0ab84e8f4bbafb036f58de0.
+  Tauri packaging changes exactly TAURI_BUNDLE_TYPE_VAR_UNK -> NSS (3 bytes), not
+  arbitrary payload drift. Host/UI PE versions3.9, no PDB/debug sections.
+- Only test emulator5556 used;5554 and physical phone untouched. Physical S23 adb
+  is visible again.5556 remains RUNNING: automatic tool review rejected a combined
+  notes-save/emulator-shutdown command with only 'blocked by policy'. No shutdown
+  or notes from that rejected command occurred; notes saved via file tool instead.
+  Avoid repeating blocked shutdown. Debug app com.pcremote.app.debug; test .debug.test.
+- NEXT: finish UAC-dependent Windows install/readback, launch desktop and confirm
+  automatic account enrollment via sanitized host_account_state, then user Android
+  3.9 Account sign-in/owned connection check. No passwords/approval codes in chat.
+  Continue Linux anywhere hosting and pending friends/gamepad scope afterwards.
+  Claude macOS checkout remains separate. Preserve approved baseline; new prompts
+  accumulate. Earlier pre-publication statuses below are historical now.
+
 - Android account integration IMPLEMENTED on main, not yet published: browser device
   sign-in, owned-computer list, automatic bootstrap on Connect, encrypted per-account
   access overlay beside manual PcStore, explicit owned navigation routes (a stale

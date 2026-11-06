@@ -1,6 +1,8 @@
 # Account-owned computer access
 
-Status: server API implemented; native host/client integration still required.
+Status: server and Windows/Linux/Android native integration shipped in3.9.0.
+Live account-holder sign-in acceptance remains pending. Linux remote hosting and
+macOS hosting remain incomplete; do not describe them as supported remote hosts.
 Owner pairing acceptance cases live in cloud/accounts/test/service.test.ts and
 cloud/accounts/test/runtime-smoke.mjs.
 The service only transports one-use host pairing codes, never paired-device tokens.
@@ -11,7 +13,8 @@ request context bound as authenticated data; the key is purpose-derived from the
 existing private signing scalar. A key rotation safely expires in-flight results.
 Native consumers must also compare the returned pairing fingerprint with the
 account computer record before using the existing pinned-TLS pairing protocol.
-This API alone does not implement automatic pairing in released applications.
+Native3.9 clients use this API for owned pairing, storing per-client credentials
+separately from independent manual pairings.
 
 `GET /v1/computers` lists only the account's computers, including enrollment,
 certificate fingerprint and heartbeat presence. Presence does not authorize a

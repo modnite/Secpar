@@ -1,5 +1,23 @@
 # Secpar delivery record
 
+## Latest: 3.9.0 published, Windows approval pending
+
+Source99b8762 and branch release/3.9.0 published with optimized Android/Windows/Linux
+packages and verified checksums. Website refresh42308784762 passed. Account-owned
+desktop enrollment/access and Android integration included.252 Android units,
+five final audio gates, actual final Android/native-host owner TLS/reconnect/logout,
+optimized APK live approval-start/cancel and native Linux Wayland launch pass.
+Bridge account HTTP is scripted; live account-holder approval remains pending.
+Linux remote hosting and Mac hosting remain incomplete. Working engine source is
+unchanged from the approved Android3.8/Windows3.7 baseline.
+
+Windows3.9 installer is awaiting actual OS UAC approval (session41501); user asked
+asynchronously after consent.exe confirmed. Do not claim installed yet. Before
+launch0 active Secpar devices checked twice; original PC Remote/Sunshine stopped
+state preserved. Phone and5554 untouched.5556 remains running after automatic
+review blocked a combined notes-save/shutdown command ('blocked by policy').
+Use docs/next-milestone.md NEWEST entry for exact artifact checksums and next steps.
+
 ## User preferences
 
 - Deliver completed results and keep working through the agreed app-family scope.
