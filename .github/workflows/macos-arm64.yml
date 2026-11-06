@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Test and package Apple Silicon desktop client
         run: |
-          for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
+          for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml crates/secpar-host-macos/Cargo.toml desktop/Cargo.toml; do
             cargo test --locked --manifest-path "$manifest"
           done
           if [ "${{ inputs.cross_compile }}" = "true" ]; then
