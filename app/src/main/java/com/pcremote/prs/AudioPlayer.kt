@@ -36,6 +36,9 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private var inputWaits = 0
     private var inputAgeUs = 0L
     private var decodedAgeUs = 0L
+    private val timeline = PcmTimeline()
+    private var codecTimestampOffsetUs = 0L
+    private var timelineMisses = 0
     private val pending = java.util.concurrent.atomic.AtomicInteger()
     private val overflowPackets = java.util.concurrent.atomic.AtomicInteger()
     @Volatile internal var acceptedFrames = 0L; private set
@@ -113,10 +116,11 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         if (dead) return
         c.getInputBuffer(inIdx)!!.apply { clear(); put(opus) }
         c.queueInputBuffer(inIdx, 0, opus.size, packet.captureUs, 0)
+        timeline.queued(packet.captureUs)
         drain(c, t, 1_000)
         if (System.nanoTime() - statsAt >= 5_000_000_000) {
             val queued = queuedFrames(t)
-            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()} recoveries=$recoveries staleFrames=$staleFrames captureAgeMs=${lastQueuedAgeUs / 1000} inputAgeMs=${inputAgeUs / 1000} decodedAgeMs=${decodedAgeUs / 1000}")
+            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()} recoveries=$recoveries staleFrames=$staleFrames captureAgeMs=${lastQueuedAgeUs / 1000} inputAgeMs=${inputAgeUs / 1000} decodedAgeMs=${decodedAgeUs / 1000} codecTimestampOffsetMs=${codecTimestampOffsetUs / 1000} timelineMisses=$timelineMisses")
             statsAt = System.nanoTime()
         }
     }
@@ -127,10 +131,15 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
             if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) continue
             if (outIdx < 0) break
             try {
+                if (info.size == 0 || info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) continue
                 val buf = c.getOutputBuffer(outIdx)!!
                 if (pcm.size < info.size) pcm = ByteArray(info.size)
                 buf.position(info.offset); buf.get(pcm, 0, info.size)
-                val captureUs = captureToLocalUs(info.presentationTimeUs)
+                val timedCaptureUs = timeline.consume(info.size / 4)
+                if (timedCaptureUs == null) timelineMisses++
+                val hostCaptureUs = timedCaptureUs ?: info.presentationTimeUs
+                codecTimestampOffsetUs = info.presentationTimeUs - hostCaptureUs
+                val captureUs = captureToLocalUs(hostCaptureUs)
                 val nowUs = System.nanoTime() / 1000
                 decodedAgeUs = captureUs?.let { nowUs - it } ?: 0
                 if (!playing && firstBufferedCaptureUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t)
@@ -138,7 +147,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 val decision = AudioPlayout.decide(captureUs, nowUs, queued, false)
                 if (decision.reset && (playing || writer.writtenFrames > 0)) resetOutput(t)
                 if (decision.discard) { staleFrames++; continue }
-                if (gapCaptureUs?.let { info.presentationTimeUs >= it } == true) {
+                if (gapCaptureUs?.let { hostCaptureUs >= it } == true) {
                     PcmFade.bridge(pcm, info.size, previousLeft, previousRight)
                     gapCaptureUs = null
                 } else if (fading) PcmFade.bridge(pcm, info.size)
