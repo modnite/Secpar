@@ -3,6 +3,15 @@ use crate::prs::frame::assemble;
 use std::collections::BTreeMap;
 use std::sync::mpsc;
 
+#[test]
+fn host_quality_ceiling_limits_native_and_requested_sizes_without_upscaling() {
+    assert_eq!(quality_limit("smooth",0,0,120),(1920,1080,60));
+    assert_eq!(quality_limit("battery",3840,2160,60),(1280,720,30));
+    assert_eq!(quality_limit("sharp",1280,720,30),(1280,720,30));
+    assert_eq!(quality_limit("2160p60",7680,4320,120),(3840,2160,60));
+    assert_eq!(quality_limit("auto",0,0,120),(0,0,120));
+}
+
 const KEY: [u8; 32] = [7; 32];
 
 /// Exercises actual concurrent capture/encoding, rather than only the slot counter.

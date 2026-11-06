@@ -25,6 +25,7 @@ try {
     & cargo build --release --locked --manifest-path (Join-Path $repo 'desktop/Cargo.toml')
     if ($LASTEXITCODE) { throw 'Desktop release build failed' }
     $desktop = Join-Path $DesktopTarget 'release/secpar-desktop.exe'
+    New-Item -ItemType Directory -Path (Join-Path $repo 'host/src-tauri/unified') -Force | Out-Null
     Copy-Item -LiteralPath $desktop -Destination (Join-Path $repo 'host/src-tauri/unified/secpar-desktop.exe')
     $env:CARGO_TARGET_DIR = $HostTarget
     & npm --prefix (Join-Path $repo 'host') run tauri build -- --config src-tauri/tauri.unified.conf.json --bundles nsis

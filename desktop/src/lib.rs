@@ -1,4 +1,5 @@
 mod account;
+mod client_settings;
 mod audio;
 mod design;
 mod hosting;
@@ -80,7 +81,7 @@ fn review_size() -> [f32; 2] {
             }
         }
     }
-    [720., 440.]
+    [540., 400.]
 }
 fn initial_status() -> String {
     #[cfg(feature = "ui-review")]
@@ -98,6 +99,8 @@ fn initial_page() -> Page {
     if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|page| page.starts_with("friends")) {
         return Page::Friends;
     }
+    #[cfg(feature="ui-review")]
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("client-settings")) {return Page::Settings;}
     Page::Computers
 }
 #[derive(PartialEq)]
@@ -105,6 +108,7 @@ enum Page {
     Computers,
     Hosting,
     Friends,
+    Settings,
 }
 struct App {
     #[cfg(feature = "ui-review")]
@@ -112,6 +116,8 @@ struct App {
     #[cfg(windows)]
     tray: Option<tray::Tray>,
     updates: updates::Panel,
+    client: client_settings::Settings,
+    shortcut_key: Option<Key>,
     hosting: hosting::Panel,
     account: account::Panel,
     page: Page,
@@ -154,7 +160,11 @@ impl App {
             ),
             TextureOptions::LINEAR,
         );
+        let client=client_settings::Settings::load();
+        let options=client.options();
         Self {
+            client,
+            shortcut_key: None,
             #[cfg(feature = "ui-review")]
             review_frames: 0,
             #[cfg(windows)]
@@ -177,11 +187,7 @@ impl App {
             brand,
             input: Default::default(),
             dimensions: [0, 0],
-            options: Options {
-                width: 1280,
-                height: 720,
-                ..Default::default()
-            },
+            options,
             displays: vec![],
             display: String::new(),
             cursor: (0, 0, false),
@@ -273,7 +279,7 @@ impl App {
         if self.command.is_some() { return; }
         self.session_account=self.computer_account.clone();
         let computer = self.computer.clone();
-        self.audio = audio::Audio::new().ok();
+        self.audio = self.client.audio.then(audio::Audio::new).and_then(Result::ok);
         let options = Options {
             audio: self.audio.is_some(),
             ..self.options.clone()
@@ -490,11 +496,14 @@ impl eframe::App for App {
             self.capture(ctx, false);
             return;
         }
-        let toggle=raw.events.iter().any(|event|matches!(event,UiEvent::Key{key:Key::F12,pressed:true,repeat:false,modifiers,..} if modifiers.ctrl));
-        if toggle {
-            self.capture(ctx, !self.input.captured);
-            raw.events
-                .retain(|e| !matches!(e, UiEvent::Key { key: Key::F12, .. }));
+        let toggle=raw.events.iter().find_map(|event| match event {
+            UiEvent::Key{key,pressed:true,repeat:false,modifiers,..} if self.client.shortcut.matches(*key,*modifiers) || (*key==Key::F12 && modifiers.ctrl) => Some(*key), _=>None
+        });
+        if let Some(key)=toggle {self.shortcut_key=Some(key);self.capture(ctx,!self.input.captured);}
+        if let Some(key)=self.shortcut_key {
+            let released=raw.events.iter().any(|e|matches!(e,UiEvent::Key{key:k,pressed:false,..} if *k==key));
+            raw.events.retain(|e| !matches!(e,UiEvent::Key{key:k,..} if *k==key));
+            if released {self.shortcut_key=None;}
         }
         for m in self.input.modifiers(raw.modifiers) {
             self.send(Command::Input(m));
@@ -548,6 +557,9 @@ impl eframe::App for App {
                 self.computer = Some(computer);
             }
         }
+        if (self.options.width,self.options.height)!=(self.client.width,self.client.height) {
+            self.client.width=self.options.width;self.client.height=self.options.height;self.client.save();
+        }
         if self.command.is_none() && self.input.captured {
             self.capture(ctx, false);
         }
@@ -561,6 +573,7 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.image((self.brand.id(), egui::vec2(112., 27.)));
+                        ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION")).size(11.).color(design::MUTED));
                         if self.command.is_none() {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -585,9 +598,9 @@ impl eframe::App for App {
                             if self.texture.is_some()
                                 && ui
                                     .button(if self.input.captured {
-                                        "Release · Ctrl+F12"
+                                        format!("Release · {}",self.client.shortcut.label())
                                     } else {
-                                        "Capture · Ctrl+F12"
+                                        format!("Capture · {}",self.client.shortcut.label())
                                     })
                                     .clicked()
                             {
@@ -635,6 +648,7 @@ impl eframe::App for App {
                             (Page::Computers, "Computers"),
                             (Page::Hosting, "Hosting"),
                             (Page::Friends, "Friends"),
+                            (Page::Settings, "Settings"),
                         ] {
                             if page == Page::Hosting && !cfg!(any(windows, target_os = "linux")) {
                                 continue;
@@ -722,6 +736,10 @@ impl eframe::App for App {
                         self.hosting.ui(ui, ctx, &mut self.account);
                     } else if self.page == Page::Friends {
                         self.account.ui(ui);
+                    } else if self.page == Page::Settings {
+                        egui::ScrollArea::vertical().show(ui,|ui| {
+                            if self.client.ui(ui) {self.options=self.client.options();self.client.save();}
+                        });
                     } else {
                         self.account.computers_ui(ui);
                         if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none()) {
