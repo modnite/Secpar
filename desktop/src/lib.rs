@@ -121,6 +121,7 @@ struct App {
     audio: Option<audio::Audio>,
     texture: Option<TextureHandle>,
     brand: TextureHandle,
+    brand_scale: f32,
     input: input::Input,
     dimensions: [usize; 2],
     options: Options,
@@ -135,11 +136,16 @@ struct App {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         design::configure(&cc.egui_ctx);
+        let brand_scale = cc.egui_ctx.pixels_per_point();
         let image = image::load_from_memory(include_bytes!(
             "../../assets/branding/secpar-wordmark-light.png"
         ))
         .expect("Secpar brand")
-        .to_rgba8();
+        .resize_exact(
+            (112. * brand_scale).round().max(1.) as u32,
+            (27. * brand_scale).round().max(1.) as u32,
+            image::imageops::FilterType::Lanczos3,
+        ).to_rgba8();
         let brand = cc.egui_ctx.load_texture(
             "Secpar brand",
             egui::ColorImage::from_rgba_unmultiplied(
@@ -170,6 +176,7 @@ impl App {
             audio: None,
             texture: None,
             brand,
+            brand_scale,
             input: Default::default(),
             dimensions: [0, 0],
             options,
@@ -486,6 +493,20 @@ impl eframe::App for App {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        let scale = ctx.pixels_per_point();
+        if self.brand_scale != scale {
+            // Filter to physical pixels before upload. GPU bilinear minification
+            // of the full wordmark aliases its fine edges, particularly at 1x.
+            let image = image::load_from_memory(include_bytes!("../../assets/branding/secpar-wordmark-light.png"))
+                .expect("Secpar brand").resize_exact(
+                    (112. * scale).round().max(1.) as u32,
+                    (27. * scale).round().max(1.) as u32,
+                    image::imageops::FilterType::Lanczos3,
+                ).to_rgba8();
+            self.brand.set(egui::ColorImage::from_rgba_unmultiplied(
+                [image.width() as usize, image.height() as usize], image.as_raw()), TextureOptions::LINEAR);
+            self.brand_scale = scale;
+        }
         self.updates.tick(ctx);
         self.updates.window(ctx, self.command.is_some());
         #[cfg(windows)]

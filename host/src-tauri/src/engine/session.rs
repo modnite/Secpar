@@ -497,16 +497,22 @@ impl Video {
             tokens -= 1.0;
             let Some(src) = img.as_ref().filter(|_| sh.peer().is_some()) else { continue };
             let Some(size) = self.cap.size() else { continue };
+            #[cfg(test)] let trace_start = Instant::now();
             if conv.is_none() {
                 conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
             }
             let Some(nv12) = conv.as_mut().and_then(|c| c.convert(src).ok()) else { continue };
+            #[cfg(test)] let trace_convert = trace_start.elapsed();
             let force = sh.idr.swap(false, Ordering::Relaxed);
             let Ok(outs) = self.enc.encode(&nv12, if repeat { now_us() } else { cap_us }, force) else { break };
+            #[cfg(test)] let trace_encode = trace_start.elapsed();
             for e in outs {
                 let fh = FrameHeader { len: e.data.len() as u32, capture_us: e.capture_us, keyframe: e.key, codec: self.enc.codec() };
                 sh.send_paced(&packetize(frame_id, &fh, &e.data, t.fec as usize));
                 frame_id = frame_id.wrapping_add(1);
+            }
+            #[cfg(test)] if frame_id.is_multiple_of(60) {
+                eprintln!("video timing frame={frame_id} convert={trace_convert:?} encode={:?} send={:?} repeat={repeat}", trace_encode-trace_convert, trace_start.elapsed()-trace_encode);
             }
         }
         sh.stop.store(true, Ordering::Relaxed);
