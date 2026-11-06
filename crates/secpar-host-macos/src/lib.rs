@@ -2,6 +2,8 @@
 //! The control, admission and session logic is platform neutral and tested anywhere;
 //! only `native` talks to macOS and it is compiled on macOS alone.
 pub mod backend;
+pub mod keymap;
+pub mod media;
 pub mod platform;
 pub mod session;
 

@@ -2076,8 +2076,10 @@ version = "0.1.0"
 dependencies = [
  "get_if_addrs",
  "keyring",
+ "opus",
  "secpar-host-core",
  "secpar-host-linux",
+ "secpar-stream",
  "serde",
  "serde_json",
  "tempfile",
