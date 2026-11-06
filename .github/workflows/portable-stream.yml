@@ -62,7 +62,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell -NoProfile -ExecutionPolicy RemoteSigned -File {0}
         run: |
-          foreach ($manifest in @('crates/secpar-stream/Cargo.toml', 'crates/secpar-network/Cargo.toml', 'crates/secpar-client/Cargo.toml', 'desktop/Cargo.toml')) {
+          foreach ($manifest in @('crates/secpar-host-core/Cargo.toml', 'crates/secpar-stream/Cargo.toml', 'crates/secpar-network/Cargo.toml', 'crates/secpar-client/Cargo.toml', 'desktop/Cargo.toml')) {
             cargo test --locked --manifest-path $manifest
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -75,9 +75,10 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
+          for manifest in crates/secpar-host-core/Cargo.toml crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
             cargo test --locked --manifest-path "$manifest"
           done
+          cargo test --locked --manifest-path crates/secpar-host-linux/Cargo.toml
           cargo build --release --locked --manifest-path desktop/Cargo.toml
           python3 desktop/package.py linux
       - uses: actions/upload-artifact@v4
@@ -112,7 +113,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - run: |
-          for manifest in crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
+          for manifest in crates/secpar-host-core/Cargo.toml crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
             cargo test --locked --manifest-path "$manifest"
           done
           if [ "${{ matrix.arch }}" = "arm64" ]; then
