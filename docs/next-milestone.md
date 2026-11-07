@@ -1,5 +1,28 @@
 # Active Secpar work — 2026-11-06
 
+## UPSTREAM MIGRATION FOUNDATION —2026-11-07
+
+New worktree work/secpar-upstream-engine, branch feat/upstream-streaming-migration
+at e5b7fec (pushed).
+Pinned Moonlight Qt6.2.0, Moonlight Android12.2, Sunshine2026.914.233613; Artemis
+20.2.6/Apollo0.4.6 retained as references. Prefer mature upstream media paths as
+whole components. User says choose whichever is better, not a mandated fork.
+Linux full upstream Qt release worker BUILT, no media alterations.511 tracked
+source files audited against pinned/patched checkout. Stripped worker2.2MiB;
+runtime libraries still need packaging. Small patches
+only Secpar executable/settings identity and Alt+F. Actual isolated --version and
+stream --help pass; settings under temporary .config/Secpar/SecparStream.conf.
+No installed Moonlight/Secpar state touched. This is NOT yet product integration.
+Android original native core/JNI and audio renderer build as a private optional
+library for ARM64/x86-64; actual JNI initialization passes on owned5556. Complete
+upstream decoder/input/activity integration and ownership/pairing bridge remain.
+Next: supervised Sunshine with separate state/ports, per-device authenticated
+GameStream pairing broker, one-app packaging, UI integration and remote routing.
+All-OS keep-awake while connected and stream-only Android PiP are required gates.
+User adds: slowdown correlates with received bitrate falling below1Mbps. Compare
+actual received rate, target bitrate, loss and received FPS; no custom PRS tuning.
+Do not call comparison/compilation/JNI smoke a hardware performance acceptance.
+
 ## CURRENT — 3.12.0 DESKTOP PUBLISHED, 2026-11-07
 
 https://github.com/modnite/Secpar/releases/tag/v3.12.0, source/tag66a75c4.
