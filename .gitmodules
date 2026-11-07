@@ -1,0 +1,15 @@
+[submodule "upstream/moonlight-qt"]
+	path = upstream/moonlight-qt
+	url = https://github.com/moonlight-stream/moonlight-qt.git
+[submodule "upstream/artemis-android"]
+	path = upstream/artemis-android
+	url = https://github.com/ClassicOldSong/moonlight-android.git
+[submodule "upstream/apollo"]
+	path = upstream/apollo
+	url = https://github.com/ClassicOldSong/Apollo.git
+[submodule "upstream/sunshine"]
+	path = upstream/sunshine
+	url = https://github.com/LizardByte/Sunshine.git
+[submodule "upstream/moonlight-android"]
+	path = upstream/moonlight-android
+	url = https://github.com/moonlight-stream/moonlight-android.git

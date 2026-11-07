@@ -1,0 +1,50 @@
+apply plugin: 'com.android.library'
+
+def upstream = file(providers.gradleProperty('secparUpstreamSource').get())
+def origin = new groovy.json.JsonSlurper().parse(new File(upstream, 'SECPAR-BUILD-ORIGIN.json'))
+def pins = new groovy.json.JsonSlurper().parse(file('../upstream-lock.json'))
+if (origin.component != 'moonlight-android' || origin.upstream.commit != pins.components['moonlight-android'].commit) {
+    throw new GradleException('Prepare the pinned Moonlight Android source with integrations/gamestream/prepare.py')
+}
+def buildRoot = file(providers.gradleProperty('secparEngineBuildRoot').get())
+layout.buildDirectory = new File(buildRoot, 'android-core')
+
+android {
+    namespace 'win.secpar.gamestream'
+    compileSdk 37
+    ndkVersion '28.2.13676358'
+    defaultConfig {
+        minSdk 26
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        consumerProguardFiles 'consumer-rules.pro'
+        ndk { abiFilters 'arm64-v8a', 'x86_64' }
+    }
+    sourceSets {
+        main {
+            java.srcDirs = [new File(upstream, 'app/src/main/java')]
+            java.includes = [
+                'com/limelight/LimeLog.java',
+                'com/limelight/nvstream/jni/MoonBridge.java',
+                'com/limelight/nvstream/NvConnectionListener.java',
+                'com/limelight/nvstream/av/audio/AudioRenderer.java',
+                'com/limelight/nvstream/av/video/VideoDecoderRenderer.java',
+                'com/limelight/binding/audio/AndroidAudioRenderer.java',
+            ]
+        }
+    }
+    externalNativeBuild {
+        ndkBuild {
+            path new File(upstream, 'app/src/main/jni/moonlight-core/Android.mk')
+            buildStagingDirectory new File(buildRoot, 'native-core')
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+}

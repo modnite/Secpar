@@ -1,0 +1,48 @@
+--- a/app/main.cpp
++++ b/app/main.cpp
+@@ -428,9 +428,9 @@
+     // Set these here to allow us to use the default QSettings constructor.
+     // These also ensure that our cache directory is named correctly. As such,
+     // it is critical that these be called before Path::initialize().
+-    QCoreApplication::setOrganizationName("Moonlight Game Streaming Project");
+-    QCoreApplication::setOrganizationDomain("moonlight-stream.com");
+-    QCoreApplication::setApplicationName("Moonlight");
++    QCoreApplication::setOrganizationName("Secpar");
++    QCoreApplication::setOrganizationDomain("secpar.win");
++    QCoreApplication::setApplicationName("SecparStream");
+ 
+     if (QFile(QDir::currentPath() + "/portable.dat").exists()) {
+         QSettings::setDefaultFormat(QSettings::IniFormat);
+--- a/app/app.pro
++++ b/app/app.pro
+@@ -2,10 +2,10 @@
+ CONFIG += c++17
+ 
+ unix:!macx {
+-    TARGET = moonlight
++    TARGET = secpar-stream
+ } else {
+     # On macOS, this is the name displayed in the global menu bar
+-    TARGET = Moonlight
++    TARGET = SecparStream
+ }
+ 
+ include(../globaldefs.pri)
+--- a/app/streaming/input/keyboard.cpp
++++ b/app/streaming/input/keyboard.cpp
+@@ -192,6 +192,15 @@
+     if (event->repeat) {
+         // Ignore repeat key down events
+         SDL_assert(event->state == SDL_PRESSED);
++        return;
++    }
++
++    // Secpar's desktop fullscreen shortcut. Retain upstream key-release handling.
++    if (event->state == SDL_PRESSED &&
++        (event->keysym.mod & KMOD_ALT) &&
++        !(event->keysym.mod & (KMOD_CTRL | KMOD_SHIFT | KMOD_GUI)) &&
++        event->keysym.sym == SDLK_f) {
++        performSpecialKeyCombo(KeyComboToggleFullScreen);
+         return;
+     }
+ 

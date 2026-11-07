@@ -1,1 +1,7 @@
 include ':app'
+
+// Private migration harness. Existing app/release builds do not switch engines.
+if (providers.gradleProperty('secparUpstreamSource').isPresent()) {
+    include ':gamestream-core'
+    project(':gamestream-core').projectDir = file('integrations/gamestream/android-core')
+}

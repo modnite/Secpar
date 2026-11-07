@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "components": {
+    "moonlight-qt": {
+      "url": "https://github.com/moonlight-stream/moonlight-qt.git",
+      "tag": "v6.2.0",
+      "commit": "de2467e433821664cdd2224aad8c89a625be1ad9",
+      "license": "GPL-3.0",
+      "path": "upstream/moonlight-qt"
+    },
+    "artemis-android": {
+      "url": "https://github.com/ClassicOldSong/moonlight-android.git",
+      "tag": "v20.2.6",
+      "commit": "4de0227fb6ae5c9ad9f7cc486aed7c3571f5f62f",
+      "license": "GPL-3.0",
+      "path": "upstream/artemis-android"
+    },
+    "apollo": {
+      "url": "https://github.com/ClassicOldSong/Apollo.git",
+      "tag": "v0.4.6",
+      "commit": "0cd32abaaa141d262477d039ac447b38fe99c394",
+      "license": "GPL-3.0",
+      "path": "upstream/apollo"
+    },
+    "sunshine": {
+      "url": "https://github.com/LizardByte/Sunshine.git",
+      "tag": "v2026.914.233613",
+      "commit": "63d35f702ee9e362e43263742981836ec0710384",
+      "license": "GPL-3.0-only",
+      "path": "upstream/sunshine"
+    },
+    "moonlight-android": {
+      "url": "https://github.com/moonlight-stream/moonlight-android.git",
+      "tag": "v12.2",
+      "commit": "b48494cb96bff23d8886c4775cc4f39a1075495d",
+      "license": "GPL-3.0",
+      "path": "upstream/moonlight-android"
+    }
+  },
+  "selection": {
+    "desktop_client": "moonlight-qt",
+    "android_client": "moonlight-android",
+    "host": "sunshine",
+    "reference_forks": [
+      "artemis-android",
+      "apollo"
+    ],
+    "status": "integration in progress; physical performance not yet validated"
+  }
+}
