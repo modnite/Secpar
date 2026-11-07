@@ -1,0 +1,134 @@
+--- /dev/null
++++ b/src/secpar_pairing.h
+@@ -0,0 +1,34 @@
++// Secpar management integration. Media and GameStream pairing crypto are unchanged.
++#pragma once
++#include <array>
++#include <memory>
++#include <string>
++#include <string_view>
++#include <openssl/bio.h>
++#include <openssl/pem.h>
++#include <openssl/x509.h>
++namespace secpar_pairing {
++inline std::string certificate_sha256(std::string_view pem) {
++  if (pem.empty() || pem.size() > 16384) return {};
++  std::unique_ptr<BIO, decltype(&BIO_free)> input(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), BIO_free);
++  if (!input) return {};
++  std::unique_ptr<X509, decltype(&X509_free)> certificate(PEM_read_bio_X509(input.get(), nullptr, nullptr, nullptr), X509_free);
++  std::array<unsigned char, 32> digest{};
++  unsigned int size = 0;
++  if (!certificate || X509_digest(certificate.get(), EVP_sha256(), digest.data(), &size) != 1 || size != digest.size()) return {};
++  std::string result;
++  result.reserve(64);
++  constexpr char hex[] = "0123456789abcdef";
++  for (auto byte : digest) { result.push_back(hex[byte >> 4]); result.push_back(hex[byte & 15]); }
++  return result;
++}
++inline bool matches(std::string_view expected_id, std::string_view expected_certificate,
++                    std::string_view client_id, std::string_view certificate) {
++  // Preserve the upstream manual Web UI. Secpar always supplies BOTH preconditions.
++  if (expected_id.empty() && expected_certificate.empty()) return true;
++  if (expected_id.empty() || expected_id.size() > 128 || expected_certificate.size() != 64) return false;
++  for (unsigned char c : expected_id) if (c < 32 || c == 127) return false;
++  for (char c : expected_certificate) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
++  return expected_id == client_id && expected_certificate == certificate_sha256(certificate);
++}
++} // namespace secpar_pairing
+--- a/src/nvhttp.h
++++ b/src/nvhttp.h
+@@ -171,6 +171,8 @@
+     std::string id;  ///< Unguessable approval identifier.
+     std::string name;  ///< Untrusted device name reported by the pairing client.
+     std::string address;  ///< Network address from which the request originated.
++    std::string client_id;  ///< Pending GameStream client identity.
++    std::string certificate_sha256;  ///< SHA256 of the pending certificate DER.
+   };
+ 
+   /**
+@@ -317,7 +319,8 @@
+    * bool pin_status = nvhttp::pin("0123456789abcdef0123456789abcdef", "1234", "laptop");
+    * @examples_end
+    */
+-  bool pin(std::string_view pairing_id, std::string pin, std::string name);
++  bool pin(std::string_view pairing_id, std::string pin, std::string name,
++           std::string_view expected_client_id = {}, std::string_view expected_certificate_sha256 = {});
+ 
+   /**
+    * @brief Remove single client.
+--- a/src/nvhttp.cpp
++++ b/src/nvhttp.cpp
+@@ -31,6 +31,7 @@
+ #include "logging.h"
+ #include "network.h"
+ #include "nvhttp.h"
++#include "secpar_pairing.h"
+ #include "platform/common.h"
+ #include "process.h"
+ #include "rtsp.h"
+@@ -659,6 +660,8 @@
+         .id = sess->async_insert_pin.id,
+         .name = sess->async_insert_pin.device_name,
+         .address = sess->async_insert_pin.address,
++        .client_id = sess->client.uniqueID,
++        .certificate_sha256 = secpar_pairing::certificate_sha256(sess->client.cert),
+       });
+     }
+     return result;
+@@ -1104,7 +1107,8 @@
+     }
+   }
+ 
+-  bool pin(const std::string_view pairing_id, std::string pin, std::string name) {
++  bool pin(const std::string_view pairing_id, std::string pin, std::string name,
++           std::string_view expected_client_id, std::string_view expected_certificate_sha256) {
+     if (!is_valid_pairing_id(pairing_id) || !is_valid_pairing_pin(pin) || !is_valid_pairing_name(name)) {
+       return false;
+     }
+@@ -1123,6 +1127,10 @@
+       }
+ 
+       auto &sess = sess_it->second;
++      // Check the authenticated Secpar grant while holding the SAME lock used
++      // to select and approve this exact pending session. Names/IPs are not proof.
++      if (!secpar_pairing::matches(expected_client_id, expected_certificate_sha256,
++                                  sess.client.uniqueID, sess.client.cert)) return false;
+       pt::ptree tree;
+       getservercert(sess, tree, pin);
+       if (!sess.failed) {
+@@ -1281,6 +1289,7 @@
+       named_cert_node["name"] = named_cert.name;
+       named_cert_node["uuid"] = named_cert.uuid;
+       named_cert_node["enabled"] = named_cert.enabled;
++      named_cert_node["certificate_sha256"] = secpar_pairing::certificate_sha256(named_cert.cert);
+       named_cert_nodes.push_back(named_cert_node);
+     }
+ 
+--- a/src/confighttp.cpp
++++ b/src/confighttp.cpp
+@@ -1751,12 +1751,15 @@
+     print_req(request);
+ 
+     nlohmann::json output_tree;
++    output_tree["secpar_identity_binding"] = 1;
+     output_tree["pairings"] = nlohmann::json::array();
+     for (const auto &pairing : nvhttp::get_pending_pairings()) {
+       output_tree["pairings"].push_back({
+         {"id", pairing.id},
+         {"name", pairing.name},
+         {"address", pairing.address},
++        {"client_id", pairing.client_id},
++        {"certificate_sha256", pairing.certificate_sha256},
+       });
+     }
+     send_response(response, output_tree);
+@@ -1860,7 +1863,8 @@
+         return;
+       }
+ 
+-      output_tree["status"] = nvhttp::pin(pairing_id, pin, name);
++      output_tree["status"] = nvhttp::pin(pairing_id, pin, name,
++        input_tree.value("expected_client_id", ""), input_tree.value("expected_certificate_sha256", ""));
+       send_response(response, output_tree);
+     } catch (std::exception &e) {
+       BOOST_LOG(warning) << "SavePin: "sv << e.what();

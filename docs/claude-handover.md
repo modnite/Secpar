@@ -41,7 +41,8 @@ C:/Users/c/Documents/Codex/2026-11-04/https-github-com-sadiktd-pc-remote/work/
 - pc-remote: stable/release worktree, branch fix/desktop-audio-and-resume; pushes main.
   Main last recorded8ec2b61 before this handover documentation. Check git log/status.
 - secpar-upstream-engine: ACTIVE implementation, branch
-  feat/upstream-streaming-migration, checkpoint a9b14d5. Continue here.
+  feat/upstream-streaming-migration, authenticated routing checkpoint40847a3.
+  Later handover/host-patch checkpoints may follow; inspect git log. Continue here.
 - secpar-claude-macos: Claude's existing worktree, branch claude/macos-host,
   last observed df7a62c, clean. Do not reset/rebase/delete it. Reassess its bespoke
   native-host work against the new upstream migration before merging it.
@@ -149,7 +150,50 @@ It is NOT wired into app hosting or agent authorization yet.
 Host::approve requires secpar_identity_binding=1, exact client ID + certificate
 SHA256, and forwards those preconditions to the approval POST. Original Sunshine
 lacks this binding metadata and is intentionally rejected. Do not remove this gate
-or approve by device name/address/global stdin PIN. That API patch is next.
+or approve by device name/address/global stdin PIN. That API patch is now prepared
+and its full source build is running; see the exact checkpoint below.
+
+## Latest host patch checkpoint — read before continuing
+
+integrations/gamestream/patches/sunshine/0001-secpar-device-bound-management-pairing.patch
+adds pending client ID/canonical certificate DER SHA256, capability marker1,
+atomic expected-ID/fingerprint checking under the existing pairing mutex, and
+certificate fingerprints in enrolled-client listings for future exact revocation.
+Original manual UI behavior is preserved when both expected fields are absent.
+Focused pairing-binding-review.cpp PASS: independent OpenSSL fingerprint, correct
+identity, wrong identity/hash, incomplete grant, invalid certificate, control
+characters, oversize PEM, equivalent CRLF PEM and legacy manual behavior.
+Full patched host compilation is IN PROGRESS, not yet an API/pairing acceptance.
+No product platform is wired to it and no release was changed.
+
+IMPORTANT outstanding security correction: controller initialization currently
+uses upstream --creds Secpar PASSWORD. That briefly puts the management password
+in process argv (including Linux /proc visibility). Before product activation,
+add a bounded --creds-stdin username administration command to Sunshine, reusing
+its existing credential writer, and send the secret through a closed private pipe
+from Rust with timeout/reap. Do not put it in argv/env or retain unsafe fallback.
+No stdin patch has been written yet. Earlier supervisor PASS used the old argv
+initializer and official unpatched host; repeat with the safe initializer and
+rebuilt patched host. Exact identity enforcement still needs real HTTPS pairing
+tests, including wrong-fingerprint refusal and successful matching approval.
+
+Active OMV build:
+- Source /tmp/secpar-upstream-host/source, pinned recursive checkout plus patch.
+- Docker image secpar-sunshine-build:local (Debian trixie, GCC14, CUDA disabled).
+  Recipe integrations/gamestream/linux-host.Dockerfile. Dependencies built OK.
+- /tmp/secpar-upstream-host/deps-build.log and host-build.log retain output.
+- CMake Release, docs/tests/tray/CUDA OFF, publisher Secpar; ninja target sunshine
+  -j4. Last observed207/260 compilation steps, no failure yet. Do not launch a
+  duplicate build. Check existing container/process and log first.
+- Running local shell session62493 may be unavailable to Claude; remote build
+  continues independently. Inspect via ssh cdsrv. No user devices/display mounted.
+- OMV root last7.3GiB available; /tmp tmpfs12GiB available. Monitor space, avoid
+  blind cache deletion. Source/build under /tmp is temporary, not durable.
+- Test header and focused review source also at /tmp/secpar-upstream-host/.
+
+Normal child stop/drop is verified; abrupt parent death containment remains
+unimplemented. Enrollment/revocation journal and account-scoped client profiles
+remain mandatory. These are explicit activation blockers, not finished features.
 
 ## New authenticated-agent routing checkpoint
 
@@ -173,11 +217,24 @@ Secpar device ID, GameStream client ID and certificate fingerprint.
 
 ## Next implementation, in order
 
-1. Add/review a small Sunshine MANAGEMENT API patch exposing pending client ID and
-   certificate DER SHA256 and checking expected values atomically on PIN approval.
-   Keep its media/cryptographic code intact; build/test the patched source before
-   allowing the controller's pairing capability. Existing web UI compatibility can
-   remain, but Secpar must require the explicit binding capability.
+This is a FULL-project handover. Beyond the engine migration, retain the backlog
+in docs/user-requirements.md and docs/next-milestone.md. Some older entries describe
+already-fixed failures; latest explicit acceptance above takes precedence.
+Required final product includes account-owned computers across all clients,
+LAN-first pairing/access and remote access thereafter; friends/guest permission
+and sharing; physical controller forwarding, per-device virtual pads, four-player
+and rumble validation; cross-platform clipboard/shortcuts; automatic updates;
+compact hosting/client settings and version beside branding; unified top-left
+translucent stream menu in both windowed/fullscreen on Android and desktop;
+relevant original Secpar help/site copy informed by Parsec support references;
+and Wake-on-LAN setup that does not require Home Assistant. Audit delivered versus
+unfinished work before promising any of these are complete. Do not discard the
+working account service, existing site or update/signing infrastructure.
+
+1. Finish/review the prepared Sunshine MANAGEMENT API patch and full source build.
+   Correct credential initialization to stdin as described above. Keep upstream
+   media/cryptographic code intact; run actual API/pairing tests before allowing
+   the controller's capability. Secpar requires explicit identity binding.
 2. Wire broker operations behind the existing authenticated Secpar agent Session.
    Existing core authenticates pair/hello before Handlers::session(device,out).
    Scope grants to that device and session; cancellation/timeouts cannot enroll a
@@ -242,7 +299,7 @@ Cloudflare/Resend secrets are already configured. Do not copy or print their val
 
 User requests handing the FULL project to Claude around10% remaining in the current
 five-hour allowance. Read mcp__codex_app__get_usage_limits; primary.usedPercent is
-used, not remaining. Latest check71% used /29% remaining, NOT yet at threshold.
+used, not remaining. Latest check86% used /14% remaining: prepare handover NOW.
 Recheck at meaningful milestones. Around90% used: finish a safe checkpoint, push
 all authorized code, update this file with exact state/tests/running jobs, supply a
 short Claude startup prompt and link. No need to wait until the limit is exhausted.
