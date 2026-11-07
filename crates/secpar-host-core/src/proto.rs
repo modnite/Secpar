@@ -21,6 +21,10 @@ pub enum ClientMsg {
     },
     #[serde(rename = "ping")]
     Ping,
+    #[serde(rename = "gamestream.info")]
+    GameStreamInfo { id: String },
+    #[serde(rename = "gamestream.pair")]
+    GameStreamPair { id: String, client_id: String, certificate_sha256: String, pin: String },
     #[serde(rename = "mouse.move")]
     MouseMove { dx: i32, dy: i32 },
     #[serde(rename = "mouse.button")]
@@ -162,6 +166,8 @@ impl ClientMsg {
             ClientMsg::Pair { .. } => "pair",
             ClientMsg::Hello { .. } => "hello",
             ClientMsg::Ping => "ping",
+            ClientMsg::GameStreamInfo { .. } => "gamestream.info",
+            ClientMsg::GameStreamPair { .. } => "gamestream.pair",
             ClientMsg::MouseMove { .. } => "mouse.move",
             ClientMsg::MouseButton { .. } => "mouse.button",
             ClientMsg::MouseScroll { .. } => "mouse.scroll",
@@ -216,6 +222,12 @@ pub enum ServerMsg {
     },
     #[serde(rename = "pong")]
     Pong,
+    #[serde(rename = "gamestream.info")]
+    GameStreamInfo { id: String, http_port: u16, https_port: u16, certificate_sha256: String },
+    #[serde(rename = "gamestream.paired")]
+    GameStreamPaired { id: String },
+    #[serde(rename = "gamestream.error")]
+    GameStreamError { id: String, code: String, msg: String },
     #[serde(rename = "error")]
     Error {
         code: String,

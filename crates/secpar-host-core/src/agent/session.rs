@@ -167,13 +167,9 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
     };
 
     let (bin_tx, mut bin_rx) = mpsc::channel(4);
-    let mut session = ctx.handlers.session(
-        &device,
-        Outbox {
-            ctl: tx.clone(),
-            bin: bin_tx,
-        },
-    );
+    let outbox = Outbox { ctl: tx.clone(), bin: bin_tx };
+    let mut session = ctx.handlers.session(&device, outbox.clone());
+    let mut gamestream = ctx.handlers.gamestream_session(&device, outbox);
     let sid = ctx.register(&device, tx);
     let registration = Registration(ctx.clone(), sid);
     loop {
@@ -188,6 +184,9 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                         Ok(ClientMsg::Ping) => Some(ServerMsg::Pong),
                         Ok(m @ (ClientMsg::Pair { .. } | ClientMsg::Hello { .. })) => {
                             Some(ServerMsg::error("bad_request", "already authenticated", Some(m.t())))
+                        }
+                        Ok(m @ (ClientMsg::GameStreamInfo { .. } | ClientMsg::GameStreamPair { .. })) => {
+                            super::gamestream::dispatch(m, &mut gamestream)
                         }
                         Ok(m) => session.on_msg(m.sanitize()),
                         Err(_) => None,
@@ -207,4 +206,5 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
     }
     drop(registration);
     drop(session); // releases held keys/buttons, stops subscriptions
+    drop(gamestream); // cancels this authenticated device's pending engine grants
 }

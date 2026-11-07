@@ -165,3 +165,27 @@ The host advertises mDNS `_pcremote._udp.local`, port 47999, with TXT `id=<PcInf
 {"t":"error","code":"<code>","msg":"<human readable>","of":"<request t, optional>"}
 ```
 Codes: `unauthorized`, `revoked`, `bad_otp`, `bad_request`, `unsupported`, `internal`.
+
+## Managed GameStream engine (migration; not advertised by released hosts)
+
+The optional `gamestream` capability uses the existing authenticated owner-device
+agent connection. It never grants access based on a LAN address or device name.
+Hosts advertise it only after a bundled backend with device-certificate binding,
+revocation and process supervision is active. Original clients/hosts keep using
+their negotiated capabilities during migration.
+
+- `gamestream.info`: `{ "t":"gamestream.info", "id":"request-id" }`.
+- `gamestream.pair`: `{ "t":"gamestream.pair", "id":"request-id", "client_id":"GameStream client identity", "certificate_sha256":"64 lowercase hex DER fingerprint", "pin":"four digits" }`.
+- Success info: `{ "t":"gamestream.info", "id":"request-id", "http_port":48989, "https_port":48984, "certificate_sha256":"host certificate DER fingerprint" }`.
+- Success enrollment: `{ "t":"gamestream.paired", "id":"request-id" }`.
+- Failure: `{ "t":"gamestream.error", "id":"request-id", "code":"unavailable|bad_request|busy|...", "msg":"plain error" }`.
+
+Request IDs are1–64 ASCII letters/digits/underscore/hyphen. Client IDs are1–128
+bytes with no control characters. No management password, backend REST URL or
+private key is sent. The platform's separate engine session receives the already
+authenticated Secpar device ID; these messages cannot fall through to legacy input
+handlers. Dropping/revoking the agent session drops that engine session so it can
+cancel pending grants. Backend approval must independently bind both client ID
+and certificate fingerprint atomically, journal enrollment/revocation, and resolve
+cancellation races before permanent credentials are accepted. This protocol does
+not itself implement or enable those backend transactions.

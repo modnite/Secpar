@@ -151,6 +151,26 @@ SHA256, and forwards those preconditions to the approval POST. Original Sunshine
 lacks this binding metadata and is intentionally rejected. Do not remove this gate
 or approve by device name/address/global stdin PIN. That API patch is next.
 
+## New authenticated-agent routing checkpoint
+
+Shared host core now has optional gamestream_session(device,outbox), called only
+after existing owner-device authentication. gamestream.info / gamestream.pair
+messages validate bounded IDs, exact fingerprint and PIN syntax, then route only
+to that device's engine session. They never reach legacy input handlers. Default
+platform hook is None: old/released hosts do not advertise or activate migration.
+Four actual agent-session tests cover unauthenticated and wrong-token rejection,
+using the authenticated ID rather than the client label, malformed grants blocked
+before backend dispatch, per-device revocation/drop and correlated unavailable.
+All30 core tests pass on Windows and native Linux. This is routing/auth lifecycle,
+NOT the backend enrollment transaction or permanent credential revocation journal.
+
+Account-scoped client credential profiles are required: launch the private Qt
+worker in an account/device-specific private working directory with portable.dat,
+using its upstream portable settings mode. Do not reuse one global helper profile
+across Secpar account changes. Prevent the same certificate from silently taking
+over another authenticated device's enrollment. Scope journal records by owner,
+Secpar device ID, GameStream client ID and certificate fingerprint.
+
 ## Next implementation, in order
 
 1. Add/review a small Sunshine MANAGEMENT API patch exposing pending client ID and
