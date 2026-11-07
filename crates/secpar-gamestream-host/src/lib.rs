@@ -1,7 +1,9 @@
 //! Own a private upstream Sunshine process. This does not install a service or
 //! modify another Sunshine/Apollo/Secpar instance. No media implementation lives here.
+mod journal;
 mod private;
 mod tls;
+pub use journal::Record as Grant;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ring::{
     digest,
@@ -153,6 +155,7 @@ pub struct Host {
     child: Child,
     _lock: std::fs::File,
     api: Api,
+    journal: tokio::sync::Mutex<journal::Journal>,
     pub info: Info,
 }
 #[derive(Clone, Debug)]
@@ -266,12 +269,17 @@ impl Host {
                             certificate_sha256: api.fingerprint.clone(),
                             version: value["version"].as_str().unwrap_or("unknown").into(),
                         };
-                        return Ok(Self {
+                        let host = Self {
                             child,
                             _lock: lock,
                             api: api.clone(),
+                            journal: tokio::sync::Mutex::new(journal::Journal::open(
+                                &config.state,
+                            )?),
                             info,
-                        });
+                        };
+                        host.reconcile().await?;
+                        return Ok(host);
                     }
                 }
             }
@@ -352,6 +360,95 @@ impl Host {
             .request(reqwest::Method::POST, "pin", Some(body))
             .await
     }
+    /// Approve for one authenticated Secpar device. The journal refuses a
+    /// certificate that belongs to another owner/device or was revoked.
+    pub async fn approve_for(
+        &self,
+        owner: &str,
+        device: &str,
+        identity: &ClientIdentity,
+        pin: &str,
+        name: &str,
+    ) -> Result<()> {
+        identity.validate()?;
+        if self
+            .journal
+            .lock()
+            .await
+            .revoked(&identity.certificate_sha256)
+        {
+            return Err(Error("This client certificate was revoked"));
+        }
+        self.approve(identity, pin, name).await?;
+        let granted = self.journal.lock().await.grant(
+            owner,
+            device,
+            &identity.client_id,
+            &identity.certificate_sha256,
+        );
+        if let Err(e) = granted {
+            self.forget(&identity.certificate_sha256).await?;
+            return Err(e);
+        }
+        Ok(())
+    }
+    /// Revoke every client granted to this owner's device. Recorded durably
+    /// first, then removed from the host and verified gone.
+    pub async fn revoke(&self, owner: &str, device: &str) -> Result<usize> {
+        let fingerprints = self.journal.lock().await.revoke(owner, device)?;
+        for fp in &fingerprints {
+            self.forget(fp).await?;
+        }
+        Ok(fingerprints.len())
+    }
+    /// Remove anything the journal says is revoked but the host still trusts.
+    async fn reconcile(&self) -> Result<()> {
+        let revoked: Vec<String> = self
+            .journal
+            .lock()
+            .await
+            .records()
+            .iter()
+            .filter(|r| r.revoked)
+            .map(|r| r.certificate_sha256.clone())
+            .collect();
+        for fp in revoked {
+            self.forget(&fp).await?;
+        }
+        Ok(())
+    }
+    async fn forget(&self, fingerprint: &str) -> Result<()> {
+        for client in self.enrolled().await? {
+            if client.certificate_sha256 == fingerprint {
+                if client.uuid.is_empty()
+                    || client.uuid.len() > 64
+                    || client.uuid.chars().any(char::is_control)
+                {
+                    return Err(Error("Host client identifier is invalid"));
+                }
+                let value = self
+                    .api
+                    .request(
+                        reqwest::Method::POST,
+                        "clients/unpair",
+                        Some(json!({"uuid": client.uuid})),
+                    )
+                    .await?;
+                if value["status"] != true {
+                    return Err(Error("Host did not revoke the client"));
+                }
+            }
+        }
+        if self
+            .enrolled()
+            .await?
+            .iter()
+            .any(|c| c.certificate_sha256 == fingerprint)
+        {
+            return Err(Error("Revoked client is still enrolled"));
+        }
+        Ok(())
+    }
     pub async fn stop(mut self) -> Result<()> {
         if self
             .child
@@ -378,7 +475,7 @@ fn command(executable: &Path) -> Command {
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     command
 }
-fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
     // A new, private sibling avoids following an existing symlink while writing.
     let mut nonce = [0u8; 16];
     SystemRandom::new()
@@ -476,7 +573,7 @@ impl Api {
         path: &str,
         body: Option<Value>,
     ) -> Result<Value> {
-        if !matches!(path, "config" | "pin" | "clients/list") {
+        if !matches!(path, "config" | "pin" | "clients/list" | "clients/unpair") {
             return Err(Error("Unknown private host operation"));
         }
         let mut request = self

@@ -161,7 +161,7 @@ async fn main() -> Result {
         .is_err());
 
     // 3. The exact identity completes pairing for the real worker.
-    host.approve(&a.identity, "1234", "Review A").await?;
+    host.approve_for("acct1", "phone", &a.identity, "1234", "Review A").await?;
     assert_eq!(exit_code(&mut a).await?, Some(0), "worker must finish pairing");
     let list = host.enrolled().await?;
     assert_eq!(list.len(), 1);
@@ -175,7 +175,7 @@ async fn main() -> Result {
     assert_ne!(b.identity.certificate_sha256, a.identity.certificate_sha256);
     assert!(host.approve(&a.identity, "1234", "Review A").await.is_err());
     assert_eq!(host.enrolled().await?.len(), 1);
-    host.approve(&b.identity, "1234", "Review B").await?;
+    host.approve_for("acct1", "tablet", &b.identity, "1234", "Review B").await?;
     assert_eq!(exit_code(&mut b).await?, Some(0));
     assert_eq!(host.enrolled().await?.len(), 2);
     println!("Second device needed its own exact approval; two distinct fingerprints enrolled.");
@@ -191,6 +191,34 @@ async fn main() -> Result {
     assert_eq!(host.enrolled().await?.len(), 2);
     println!("Mismatched PIN failed the pairing and enrolled nothing.");
 
+    // 6. Revocation is per device, durable, final and survives a host restart.
+    assert!(host
+        .approve_for("acct2", "other", &a.identity, "1234", "Takeover")
+        .await
+        .is_err());
+    assert_eq!(host.revoke("acct1", "phone").await?, 1);
+    let left = host.enrolled().await?;
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].certificate_sha256, b.identity.certificate_sha256);
+    assert!(host
+        .approve_for("acct1", "phone", &a.identity, "1234", "Again")
+        .await
+        .is_err());
+    println!("Revoked only the first device; the second stayed enrolled; re-approval refused.");
+    host.stop().await?;
+    let host = Host::start(Config {
+        executable: PathBuf::from(std::env::args_os().nth(1).unwrap()),
+        state: root.join("host"),
+        base_port: port,
+        capture: Capture::X11,
+        encoder: Encoder::Software,
+        audio_sink: Some("host_audio".into()),
+    })
+    .await?;
+    let left = host.enrolled().await?;
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].certificate_sha256, b.identity.certificate_sha256);
+    println!("After restart the revoked device is still gone and the other is enrolled.");
     host.stop().await?;
     println!("Certificate-bound pairing review complete.");
     Ok(())
