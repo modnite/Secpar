@@ -141,3 +141,11 @@ PiP belongs only to the active stream; launcher, computer list and settings must
 not enter PiP, even via desktop-window controls. Current MainActivity declares
 PiP support; use a separate stream activity in migration rather than merely
 switching auto-enter off on the launcher. This restriction is not yet shipped.
+
+
+2026-11-07 usage handover: user requests FULL-project Claude handover near10%
+remaining in the five-hour window. Read docs/claude-handover.md FIRST. Active
+implementation is sibling secpar-upstream-engine, branch feat/upstream-streaming-migration.
+Latest usage87% used /13% remaining. Checkpoint pushed at2cd50eb. Do not restart
+completed investigations or resume the parked bespoke renderer. Preserve all
+installed hosts/connections and keep debug builds local.
