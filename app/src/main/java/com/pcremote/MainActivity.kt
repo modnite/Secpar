@@ -28,6 +28,7 @@ import com.pcremote.home.HomeScreen
 import com.pcremote.home.PrimaryAction
 import com.pcremote.nav.Mode
 import com.pcremote.nav.Routes
+import com.pcremote.nav.exitScreen
 import com.pcremote.onboarding.OnboardingScreen
 import com.pcremote.onboarding.PairingDeps
 import com.pcremote.onboarding.PairingModel
@@ -200,7 +201,7 @@ class MainActivity : ComponentActivity() {
                             onAccount = { nav.navigate(Routes.ACCOUNT) })
                     }
                     composable(Routes.modePattern(Mode.SCREEN)) { e ->
-                        com.pcremote.stream2.StreamScreen(modeId(e), onBack = { nav.popBackStack() })
+                        com.pcremote.stream2.StreamScreen(modeId(e), onBack = { nav.exitScreen(e) })
                     }
                     composable(Routes.modePattern(Mode.REMOTE)) { e ->
                         com.pcremote.modes.RemoteScreen(modeId(e), onBack = { nav.popBackStack() })
