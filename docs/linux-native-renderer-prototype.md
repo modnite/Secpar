@@ -14,9 +14,10 @@ Implemented components:
   visible/storage crop and edge clamps. No RGB image upload in that component.
 
 Verified on the build runner, without a GPU or any user display/device mounts:
-- Six descriptor/FD ownership/layout tests, including1080→1088 storage padding.
-- Four importer tests for missing EGL context, modifier bounds/filtering and
-  Send+Sync ownership across decoder/UI threads.
+- Six descriptor/FD ownership/layout tests, including1080â†’1088 storage padding.
+- Five importer tests for missing EGL context, modifier bounds/filtering and
+  Send+Sync ownership across decoder/UI threads. GL3.1 without ARB_sync is
+  rejected before image import; core GL3.2/GLES3 fences are accepted.
 - Actual software OpenGL3.3 and GLES3 draws of known NV12 patches:16 combinations
   of BT.601/BT.709, full/limited range, padded/unpadded storage. Read pixels verify
   colors and vertical orientation. This is a shader correctness test, not GPU

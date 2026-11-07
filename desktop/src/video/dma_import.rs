@@ -53,6 +53,11 @@ impl ImportContext {
     pub fn is_current(&self)->bool {self.thread==thread::current().id() && unsafe{(self.current_display)() as usize==self.display && (self.current_context)() as usize==self.context}}
     pub fn import(&self,gl:&glow::Context,frame:Arc<ExportedFrame>)->Result<Imported,String> {
         if !self.is_current(){return Err("Video EGL context changed".into());}
+        let version=gl.version();
+        if !supports_fences(version.major,version.minor,version.is_embedded,
+            gl.supported_extensions().contains("GL_ARB_sync")) {
+            return Err("Native video requires GPU fence synchronization".into());
+        }
         let mut textures=Vec::new();let mut images=Vec::new();
         let result=(||->Result<(),String>{
             for i in 0..2 {
@@ -115,6 +120,11 @@ impl Imported {
         self.fence.is_none_or(|fence|unsafe{matches!(gl.client_wait_sync(glow::NativeFence(fence as *mut _),0,0),glow::ALREADY_SIGNALED|glow::CONDITION_SATISFIED)})
     }
 }
+// A GL3.1 UI context can render the shader but lacks core sync functions.
+// Refuse native storage before import rather than calling an unloaded entry point.
+fn supports_fences(major:u32,minor:u32,embedded:bool,arb_sync:bool)->bool {
+    if embedded {major>=3} else {(major,minor)>=(3,2)||arb_sync}
+}
 unsafe fn query_modifiers(query:Modifiers,display:Ptr,format:u32)->Result<Vec<u64>,String>{
     let mut count=0;
     if query(display,format as i32,0,ptr::null_mut(),ptr::null_mut(),&mut count)==0||!(1..=64).contains(&count){return Err("Unsupported native plane format or modifier count".into());}
@@ -126,6 +136,15 @@ unsafe fn query_modifiers(query:Modifiers,display:Ptr,format:u32)->Result<Vec<u6
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fence_support_rejects_gl31_without_sync_but_accepts_core_and_extension() {
+        assert!(!supports_fences(3,1,false,false));
+        assert!(supports_fences(3,1,false,true));
+        assert!(supports_fences(3,2,false,false));
+        assert!(supports_fences(4,6,false,false));
+        assert!(!supports_fences(2,0,true,false));
+        assert!(supports_fences(3,0,true,false));
+    }
     #[test]
     fn no_current_egl_context_is_a_clean_unavailable_result(){assert!(ImportContext::current().is_err());}
     #[test]
