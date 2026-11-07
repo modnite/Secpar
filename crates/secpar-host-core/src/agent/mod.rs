@@ -2,6 +2,7 @@
 
 mod session;
 mod gamestream;
+pub mod engine;
 pub mod relay;
 pub use session::{Rx, Tx};
 
