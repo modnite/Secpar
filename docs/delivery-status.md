@@ -1,5 +1,31 @@
 # Secpar delivery record
 
+## CURRENT — 3.10.1 PUBLISHED, 2026-11-07
+
+- Website release refresh42343540816 passed. User asked for3.10.1 Linux audio
+  and Android return-layout acceptance; await replies without repeating questions.
+- Public https://github.com/modnite/Secpar/releases/tag/v3.10.1, source3505eee;
+  tag/branch release/3.10.1 pushed. Android APK + one Linux host/client AppImage,
+  stripped optimized builds only. Public GitHub asset digests matched staging.
+- Android code526, unchanged signing identity, R8/non-debuggable; final APK embeds
+  source3505eee metadata.12 instrumentation +252 JVM tests pass; release cold-launch
+  checked on owned5556. Physical S23/YouTube asymmetric-return acceptance pending.
+- Linux now uses desktop PulseAudio/PipeWire service FIRST, ALSA fallback. User's
+  exact3.10 error was "no usable audio output format found" and Retry stayed silent.
+  Linux32 unit checks pass/4 environment cases ignored by default; all3 output
+  gates explicitly pass with final AppImage libraries. Monitor proves generated
+  audio before/after600ms silence with broken ALSA, plus ALSA compatibility path.
+  Unavailable desktop service -> synthetic ALSA null fallback also verified.
+  Final optimized AppImage launches/renders via native Wayland/EGL. Physical CachyOS
+  audio remains pending. Windows30 unit checks pass/1 keychain ignored.
+- No new Windows installer this release. Existing Windows3.9 host left running;
+  Android/Linux clients remain compatible. Android audio/video, desktop video,
+  network and Windows host streaming engines unchanged. Latest remote-host auth
+  groundwork remains in source but Linux relay/anywhere hosting is not enabled.
+- Stage D:/Secpar-CI/publish-3.10.1. Exact SHA256:
+  Secpar.apk: 8a051ce99e6d45badbadb99f90fda0ae3dee757894fc2055ecb4ebc3c3829060
+  Secpar-Linux-x64.AppImage: f1869ca708439ab93a15cb41a6075171275d4d727e7f239be56e5e95b583579c
+
 ## CURRENT — 3.10.1 candidates, 2026-11-07
 
 - User rejects3.10 Linux audio: exact error "no usable audio output format found";

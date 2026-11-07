@@ -5,8 +5,9 @@ left margin enlarged and header under status bar when returning with YouTube PiP
 force-stop/reopen restores it. Grey screen improved but lifecycle/layout issue is
 NOT accepted as fixed. Linux3.10 audio STILL SILENT; do not treat virtual-sink
 success as physical acceptance. Root owns both defects; Linux outside-LAN work
-remains queued. User has not yet answered whether Retry audio appears or KDE
-shows Secpar as a playback app. Do not assume routing versus transport root cause.
+remains queued. User confirms Retry stays silent and exact error is "no usable audio output
+format found".3.10.1 is published with desktop sound service first, ALSA fallback;
+physical acceptance and Android alignment feedback pending.
 
 Latest corrections: desktop client must have a free native pointer in a window,
 capture only in fullscreen, Alt+F fullscreen toggle. This desktop request does not
