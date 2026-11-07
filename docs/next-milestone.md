@@ -1,5 +1,43 @@
 # Active Secpar work — 2026-11-06
 
+## CURRENT — 3.11.0 PUBLISHED, 2026-11-07
+
+Public https://github.com/modnite/Secpar/releases/tag/v3.11.0. Runtime836c4c0;
+tag/release branch c8c46ce adds TEST-ONLY scheduling fixes. One Windows unified
+installer6,631,410 bytes, one Linux unified AppImage22,608,376 bytes, Android
+APK24,112,203 bytes (code527), checksums published. Optimized/stripped packages;
+no review fixtures/PDBs. Installer UI payload matches build; host matches except
+expected Tauri UNK→NSS bundle marker. Android keeps the same signing certificate.
+
+SHA256:
+- Windows46f51281e50aa68fd503f0d9204550bf6d3e4bc0392cf75e7b4c569dc932879b
+- Linux1221cc689d8ecd3c4ec7daf4f8298b4c3e7daf77ca271b70f027819469c07bde
+- Android ebfd8cc39e5858c50ada06d5b3382048902b9c8a022b430921d500814f082e70
+
+Website release deployment42352132073 PASS; live releases.json advertises3.11.0
+for all three platforms with matching digests. Help live at secpar.win/help/;
+desktop and390px mobile layouts visually checked. Actual menu screenshots at
+outputs/ui-review/stream-menu-640x400.png and android-stream-menu-3.11.png.
+
+Final Linux package passes native Wayland rendering, three real generated-audio
+output/silence/ALSA-fallback gates, monitor discovery with external tools excluded,
+Wayland clipboard exchange, and real delayed native decode→software recovery.
+Android release cold-launch passes on owned5556. Latest13 Android instrumentation
+checks PASS. User S23 and X250 acceptance of NEW changes remains pending.
+
+CI42351875638: Windows and Linux PASS. Mac x64/arm64 still running, no Mac release.
+Earlier run exposed test-order assumptions: TCP clipboard/control may arrive after
+UDP video; account fixtures must initialize their own TLS provider. Corrected in
+c8c46ce; no production changes/rebuild needed. Windows core26/client10 also pass.
+
+Windows installer started only after host reported ZERO connected Secpar devices.
+Administrator prompt requested; awaiting user approval. Installed3.11 verification
+NOT complete yet; preserve other remote software. Never claim installed from launch.
+Next acceptance: Automatic decoder on X250 (Software confirmed smooth workaround),
+Windows↔Linux text clipboard/Ctrl+V, Windows→KDE host, local corner menu interaction.
+Do not repeat accepted3.10.1 audio/alignment checks. Android engines untouched.
+
+
 ## IN PROGRESS — 3.11.0 candidates, 2026-11-07
 
 User wants ONE top-left translucent stream menu in WINDOWED AND FULLSCREEN on
