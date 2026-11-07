@@ -4,6 +4,31 @@ Updated2026-11-07. Read this first, then AGENTS.md, docs/user-requirements.md an
 only the CURRENT/top entries of docs/delivery-status.md. Older delivery entries
 are history, not current acceptance. This replaces the earlier Mac-only handoff.
 
+## CORRECTION 2026-11-07 (user, supersedes the process-supervision plan below)
+
+- Secpar is ONE Parsec-like app. Every computer hosts and connects. Moonlight/Sunshine
+  code is ported INTO Secpar's own code. Never ship or supervise a Sunshine host or a
+  Moonlight worker as separate programs. The crates/secpar-gamestream-host supervisor,
+  the pinned-patch host/worker builds and the OMV container fixtures are superseded
+  experiments. Reusable from them: the enrollment journal and device-scoped broker
+  (crates/secpar-gamestream-host/src/journal.rs, crates/secpar-host-core/src/agent/engine.rs).
+- "Streaming engine" means ONLY audio and video: capture, encode, packetize, receive,
+  decode, render, pacing. Accounts, agent, pairing, input, clipboard, relay, UI stay Secpar's.
+- Size budget (hard): Android build <= 10 MB, PC builds <= 5 MB (the Windows installer
+  must not exceed 5 MB). No Qt, FFmpeg, SDL or Boost. Use system APIs and system
+  libraries (VA-API/GStreamer on Linux, Media Foundation/D3D11 on Windows, MediaCodec on
+  Android). Measured before this work: Windows installer 6.6 MB, APK 24 MB (ML Kit
+  barcode native libs for four ABIs are about 20 MB of it), AppImage 22 MB.
+- Done and verified 2026-11-07: desktop decoded video stays NV12 and a small GL shader
+  (desktop/src/gpu.rs, picture.rs) converts to RGB with BT.709 on the GPU. This removes
+  the CPU videoconvert/RGB step, the per-frame RGB upload, and the BT.601 software
+  conversion that caused the Windows text colour fringing. Measured on the X250 with the
+  real VA-API decoder (600 frames of 1080p60 H.264): old RGB path 6.5 s wall / 5.1 s CPU,
+  NV12 path 2.7 s / 1.5 s. Colour bars render exactly on the Windows GPU. Not yet shown on
+  the X250's own GL stack with a live stream.
+- Size work: release APK restricted to arm64-v8a; desktop release profile set to opt-level s,
+  fat LTO, one codegen unit, panic abort (openh264 and reed-solomon kept at opt-level 3).
+
 ## Objective and working agreement
 
 Finish Secpar as one application per Windows/Linux/macOS, each hosting and

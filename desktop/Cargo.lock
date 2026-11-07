@@ -3791,30 +3791,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "secpar-engine"
-version = "0.1.0"
-dependencies = [
- "secpar-gamestream-host",
- "secpar-host-core",
- "tokio",
-]
-
-[[package]]
-name = "secpar-gamestream-host"
-version = "0.1.0"
-dependencies = [
- "base64",
- "libc",
- "reqwest",
- "ring",
- "rustls",
- "serde",
- "serde_json",
- "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "secpar-host-core"
 version = "0.1.0"
 dependencies = [
@@ -3844,7 +3820,6 @@ dependencies = [
  "rcgen",
  "ring",
  "secpar-clipboard",
- "secpar-engine",
  "secpar-host-core",
  "secpar-network",
  "secpar-stream",

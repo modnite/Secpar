@@ -31,8 +31,21 @@ incremental = false
 opt-level = 3
 
 [profile.release]
-lto = "thin"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
 strip = true
+
+# Decoding and erasure coding are the hot loops, so they stay fully optimized.
+[profile.release.package.openh264-sys2]
+opt-level = 3
+
+[profile.release.package.openh264]
+opt-level = 3
+
+[profile.release.package.reed-solomon-erasure]
+opt-level = 3
 
 [profile.dev.package.openh264-sys2]
 opt-level = 3
