@@ -2,6 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
+    sync::atomic::{AtomicBool, Ordering},
 };
 const MAX_SAMPLES: usize = 48_000 / 5 * 2; // 200 ms maximum; discard old audio instead of adding latency.
 #[derive(Default)]
@@ -38,6 +39,7 @@ pub struct Audio {
     decoder: opus::Decoder,
     buffer: Arc<Mutex<Buffer>>,
     _stream: cpal::Stream,
+    failed: Arc<AtomicBool>,
 }
 impl Audio {
     pub fn new() -> Result<Self, String> {
@@ -53,11 +55,21 @@ impl Audio {
             return Err("Invalid audio output format".into());
         }
         let buffer = Arc::new(Mutex::new(Buffer::default()));
+        let failed = Arc::new(AtomicBool::new(false));
         let stream = match format {
-            cpal::SampleFormat::F32 => build::<f32>(&device, &config, buffer.clone()),
-            cpal::SampleFormat::I16 => build::<i16>(&device, &config, buffer.clone()),
-            cpal::SampleFormat::U16 => build::<u16>(&device, &config, buffer.clone()),
-            _ => return Err("Unsupported audio output format".into()),
+            cpal::SampleFormat::I8 => build::<i8>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::I16 => build::<i16>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::I24 => build::<cpal::I24>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::I32 => build::<i32>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::I64 => build::<i64>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::U8 => build::<u8>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::U16 => build::<u16>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::U24 => build::<cpal::U24>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::U32 => build::<u32>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::U64 => build::<u64>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::F32 => build::<f32>(&device, &config, buffer.clone(), failed.clone()),
+            cpal::SampleFormat::F64 => build::<f64>(&device, &config, buffer.clone(), failed.clone()),
+            _ => return Err(format!("Unsupported audio output format: {format}")),
         }
         .map_err(|e| format!("Could not open audio output: {e}"))?;
         stream.play().map_err(|_| "Could not start audio output")?;
@@ -67,8 +79,10 @@ impl Audio {
             decoder,
             buffer,
             _stream: stream,
+            failed,
         })
     }
+    pub fn failed(&self) -> bool { self.failed.load(Ordering::Relaxed) }
     pub fn packet(&mut self, packet: &[u8]) {
         let mut pcm = [0f32; 5760 * 2];
         if let Ok(n) = self.decoder.decode_float(packet, &mut pcm, false) {
@@ -80,6 +94,7 @@ fn build<T: cpal::SizedSample + cpal::FromSample<f32>>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     buffer: Arc<Mutex<Buffer>>,
+    failed: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError> {
     let channels = config.channels as usize;
     let rate = config.sample_rate;
@@ -103,7 +118,7 @@ fn build<T: cpal::SizedSample + cpal::FromSample<f32>>(
                 }
             }
         },
-        |_| {},
+        move |_| { failed.store(true, Ordering::Relaxed); },
         None,
     )
 }
@@ -151,5 +166,31 @@ mod codec_tests {
             480
         );
         assert!(output.iter().any(|s| s.abs() > 0.01));
+    }
+}
+
+#[cfg(all(test,target_os="linux"))]
+mod device_tests {
+    use super::*;
+    /// Explicit isolated-container gate: no physical audio devices or microphone are mounted.
+    #[test]
+    #[ignore = "Requires the isolated virtual-output audio review container"]
+    fn renders_opus_through_system_audio_output() {
+        assert_eq!(std::env::var("SECPAR_AUDIO_REVIEW").as_deref(),Ok("1"));
+        let mut player=Audio::new().expect("System audio output must open");
+        let mut encoder=opus::Encoder::new(48000,opus::Channels::Stereo,opus::Application::LowDelay).unwrap();
+        let mut packet=[0u8;1100];
+        for block in 0..200 {
+            let samples:Vec<f32>=(0..480).flat_map(|i| {
+                let value=((block*480+i) as f32*std::f32::consts::TAU*880./48000.).sin()*0.2;
+                [value,value]
+            }).collect();
+            let size=encoder.encode_float(&samples,&mut packet).unwrap();
+            player.packet(&packet[..size]);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            assert!(!player.failed(),"Audio callback failed");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!player.failed());
     }
 }

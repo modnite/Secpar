@@ -1,5 +1,17 @@
 # Secpar: persistent user requirements
 
+Latest corrections: desktop client must have a free native pointer in a window,
+capture only in fullscreen, Alt+F fullscreen toggle. This desktop request does not
+override Android's approved free dock pointer. User confirms Linux video is perfect
+but no audio output; preserve the video path while fixing audio. Android whole app
+can return grey after stream ended and switching to YouTube (sometimes YouTube
+PiP); launcher works, force-stop/reopen restores. Present since3.8, predates account
+integration; do not misdiagnose as stream/audio reconnect. Keep Claude updated via
+the sibling handoff file; it owns macOS hosting, Codex owns shared client fixes.
+Controller support remains required: Windows virtual Xbox/per-device isolation and
+Android touch pad implemented; physical controller forwarding in Android/desktop,
+Linux/macOS virtual pads and full4-player/rumble validation still outstanding.
+
 Read this with AGENTS.md and docs/next-milestone.md when resuming work. Additional
 prompts add to the task; they do not cancel prior requirements. Later explicit
 corrections take precedence over earlier preferences.

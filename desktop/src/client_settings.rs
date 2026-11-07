@@ -1,20 +1,11 @@
 use crate::{design,video};
-use eframe::egui::{self, Key, Modifiers};
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub enum CaptureShortcut { #[default] CtrlAltG, CtrlShiftG, CtrlAltZ }
-impl CaptureShortcut {
-    pub fn label(self) -> &'static str { match self {Self::CtrlAltG=>"Ctrl+Alt+G",Self::CtrlShiftG=>"Ctrl+Shift+G",Self::CtrlAltZ=>"Ctrl+Alt+Z"} }
-    pub fn matches(self,key:Key,m:Modifiers) -> bool {
-        !m.mac_cmd && m.ctrl && match self {
-            Self::CtrlAltG=>key==Key::G && m.alt && !m.shift,
-            Self::CtrlShiftG=>key==Key::G && m.shift && !m.alt,
-            Self::CtrlAltZ=>key==Key::Z && m.alt && !m.shift,
-        }
-    }
-}
+// Retained in persisted settings for compatibility; Alt+F now owns fullscreen.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -95,8 +86,8 @@ impl Settings {
         design::surface().inner_margin(10).show(ui,|ui| {
             ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
             ui.columns(2,|c| {
-                c[0].label("Capture / release mouse");
-                egui::ComboBox::from_id_salt("client-shortcut").width(c[0].available_width()).selected_text(self.shortcut.label()).show_ui(&mut c[0],|ui| {for choice in [CaptureShortcut::CtrlAltG,CaptureShortcut::CtrlShiftG,CaptureShortcut::CtrlAltZ] {ui.selectable_value(&mut self.shortcut,choice,choice.label());}});
+                c[0].label("Fullscreen");
+                c[0].label("Alt+F");
                 c[1].label("Audio");c[1].checkbox(&mut self.audio,"Play host audio");
             });
         });

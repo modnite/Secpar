@@ -133,6 +133,7 @@ struct App {
     owned_connecting: Option<(String,String)>,
     decoder: Option<video::Worker>,
     audio: Option<audio::Audio>,
+    audio_error: Option<String>,
     texture: Option<TextureHandle>,
     brand: TextureHandle,
     brand_scale: f32,
@@ -146,6 +147,11 @@ struct App {
     fullscreen: bool,
     focused: bool,
     auto_capture_pending: bool,
+    video_rect: Option<egui::Rect>,
+    video_layer: Option<egui::LayerId>,
+    remote_keyboard: bool,
+    pointer_in_video: bool,
+    observed_fullscreen: Option<bool>,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -192,6 +198,7 @@ impl App {
             owned_connecting: None,
             decoder: None,
             audio: None,
+            audio_error: None,
             texture: None,
             brand,
             brand_scale,
@@ -205,6 +212,8 @@ impl App {
             fullscreen: false,
             focused: true,
             auto_capture_pending: false,
+            video_rect: None, video_layer: None, remote_keyboard: false, pointer_in_video: false,
+            observed_fullscreen: None,
         }
     }
     fn pairing_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -290,9 +299,9 @@ impl App {
         self.session_account=self.computer_account.clone();
         let lan_first = self.computer_account.is_some();
         let computer = self.computer.clone();
-        self.audio = self.client.audio.then(audio::Audio::new).and_then(Result::ok);
+        self.open_audio();
         let options = Options {
-            audio: self.audio.is_some(),
+            audio: self.client.audio,
             ..self.options.clone()
         };
         let ctx = ctx.clone();
@@ -302,6 +311,8 @@ impl App {
         self.events = Some(ev_rx);
         self.status = "Connecting".into();
         self.auto_capture_pending = true;
+        self.remote_keyboard = true;
+        self.video_rect = None;
         self.decoder = None;
         self.client.active_decoder = None;
         self.texture = None;
@@ -352,9 +363,15 @@ impl App {
             self.status = "Input queue stopped; disconnected to release remote keys".into();
         }
     }
+    fn open_audio(&mut self) {
+        self.audio_error=None;
+        self.audio=if self.client.audio {match audio::Audio::new() {
+            Ok(output)=>Some(output), Err(error)=>{self.audio_error=Some(error);None}
+        }} else {None};
+    }
     fn capture(&mut self, ctx: &egui::Context, on: bool) {
         self.auto_capture_pending = false;
-        if on && self.texture.is_some() && self.command.is_some() {
+        if on && self.fullscreen && self.texture.is_some() && self.command.is_some() {
             self.input.capture();
             ctx.send_viewport_cmd(ViewportCommand::CursorGrab(CursorGrab::Locked));
             ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
@@ -366,7 +383,19 @@ impl App {
             ctx.send_viewport_cmd(ViewportCommand::CursorVisible(true));
         }
     }
+    fn set_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
+        self.capture(ctx, false);
+        self.fullscreen = on;
+        self.remote_keyboard = true;
+        self.video_rect = None;
+        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(on));
+        if on && self.focused {self.capture(ctx,true);}
+        else if self.focused && self.texture.is_some() && self.command.is_some() {self.input.free();}
+    }
     fn poll(&mut self, ctx: &egui::Context) {
+        if self.audio.as_ref().is_some_and(|audio|audio.failed()) {
+            self.audio=None;self.audio_error=Some("Audio output stopped. Check the selected system output and retry.".into());
+        }
         let mut messages = vec![];
         if let Some(rx) = self.events.as_mut() {
             for _ in 0..8 {
@@ -392,13 +421,7 @@ impl App {
                     self.computer = Some(c);
                     self.pair_link.clear();
                 }
-                Event::Status(s) => {
-                    self.status = if self.audio.is_some() {
-                        s
-                    } else {
-                        format!("{s} · no audio output")
-                    }
-                }
+                Event::Status(s) => { self.status=s; }
                 Event::Audio(packet) => {
                     if let Some(audio) = self.audio.as_mut() {
                         audio.packet(&packet);
@@ -454,6 +477,7 @@ impl App {
                     self.decoder = None;
                     self.audio = None;
                     self.texture = None;
+                    self.video_rect = None;self.pointer_in_video=false;self.remote_keyboard=false;
                     self.cursor = (0, 0, false);
                     self.cursor_shape = None;
                 }
@@ -484,36 +508,91 @@ impl App {
             }
         }
         if self.auto_capture_pending && self.focused && self.texture.is_some() {
-            self.capture(ctx, true);
+            self.auto_capture_pending=false;
+            if self.fullscreen {self.capture(ctx,true);} else {self.input.free();}
         }
     }
 }
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.focused = raw.focused;
+        if let Some(actual) = raw.viewport().fullscreen {
+            if self.observed_fullscreen.is_some_and(|old| old != actual) && self.fullscreen != actual {
+                self.set_fullscreen(ctx,actual);
+            }
+            self.observed_fullscreen=Some(actual);
+        }
         if !raw.focused {
             self.capture(ctx, false);
+            self.pointer_in_video = false;
+            self.shortcut_key = None;
             return;
         }
-        let toggle=raw.events.iter().find_map(|event| match event {
-            UiEvent::Key{key,pressed:true,repeat:false,modifiers,..} if self.client.shortcut.matches(*key,*modifiers) || (*key==Key::F12 && modifiers.ctrl) => Some(*key), _=>None
-        });
-        if let Some(key)=toggle {self.shortcut_key=Some(key);self.capture(ctx,!self.input.captured);}
-        if let Some(key)=self.shortcut_key {
-            let released=raw.events.iter().any(|e|matches!(e,UiEvent::Key{key:k,pressed:false,..} if *k==key));
+        if raw.events.iter().any(input::fullscreen_shortcut) {
+            self.shortcut_key = Some(Key::F);
+            self.set_fullscreen(ctx, !self.fullscreen);
+        }
+        if let Some(key) = self.shortcut_key {
+            let released = raw.events.iter().any(|e| matches!(e,UiEvent::Key{key:k,pressed:false,..} if *k==key));
             raw.events.retain(|e| !matches!(e,UiEvent::Key{key:k,..} if *k==key));
-            if released {self.shortcut_key=None;}
+            if released { self.shortcut_key=None; }
         }
-        for m in self.input.modifiers(raw.modifiers) {
-            self.send(Command::Input(m));
-        }
-        if self.input.captured {
+        let ready = self.texture.is_some() && self.command.is_some();
+        if ready && self.fullscreen {
+            if !self.input.captured { self.capture(ctx, true); }
+            for m in self.input.modifiers(raw.modifiers) { self.send(Command::Input(m)); }
             for event in std::mem::take(&mut raw.events) {
-                for m in self.input.event(&event) {
-                    self.send(Command::Input(m));
+                for m in self.input.event(&event) { self.send(Command::Input(m)); }
+            }
+            return;
+        }
+        if !ready { return; }
+        if self.input.captured { self.capture(ctx, false); }
+        if self.remote_keyboard && !self.input.enabled { self.input.free(); }
+        let mut local = Vec::new();
+        for event in std::mem::take(&mut raw.events) {
+            let hit = |pos:egui::Pos2| self.video_rect.is_some_and(|r| r.contains(pos)) &&
+                ctx.layer_id_at(pos)==self.video_layer;
+            match &event {
+                UiEvent::PointerMoved(pos) => {
+                    self.pointer_in_video=hit(*pos);
+                    if self.pointer_in_video {
+                        if let Some(message)=input::Input::absolute(*pos,self.video_rect.unwrap()) {self.send(Command::Input(message));}
+                    } else { for m in self.input.release_buttons() {self.send(Command::Input(m));} }
+                    local.push(event);
                 }
+                UiEvent::PointerGone => {
+                    self.pointer_in_video=false;
+                    for m in self.input.release_buttons() {self.send(Command::Input(m));}
+                    local.push(event);
+                }
+                UiEvent::PointerButton{pos,pressed,..} => {
+                    self.pointer_in_video=hit(*pos);
+                    if self.pointer_in_video {
+                        if *pressed {self.remote_keyboard=true;if !self.input.enabled {self.input.free();}}
+                        if let Some(m)=input::Input::absolute(*pos,self.video_rect.unwrap()){self.send(Command::Input(m));}
+                        for m in self.input.modifiers(raw.modifiers){self.send(Command::Input(m));}
+                        for m in self.input.event(&event){self.send(Command::Input(m));}
+                    } else {
+                        if *pressed { self.remote_keyboard=false;for m in self.input.release(){self.send(Command::Input(m));} }
+                        else {for m in self.input.release_buttons(){self.send(Command::Input(m));}}
+                        local.push(event);
+                    }
+                }
+                UiEvent::MouseWheel{..} if self.pointer_in_video => {
+                    if !self.input.enabled {self.input.free();}
+                    for m in self.input.event(&event){self.send(Command::Input(m));}
+                }
+                UiEvent::Key{..} if self.remote_keyboard => {
+                    for m in self.input.modifiers(raw.modifiers){self.send(Command::Input(m));}
+                    for m in self.input.event(&event){self.send(Command::Input(m));}
+                }
+                UiEvent::MouseMoved(_) => {}, // free mode uses absolute positions, never raw deltas
+                _ => local.push(event),
             }
         }
+        if self.remote_keyboard {for m in self.input.modifiers(raw.modifiers){self.send(Command::Input(m));}}
+        raw.events=local;
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         let scale = ctx.pixels_per_point();
@@ -573,7 +652,7 @@ impl eframe::App for App {
         if (self.options.width,self.options.height)!=(self.client.width,self.client.height) {
             self.client.width=self.options.width;self.client.height=self.options.height;self.client.save();
         }
-        if self.command.is_none() && self.input.captured {
+        if self.command.is_none() && self.input.enabled {
             self.capture(ctx, false);
         }
         if !(self.fullscreen && self.input.captured) {
@@ -602,33 +681,24 @@ impl eframe::App for App {
                             );
                         } else {
                             ui.label(&self.status);
+                            if let Some(error)=self.audio_error.clone() {
+                                if ui.button("Retry audio").on_hover_text(error).clicked(){self.open_audio();}
+                            }
                         }
                         if self.command.is_some() {
                             if ui.button("Disconnect").clicked() {
                                 self.capture(ctx, false);
                                 self.send(Command::Stop);
                             }
-                            if self.texture.is_some()
-                                && ui
-                                    .button(if self.input.captured {
-                                        format!("Release · {}",self.client.shortcut.label())
-                                    } else {
-                                        format!("Capture · {}",self.client.shortcut.label())
-                                    })
-                                    .clicked()
-                            {
-                                self.capture(ctx, !self.input.captured);
-                            }
                             if ui
                                 .button(if self.fullscreen {
-                                    "Window"
+                                    "Window · Alt+F"
                                 } else {
-                                    "Fullscreen"
+                                    "Fullscreen · Alt+F"
                                 })
                                 .clicked()
                             {
-                                self.fullscreen = !self.fullscreen;
-                                ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
+                                self.set_fullscreen(ctx, !self.fullscreen);
                             }
                             if self.displays.len() > 1 {
                                 let mut selected = self.display.clone();
@@ -709,6 +779,7 @@ impl eframe::App for App {
                     let display = size * scale;
                     let (_, rect) = ui.allocate_space(available);
                     let picture = egui::Rect::from_center_size(rect.center(), display);
+                    self.video_rect=Some(picture);self.video_layer=Some(ui.layer_id());
                     ui.painter().rect_filled(rect, 0., Color32::BLACK);
                     ui.painter().image(
                         texture.id(),
@@ -716,7 +787,7 @@ impl eframe::App for App {
                         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
                         Color32::WHITE,
                     );
-                    if self.cursor.2 {
+                    if self.cursor.2 && (self.input.captured || !self.pointer_in_video) {
                         let p = picture.min
                             + egui::vec2(self.cursor.0 as f32, self.cursor.1 as f32) * scale;
                         if picture.contains(p) {

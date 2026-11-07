@@ -13,7 +13,9 @@ PLUGINS = Path(subprocess.check_output(["pkg-config","--variable=pluginsdir","gs
 DEST = ROOT/"dist-desktop/Secpar-Linux-x64.AppImage"
 DEST.parent.mkdir(exist_ok=True)
 # Drivers, their Wayland ABI and the C runtime must come from the user's distribution.
-SYSTEM = re.compile(r"^(?:ld-linux|lib(?:c\.so|m\.so|pthread|dl\.so|rt\.so|resolv|util\.so|GL|EGL|OpenGL|GLES|vulkan|drm|gbm|va\.so|va-drm|va-x11|nvidia|cuda|wayland-))")
+# ALSA/Pulse/PipeWire also load distribution plugins and configuration; bundling a
+# Debian audio library breaks Arch's plugin directory and can silently disable output.
+SYSTEM = re.compile(r"^(?:ld-linux|lib(?:c\.so|m\.so|pthread|dl\.so|rt\.so|resolv|util\.so|GL|EGL|OpenGL|GLES|vulkan|drm|gbm|va\.so|va-drm|va-x11|nvidia|cuda|wayland-|asound\.so|pulse|pipewire-|spa-))")
 with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     app=Path(temp)/"Secpar.AppDir"; lib=app/"usr/lib"; exe=app/"usr/bin"
     lib.mkdir(parents=True);exe.mkdir()

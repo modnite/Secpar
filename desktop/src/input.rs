@@ -2,9 +2,15 @@ use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, PointerButton};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
+pub fn fullscreen_shortcut(event: &Event) -> bool {
+    matches!(event,Event::Key{key:Key::F,pressed:true,repeat:false,modifiers,..}
+        if modifiers.alt && !modifiers.ctrl && !modifiers.shift && !modifiers.mac_cmd)
+}
+
 #[derive(Default)]
 pub struct Input {
     pub captured: bool,
+    pub enabled: bool,
     held: BTreeSet<u32>,
     buttons: BTreeSet<&'static str>,
     ignore_ctrl: bool,
@@ -15,27 +21,38 @@ pub struct Input {
 impl Input {
     pub fn capture(&mut self) {
         self.captured = true;
+        self.enabled = true;
         self.ignore_ctrl = true;
         self.ignore_alt = true;
         self.ignore_shift = true;
         self.fractional = [0.; 2];
     }
+    pub fn free(&mut self) {
+        self.capture();
+        self.captured = false;
+    }
+    pub fn release_buttons(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.buttons).into_iter()
+            .map(|b| json!({"t":"mouse.button","b":b,"down":false})).collect()
+    }
+    pub fn absolute(pos: eframe::egui::Pos2, picture: eframe::egui::Rect) -> Option<Value> {
+        if !picture.is_positive() || !picture.contains(pos) { return None; }
+        Some(json!({"t":"mouse.pos","x":((pos.x-picture.min.x)/picture.width()).clamp(0.,1.),
+            "y":((pos.y-picture.min.y)/picture.height()).clamp(0.,1.)}))
+    }
     pub fn release(&mut self) -> Vec<Value> {
         self.captured = false;
+        self.enabled = false;
         self.fractional = [0.; 2];
         let mut out: Vec<_> = std::mem::take(&mut self.held)
             .into_iter()
             .map(|vk| json!({"t":"key","vk":vk,"down":false}))
             .collect();
-        out.extend(
-            std::mem::take(&mut self.buttons)
-                .into_iter()
-                .map(|b| json!({"t":"mouse.button","b":b,"down":false})),
-        );
+        out.extend(self.release_buttons());
         out
     }
     pub fn modifiers(&mut self, m: Modifiers) -> Vec<Value> {
-        if !self.captured {
+        if !self.enabled {
             return vec![];
         }
         if !m.ctrl {
@@ -57,7 +74,7 @@ impl Input {
         out
     }
     pub fn event(&mut self, event: &Event) -> Vec<Value> {
-        if !self.captured {
+        if !self.enabled {
             return vec![];
         }
         match event {
@@ -66,12 +83,8 @@ impl Input {
                 physical_key,
                 pressed,
                 repeat,
-                modifiers,
                 ..
             } => {
-                if *key == Key::F12 && modifiers.ctrl {
-                    return vec![];
-                }
                 if *repeat {
                     return vec![];
                 }
@@ -86,6 +99,7 @@ impl Input {
                 vec![json!({"t":"key","vk":vk,"down":pressed})]
             }
             Event::MouseMoved(d) => {
+                if !self.captured { return vec![]; }
                 self.fractional[0] += d.x;
                 self.fractional[1] += d.y;
                 let (dx, dy) = (
@@ -246,5 +260,46 @@ mod tests {
             i.event(&Event::MouseMoved(eframe::egui::vec2(0.25, 0.)))[0]["dx"],
             1
         );
+    }
+
+    #[test]
+    fn free_pointer_forwards_keyboard_and_buttons_without_relative_mouse_motion() {
+        let mut input=Input::default();input.free();
+        assert!(input.enabled && !input.captured);
+        assert!(input.event(&Event::MouseMoved(eframe::egui::vec2(30.,10.))).is_empty());
+        let event=Event::Key {key:Key::A,physical_key:Some(Key::A),pressed:true,repeat:false,modifiers:Modifiers::default()};
+        assert_eq!(input.event(&event)[0]["vk"],65);
+        assert_eq!(input.release()[0]["down"],false);
+        assert!(!input.enabled && !input.captured);
+    }
+
+    #[test]
+    fn absolute_pointer_maps_only_the_displayed_picture_and_excludes_letterbox() {
+        use eframe::egui::{pos2,Rect};
+        let picture=Rect::from_min_max(pos2(20.,40.),pos2(620.,340.));
+        let middle=Input::absolute(pos2(320.,190.),picture).unwrap();
+        assert_eq!(middle["x"],0.5);assert_eq!(middle["y"],0.5);
+        assert!(Input::absolute(pos2(10.,190.),picture).is_none());
+        assert!(Input::absolute(pos2(320.,20.),picture).is_none());
+        assert!(Input::absolute(pos2(0.,0.),Rect::NOTHING).is_none());
+    }
+
+    #[test]
+    fn leaving_picture_releases_buttons_without_releasing_remote_keyboard() {
+        let mut input=Input::default();input.free();input.held.insert(65);input.buttons.insert("left");
+        let events=input.release_buttons();assert_eq!(events.len(),1);assert_eq!(events[0]["b"],"left");
+        assert!(input.held.contains(&65));assert!(input.enabled);assert!(input.release_buttons().is_empty());
+    }
+
+    #[test]
+    fn fullscreen_shortcut_requires_exact_alt_f_and_no_repeat_or_release() {
+        let event=|modifiers,pressed,repeat| Event::Key{key:Key::F,physical_key:Some(Key::F),pressed,repeat,modifiers};
+        let alt=Modifiers{alt:true,..Default::default()};
+        assert!(fullscreen_shortcut(&event(alt,true,false)));
+        assert!(!fullscreen_shortcut(&event(alt,false,false)));
+        assert!(!fullscreen_shortcut(&event(alt,true,true)));
+        assert!(!fullscreen_shortcut(&event(Modifiers::default(),true,false)));
+        assert!(!fullscreen_shortcut(&event(Modifiers{ctrl:true,..alt},true,false)));
+        assert!(!fullscreen_shortcut(&event(Modifiers{shift:true,..alt},true,false)));
     }
 }
