@@ -2,11 +2,11 @@
 //! the latest decoded image; dropping dependent frames requires a new keyframe.
 #[cfg(all(test, target_os = "linux"))]
 mod dmabuf;
-#[cfg(all(test,target_os="linux"))]
+#[cfg(all(test, target_os = "linux"))]
 mod yuv_shader;
-#[cfg(all(test,target_os="linux"))]
+#[cfg(all(test, target_os = "linux"))]
 mod dma_import;
-#[cfg(all(test,target_os="linux"))]
+#[cfg(all(test, target_os = "linux"))]
 mod native_decode;
 use eframe::egui::{ColorImage, Context};
 use openh264::{decoder::Decoder, formats::YUVSource};
@@ -60,7 +60,7 @@ impl Backend {
     fn is_hardware(&self)->bool {
         match self {Self::Software(_)=>false,#[cfg(target_os="linux")] Self::Hardware(_)=>true}
     }
-    fn label(&self)->&'static str {if self.is_hardware(){"H.264 Â· VA-API"}else{"H.264 Â· software"}}
+    fn label(&self)->&'static str {if self.is_hardware(){"H.264 · VA-API"}else{"H.264 · software"}}
     fn decode(&mut self,bytes:&[u8])->Result<Option<ColorImage>,DecodeError> {
         match self {
             Self::Software(decoder)=> {
@@ -183,7 +183,7 @@ impl Worker {
                 };
                 let mut state = lock.lock().unwrap();
                 if generation == state.generation && !state.stopped {
-                    if let Some(image) = image { state.image = Some(image); state.backend=Some(if slow_fallback {"H.264 Â· software (VA-API too slow)"}else{decoder.label()}); }
+                    if let Some(image) = image { state.image = Some(image); state.backend=Some(if slow_fallback {"H.264 · software (VA-API too slow)"}else{decoder.label()}); }
                 }
                 drop(state);
                 ctx.request_repaint();
@@ -291,7 +291,7 @@ mod tests {
             let output=worker.output();assert!(output.error.is_none());
             if let Some(image)=output.image {
                 assert_eq!(image.size,[128,128]);
-                assert_eq!(output.backend,Some("H.264 Â· software (VA-API too slow)"));break;
+                assert_eq!(output.backend,Some("H.264 · software (VA-API too slow)"));break;
             }
             assert!(Instant::now()<until,"Slow native decode did not recover");std::thread::sleep(Duration::from_millis(5));
         }
@@ -319,7 +319,7 @@ mod tests {
         loop {
             let output=worker.output();assert!(output.error.is_none(),"{:?}",output.error);
             if let Some(image)=output.image {
-                assert_eq!(image.size,[128,128]);assert_eq!(output.backend,Some("H.264 Â· software"));break;
+                assert_eq!(image.size,[128,128]);assert_eq!(output.backend,Some("H.264 · software"));break;
             }
             assert!(Instant::now()<until,"Software fallback did not resume");
             std::thread::sleep(Duration::from_millis(5));
