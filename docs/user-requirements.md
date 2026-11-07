@@ -147,3 +147,11 @@ corrections take precedence over earlier preferences.
 - The user is currently away from home and cannot test Linux. Continue independent
   checks without repeatedly requesting laptop tests. Physical S23 debugging is
   currently disconnected from this home PC; do not claim live log access.
+
+Glyph requirement, 2026-11-07: ALWAYS use an established, named icon/glyph library
+as the source for UI symbols. Prefer original library assets with a pinned version
+and license; never improvise icons from text characters or ad hoc painter strokes.
+Use a consistent family/weight/size across menus. Secpar triangle is approved brand
+art, not a generic UI glyph. User rejects current hand-drawn desktop menu symbols.
+Linux hardware playback remains below Moonlight after3.11.0. Software is the known
+smooth workaround; fallback is NOT proof that hardware rendering is fixed.

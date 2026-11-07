@@ -1,5 +1,18 @@
 # Secpar delivery record
 
+## IN PROGRESS — glyphs and Linux native rendering, 2026-11-07
+
+User confirms Linux hardware performance still below Moonlight. Do NOT call3.11
+hardware fallback a performance fix. Current VA path downloads frames, CPU-converts
+RGB and uploads an egui texture. Investigating native VA-surface/EGL presentation.
+Icon rule persisted in AGENTS/user-requirements: always established library assets,
+never improvised text symbols or painter line art. Menus switched to original
+Lucide0.468.0 SVG artwork, commitf12b0de177fbc2a6795e99be065887e72b237123,
+ISC notice retained. Android and desktop include DPI-aware raster derivatives.
+Code compiles on Windows; Android build and actual visual checks in progress.
+Latest Mac CI42365335046 ALL FOUR jobs PASS (including both Mac package builds).
+Windows3.11 installed/user has an active stream; no restarts for these changes.
+
 ## CURRENT — 3.11.0 PUBLISHED, 2026-11-07
 
 Public https://github.com/modnite/Secpar/releases/tag/v3.11.0. Runtime836c4c0;

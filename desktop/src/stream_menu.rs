@@ -1,41 +1,21 @@
 use super::*;
 use egui::{Align2,FontId,Pos2,Rect,Response,Sense,Stroke,Vec2};
 
-#[derive(Clone,Copy)]
-enum Icon { Window,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back }
+use crate::icons::{paint as icon,Icon};
 const TEXT:Color32=Color32::from_rgb(233,235,237);
 const MUTED:Color32=Color32::from_rgb(148,153,158);
 const RED:Color32=Color32::from_rgb(242,105,94);
 
-fn icon(ui:&egui::Ui,kind:Icon,rect:Rect,color:Color32) {
-    let p=ui.painter();let s=Stroke::new(1.6_f32,color);
-    let xy=|x:f32,y:f32|rect.min+egui::vec2(x,y);
-    let line=|a:(f32,f32),b:(f32,f32)|p.line_segment([xy(a.0,a.1),xy(b.0,b.1)],s);
-    match kind {
-        Icon::Window=>{for (a,b) in [((1.,7.),(1.,1.)),((1.,1.),(7.,1.)),((11.,1.),(17.,1.)),((17.,1.),(17.,7.)),((1.,11.),(1.,17.)),((1.,17.),(7.,17.)),((11.,17.),(17.,17.)),((17.,17.),(17.,11.))]{line(a,b);}},
-        Icon::Display=>{p.rect_stroke(Rect::from_min_max(xy(1.,2.),xy(17.,13.)),2.,s,egui::StrokeKind::Inside);line((9.,13.),(9.,17.));line((5.,17.),(13.,17.));},
-        Icon::Decoder=>{p.rect_stroke(Rect::from_min_max(xy(4.,4.),xy(14.,14.)),2.,s,egui::StrokeKind::Inside);for n in [6.,10.,13.]{line((n,1.),(n,4.));line((n,14.),(n,17.));line((1.,n),(4.,n));line((14.,n),(17.,n));}},
-        Icon::Clipboard=>{p.rect_stroke(Rect::from_min_max(xy(3.,3.),xy(15.,17.)),2.,s,egui::StrokeKind::Inside);p.rect_filled(Rect::from_min_max(xy(6.,1.),xy(12.,5.)),1.,color);line((6.,9.),(12.,9.));line((6.,12.),(12.,12.));},
-        Icon::Stats=>{line((2.,17.),(2.,11.));line((8.,17.),(8.,6.));line((14.,17.),(14.,1.));},
-        Icon::Audio=>{line((2.,7.),(6.,7.));line((6.,7.),(11.,3.));line((11.,3.),(11.,15.));line((11.,15.),(6.,11.));line((6.,11.),(2.,11.));line((2.,11.),(2.,7.));line((14.,6.),(16.,9.));line((16.,9.),(14.,12.));},
-        Icon::Help=>{p.circle_stroke(xy(9.,9.),8.,s);p.text(xy(9.,9.),Align2::CENTER_CENTER,"?",FontId::proportional(14.),color);},
-        Icon::Exit=>{line((7.,2.),(2.,2.));line((2.,2.),(2.,16.));line((2.,16.),(7.,16.));line((7.,9.),(17.,9.));line((13.,5.),(17.,9.));line((17.,9.),(13.,13.));},
-        Icon::Back=>{line((16.,9.),(2.,9.));line((7.,4.),(2.,9.));line((2.,9.),(7.,14.));},
-    }
-}
 fn row(ui:&mut egui::Ui,kind:Icon,label:&str,value:&str,arrow:bool,checked:bool,danger:bool)->Response {
     let (rect,response)=ui.allocate_exact_size(Vec2::new(ui.available_width(),34.),Sense::click());
     if response.hovered() || response.has_focus(){ui.painter().rect_filled(rect,3.,Color32::from_white_alpha(12));}
     let color=if danger {RED}else{TEXT};
-    icon(ui,kind,Rect::from_min_size(rect.min+egui::vec2(10.,8.),egui::vec2(18.,18.)),color);
+    icon(ui,kind,Rect::from_min_size(rect.min+egui::vec2(9.,7.),egui::vec2(20.,20.)),color);
     ui.painter().text(Pos2::new(rect.left()+39.,rect.center().y),Align2::LEFT_CENTER,label,FontId::proportional(14.),color);
     let right=rect.right()-12.;
-    if checked {
-        ui.painter().line_segment([egui::pos2(right-11.,rect.center().y),egui::pos2(right-7.,rect.center().y+4.)],Stroke::new(1.7_f32,design::ACCENT));
-        ui.painter().line_segment([egui::pos2(right-7.,rect.center().y+4.),egui::pos2(right,rect.center().y-4.)],Stroke::new(1.7_f32,design::ACCENT));
-    } else if arrow {
-        ui.painter().line_segment([egui::pos2(right-4.,rect.center().y-4.),egui::pos2(right,rect.center().y)],Stroke::new(1.5_f32,MUTED));
-        ui.painter().line_segment([egui::pos2(right,rect.center().y),egui::pos2(right-4.,rect.center().y+4.)],Stroke::new(1.5_f32,MUTED));
+    if checked || arrow {
+        icon(ui,if checked {Icon::Check}else{Icon::Chevron},Rect::from_center_size(
+            egui::pos2(right-6.,rect.center().y),egui::vec2(18.,18.)),if checked {design::ACCENT}else{MUTED});
     }
     if !value.is_empty(){ui.painter().text(egui::pos2(right-if arrow||checked {18.}else{0.},rect.center().y),Align2::RIGHT_CENTER,value,FontId::proportional(12.),MUTED);}
     response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,ui.is_enabled(),label));
@@ -75,7 +55,7 @@ impl App {
                 egui::Frame::new().fill(Color32::from_rgba_unmultiplied(25,27,29,246)).corner_radius(5).inner_margin(6).show(ui,|ui|{
                     ui.set_width(250.);ui.spacing_mut().item_spacing.y=0.;
                     if self.menu_page==0 {
-                        if row(ui,Icon::Window,if self.fullscreen {"Window"}else{"Fullscreen"},"Alt+F",false,false,false).clicked(){self.set_fullscreen(ctx,!self.fullscreen);}
+                        if row(ui,if self.fullscreen {Icon::Windowed}else{Icon::Window},if self.fullscreen {"Window"}else{"Fullscreen"},"Alt+F",false,false,false).clicked(){self.set_fullscreen(ctx,!self.fullscreen);}
                         if row(ui,Icon::Decoder,"Decoder","",true,false,false).clicked(){self.menu_page=1;}
                         if self.displays.len()>1 && row(ui,Icon::Display,"Switch display","",true,false,false).clicked(){self.menu_page=2;}
                         if row(ui,Icon::Clipboard,"Share clipboard","",false,self.client.clipboard,false).clicked(){

@@ -6,6 +6,7 @@ mod design;
 mod hosting;
 mod input;
 mod stream_menu;
+mod icons;
 mod local_host;
 #[cfg(windows)]
 mod native_window;

@@ -113,3 +113,11 @@ requires plain, original writing without canned AI phrasing or promotional fluff
 For Windows Python text writes, specify UTF-8 and LF newlines (or write UTF-8
 bytes). Default newline conversion creates broad CRLF diffs; default encoding
 can corrupt punctuation. Keep patches focused.
+
+Glyph requirement, 2026-11-07: ALWAYS use an established, named icon/glyph library
+as the source for UI symbols. Prefer original library assets with a pinned version
+and license; never improvise icons from text characters or ad hoc painter strokes.
+Use a consistent family/weight/size across menus. Secpar triangle is approved brand
+art, not a generic UI glyph. User rejects current hand-drawn desktop menu symbols.
+Linux hardware playback remains below Moonlight after3.11.0. Software is the known
+smooth workaround; fallback is NOT proof that hardware rendering is fixed.

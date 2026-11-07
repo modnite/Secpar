@@ -21,6 +21,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,7 +73,7 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
             Connecting(state.pcName, state.connecting.orEmpty(), a::disconnect)
         }
         if (!state.connected) return@BoxWithConstraints
-        Box(Modifier.align(Alignment.TopStart).padding(12.dp).size(44.dp)
+        Box(Modifier.align(Alignment.TopStart).zIndex(2f).padding(12.dp).size(44.dp)
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).background(Color(0xff191b1d).copy(alpha = 0.7f))
             .semantics { contentDescription = "Stream menu" }
             .clickable { panel = !panel }, contentAlignment = Alignment.Center) {
@@ -129,47 +130,47 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
         .background(Color(0xff191b1d).copy(alpha = 0.97f))
         .verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
         if (page == 0) {
-            StreamMenuRow(Icons.Rounded.Keyboard, "Keyboard", checked = state.keyboardOpen) { a.keyboard(); close() }
-            StreamMenuRow(Icons.Rounded.Mouse, "Trackpad", checked = state.trackpad) {
+            StreamMenuRow(R.drawable.lucide_keyboard, "Keyboard", checked = state.keyboardOpen) { a.keyboard(); close() }
+            StreamMenuRow(R.drawable.lucide_mouse, "Trackpad", checked = state.trackpad) {
                 state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad); close()
             }
-            if (state.canPip) StreamMenuRow(Icons.Rounded.PictureInPictureAlt, "Picture in picture") { close(); a.pictureInPicture() }
-            if (state.displays.size > 1) StreamMenuRow(Icons.Rounded.Monitor, "Switch display", arrow = true) { page = 3 }
-            StreamMenuRow(Icons.Rounded.Speed, "Stream stats", checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
-            StreamMenuRow(Icons.Rounded.KeyboardAlt, "More keys", arrow = true) { page = 1 }
-            StreamMenuRow(Icons.Rounded.HelpOutline, "Help") { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+            if (state.canPip) StreamMenuRow(R.drawable.lucide_picture_in_picture_2, "Picture in picture") { close(); a.pictureInPicture() }
+            if (state.displays.size > 1) StreamMenuRow(R.drawable.lucide_monitor, "Switch display", arrow = true) { page = 3 }
+            StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, "Stream stats", checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
+            StreamMenuRow(R.drawable.lucide_command, "More keys", arrow = true) { page = 1 }
+            StreamMenuRow(R.drawable.lucide_circle_help, "Help") { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
                 android.net.Uri.parse("https://secpar.win/help/#stream-menu"))) }
             androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
-            StreamMenuRow(Icons.Rounded.Logout, "Disconnect", destructive = true) { a.disconnect() }
+            StreamMenuRow(R.drawable.lucide_log_out, "Disconnect", destructive = true) { a.disconnect() }
             Text("Secpar " + com.pcremote.BuildConfig.VERSION_NAME, color = Color(0xff94999e), fontSize = 10.sp,
                 modifier = Modifier.padding(start = 14.dp, top = 4.dp, bottom = 2.dp))
         } else {
-            StreamMenuRow(Icons.Rounded.ArrowBack, when(page) { 1 -> "Keys"; 2 -> "Media keys"; else -> "Displays" }) { page = if (page == 2) 1 else 0 }
+            StreamMenuRow(R.drawable.lucide_arrow_left, when(page) { 1 -> "Keys"; 2 -> "Media keys"; else -> "Displays" }) { page = if (page == 2) 1 else 0 }
             androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
             when (page) {
                 1 -> {
-                    StreamMenuRow(Icons.Rounded.KeyboardReturn, "Escape") { a.keys(chord(listOf(VK_ESC))); close() }
-                    StreamMenuRow(Icons.Rounded.Window, "Windows key") { a.shortcut(Shortcut.WIN); close() }
-                    StreamMenuRow(Icons.Rounded.SwapHoriz, "Switch app", value = "Alt+Tab") { a.shortcut(Shortcut.ALT_TAB); close() }
-                    StreamMenuRow(Icons.Rounded.ContentCopy, "Copy", value = "Ctrl+C") { a.shortcut(Shortcut.COPY); close() }
-                    StreamMenuRow(Icons.Rounded.ContentPaste, "Paste", value = "Ctrl+V") { a.shortcut(Shortcut.PASTE); close() }
-                    StreamMenuRow(Icons.Rounded.SpaceDashboard, "Show desktop") { a.keys(chord(listOf(0x5B, 0x44))); close() }
-                    StreamMenuRow(Icons.Rounded.Monitor, "Task Manager") { a.keys(chord(listOf(0x11, 0x10, VK_ESC))); close() }
-                    StreamMenuRow(Icons.Rounded.Close, "Close window", value = "Alt+F4") { a.keys(chord(listOf(0x12, 0x73))); close() }
-                    StreamMenuRow(Icons.Rounded.MusicNote, "Media keys", arrow = true) { page = 2 }
+                    StreamMenuRow(R.drawable.lucide_corner_down_left, "Escape") { a.keys(chord(listOf(VK_ESC))); close() }
+                    StreamMenuRow(R.drawable.lucide_panels_top_left, "Windows key") { a.shortcut(Shortcut.WIN); close() }
+                    StreamMenuRow(R.drawable.lucide_arrow_left_right, "Switch app", value = "Alt+Tab") { a.shortcut(Shortcut.ALT_TAB); close() }
+                    StreamMenuRow(R.drawable.lucide_copy, "Copy", value = "Ctrl+C") { a.shortcut(Shortcut.COPY); close() }
+                    StreamMenuRow(R.drawable.lucide_clipboard_paste, "Paste", value = "Ctrl+V") { a.shortcut(Shortcut.PASTE); close() }
+                    StreamMenuRow(R.drawable.lucide_panels_top_left, "Show desktop") { a.keys(chord(listOf(0x5B, 0x44))); close() }
+                    StreamMenuRow(R.drawable.lucide_monitor, "Task Manager") { a.keys(chord(listOf(0x11, 0x10, VK_ESC))); close() }
+                    StreamMenuRow(R.drawable.lucide_x, "Close window", value = "Alt+F4") { a.keys(chord(listOf(0x12, 0x73))); close() }
+                    StreamMenuRow(R.drawable.lucide_music_2, "Media keys", arrow = true) { page = 2 }
                 }
                 2 -> {
                     for ((icon, label, shortcut) in listOf(
-                        Triple(Icons.Rounded.SkipPrevious,"Previous",Shortcut.PREV),
-                        Triple(Icons.Rounded.PlayArrow,"Play / pause",Shortcut.PLAY_PAUSE),
-                        Triple(Icons.Rounded.SkipNext,"Next",Shortcut.NEXT),
-                        Triple(Icons.Rounded.VolumeDown,"Host volume down",Shortcut.VOL_DOWN),
-                        Triple(Icons.Rounded.VolumeUp,"Host volume up",Shortcut.VOL_UP),
-                        Triple(Icons.Rounded.VolumeOff,"Mute host",Shortcut.MUTE))) {
+                        Triple(R.drawable.lucide_skip_back,"Previous",Shortcut.PREV),
+                        Triple(R.drawable.lucide_play,"Play / pause",Shortcut.PLAY_PAUSE),
+                        Triple(R.drawable.lucide_skip_forward,"Next",Shortcut.NEXT),
+                        Triple(R.drawable.lucide_volume_1,"Host volume down",Shortcut.VOL_DOWN),
+                        Triple(R.drawable.lucide_volume_2,"Host volume up",Shortcut.VOL_UP),
+                        Triple(R.drawable.lucide_volume_x,"Mute host",Shortcut.MUTE))) {
                         StreamMenuRow(icon, label) { a.shortcut(shortcut) }
                     }
                 }
-                3 -> state.displays.forEach { display -> StreamMenuRow(Icons.Rounded.Monitor, display.name, checked = display.id == state.display) {
+                3 -> state.displays.forEach { display -> StreamMenuRow(R.drawable.lucide_monitor, display.name, checked = display.id == state.display) {
                     state.display = display.id; a.selectDisplay(display.id); close()
                 } }
             }
@@ -178,17 +179,17 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
 }
 
 @Composable
-private fun StreamMenuRow(icon: ImageVector, label: String, value: String? = null, arrow: Boolean = false,
+private fun StreamMenuRow(icon: Int, label: String, value: String? = null, arrow: Boolean = false,
     checked: Boolean = false, destructive: Boolean = false, onClick: () -> Unit) {
     val color = if (destructive) Color(0xfff2695e) else Color(0xffe9ebed)
     Row(Modifier.fillMaxWidth().height(42.dp).semantics { contentDescription = label }
         .clickable(onClick = onClick).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = color, modifier = Modifier.size(21.dp))
+        Icon(painterResource(icon), null, tint = color, modifier = Modifier.size(21.dp))
         Spacer(Modifier.width(14.dp))
         Text(label, color = color, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         value?.let { Text(it, color = Color(0xff94999e), fontSize = 12.sp, maxLines = 1) }
-        if (checked) Icon(Icons.Rounded.Check, null, tint = Color(0xff0affb6), modifier = Modifier.size(18.dp))
-        else if (arrow) Icon(Icons.Rounded.ChevronRight, null, tint = Color(0xff94999e), modifier = Modifier.size(18.dp))
+        if (checked) Icon(painterResource(R.drawable.lucide_check), null, tint = Color(0xff0affb6), modifier = Modifier.size(18.dp))
+        else if (arrow) Icon(painterResource(R.drawable.lucide_chevron_right), null, tint = Color(0xff94999e), modifier = Modifier.size(18.dp))
     }
 }
 

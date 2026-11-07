@@ -26,6 +26,7 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     (app/"com.secpar.desktop.desktop").write_text('[Desktop Entry]\nType=Application\nName=Secpar\nExec=secpar-desktop\nIcon=com.secpar.desktop\nTerminal=false\nCategories=Network;RemoteAccess;\nX-AppImage-Version='+TAG[1:]+'\n')
     licenses=app/"usr/share/licenses/secpar";licenses.mkdir(parents=True)
     shutil.copy2(ROOT/"LICENSE.txt",licenses/"Secpar-GPL-3.0.txt")
+    shutil.copy2(ROOT/"assets/icons/lucide/LICENSE",licenses/"Lucide-ISC.txt")
     pending=[BINARY]
     distributed=[BINARY]
     plugin_dir=lib/"gstreamer-1.0";plugin_dir.mkdir()
