@@ -1,0 +1,23 @@
+[package]
+name = "secpar-gamestream-host"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+base64 = "0.23.1"
+ring = "0.17.14"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "process", "time", "macros", "io-util"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
