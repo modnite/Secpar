@@ -222,6 +222,28 @@ across Secpar account changes. Prevent the same certificate from silently taking
 over another authenticated device's enrollment. Scope journal records by owner,
 Secpar device ID, GameStream client ID and certificate fingerprint.
 
+## Update 2026-11-07 (Claude): stdin credentials and real pairing PASS
+
+- Patch 0002 adds `--creds-stdin USER` to the Sunshine fork: one stdin line,
+  8..256 bytes, no control characters, same credential writer. Rebuilt on OMV
+  (incremental ninja, 1 min). Isolated container checks: good input saved,
+  short/long/control/empty/no-user input rejected with distinct exit codes.
+- The Rust controller now feeds the management secret through a closed pipe
+  with timeout and reap. It no longer appears in argv or the environment.
+  The approval POST waits up to 30s because it returns when the client's
+  pairing finishes or is abandoned.
+- Real certificate-bound pairing PASS, three consecutive runs, in the isolated
+  container: patched host plus the private Qt worker with separate profiles
+  (crates/secpar-gamestream-host/examples/pairing_review.rs, run via
+  integrations/gamestream/pairing-smoke.sh; needs `--features review`).
+  Host refused wrong fingerprint, wrong client ID and an incomplete grant;
+  controller refused a mismatched identity; exact identity paired the real
+  worker and the host listed its fingerprint; a second device needed its own
+  approval; a mismatched PIN enrolled nothing. Software fixture evidence only,
+  no GPU and no media in this gate.
+- Added `Host::enrolled()` (GET clients/list). Revocation, the journal and
+  agent wiring are next. Unpair needs the CSRF token flow; not done yet.
+
 ## Next implementation, in order
 
 This is a FULL-project handover. Beyond the engine migration, retain the backlog

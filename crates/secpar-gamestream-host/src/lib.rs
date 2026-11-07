@@ -210,14 +210,31 @@ impl Host {
             .map_err(|_| Error("Could not create desktop stream entry"))?;
         }
         let mut setup = command(&config.executable);
-        setup.arg(&conf).args(["--creds", "Secpar", &secret.0]);
+        // The secret goes through a private pipe, never argv or the environment.
+        setup
+            .arg(&conf)
+            .args(["--creds-stdin", "Secpar"])
+            .stdin(Stdio::piped());
         let mut setup = setup
             .spawn()
             .map_err(|_| Error("Could not initialize the bundled host"))?;
+        let mut line = secret.0.clone().into_bytes();
+        line.push(b'\n');
+        let fed = match setup.stdin.take() {
+            Some(mut pipe) => {
+                use tokio::io::AsyncWriteExt;
+                let sent = timeout(Duration::from_secs(5), pipe.write_all(&line)).await;
+                line.fill(0);
+                matches!(sent, Ok(Ok(())))
+            }
+            None => false,
+        };
+        // The pipe is dropped above, so the child sees end of input.
         match timeout(Duration::from_secs(10), setup.wait()).await {
-            Ok(Ok(status)) if status.success() => {}
+            Ok(Ok(status)) if fed && status.success() => {}
             _ => {
                 let _ = setup.kill().await;
+                let _ = setup.wait().await;
                 return Err(Error("Bundled host credential initialization failed"));
             }
         }
@@ -315,6 +332,26 @@ impl Host {
         }
         Ok(())
     }
+    /// Enrolled clients with the certificate fingerprint the host recorded.
+    pub async fn enrolled(&self) -> Result<Vec<Enrolled>> {
+        let value = self
+            .api
+            .request(reqwest::Method::GET, "clients/list", None)
+            .await?;
+        let list: Vec<Enrolled> = serde_json::from_value(value["named_certs"].clone())
+            .map_err(|_| Error("Host client list is invalid"))?;
+        if list.len() > 256 {
+            return Err(Error("Host returned too many enrolled clients"));
+        }
+        Ok(list)
+    }
+    /// Review-only: post an arbitrary approval body to prove host-side refusal.
+    #[cfg(feature = "review")]
+    pub async fn review_post_pin(&self, body: Value) -> Result<Value> {
+        self.api
+            .request(reqwest::Method::POST, "pin", Some(body))
+            .await
+    }
     pub async fn stop(mut self) -> Result<()> {
         if self
             .child
@@ -362,6 +399,13 @@ pub struct Pending {
     #[serde(default)]
     pub secpar_identity_binding: u32,
     pub pairings: Vec<PendingClient>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub struct Enrolled {
+    pub name: String,
+    pub uuid: String,
+    #[serde(default)]
+    pub certificate_sha256: String,
 }
 #[derive(Clone, Debug, Deserialize)]
 pub struct PendingClient {
@@ -432,7 +476,7 @@ impl Api {
         path: &str,
         body: Option<Value>,
     ) -> Result<Value> {
-        if !matches!(path, "config" | "pin") {
+        if !matches!(path, "config" | "pin" | "clients/list") {
             return Err(Error("Unknown private host operation"));
         }
         let mut request = self
@@ -440,7 +484,8 @@ impl Api {
             .request(method, format!("{}{path}", self.origin))
             .basic_auth("Secpar", Some(&self.password));
         if let Some(body) = body {
-            request = request.json(&body);
+            // Approval returns once the client finishes or abandons its pairing.
+            request = request.json(&body).timeout(Duration::from_secs(30));
         }
         let mut response = request
             .send()

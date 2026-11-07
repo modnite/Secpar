@@ -5,6 +5,9 @@ edition = "2021"
 license = "GPL-3.0-only"
 publish = false
 
+[features]
+review = []
+
 [dependencies]
 base64 = "0.23.1"
 ring = "0.17.14"
@@ -21,3 +24,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 tempfile = "3"
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+
+[[example]]
+name = "pairing_review"
+required-features = ["review"]
