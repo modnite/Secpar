@@ -38,12 +38,16 @@ No local Windows release builds remain running during the user's retest.
 User stats before3.12:1080p60 Direct, RTT3ms,0.8Mbps,21.9 received FPS,
 software(VA-API too slow), later no authenticated packets. Hardware performance
 remains OPEN. Legacy VA path reads back/converts RGB then uploads a UI texture.
-Branch feat/linux-native-renderer at41e3d98, separate work/secpar-native-renderer.
+Branch feat/linux-native-renderer at19d7d59, separate work/secpar-native-renderer.
 Modules are TEST-ONLY: production has not switched renderers. Implemented retained
 VA NV12 DMA-BUF export, EGL plane importer with fence retirement, GPU YUV shader.
-Six FD/layout tests and four importer tests pass;16 software GL/GLES render cases
+Six FD/layout tests and five importer tests pass;16 software GL/GLES render cases
 verify colors, crop, padding and orientation. No GPU on OMV; actual VA/EGL import,
 full integration, GPU lifetime and sustained X250 throughput remain UNVERIFIED.
+Asynchronous NV12 decoder stage also tested: eight dependent H.264 frames decode
+without output draining, retaining only the latest sample with correct capture PTS
+and frame duration. Test uses CPU decoder; VA output remains unverified. No
+per-input100ms output wait in this stage. GL sync support checked before import.
 See docs/linux-native-renderer-prototype.md in that branch. Do not advertise
 software fallback or shader fixtures as hardware acceleration/performance proof.
 
