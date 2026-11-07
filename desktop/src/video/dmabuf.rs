@@ -2,7 +2,7 @@
 //! ABI references: GStreamer 1.26.2 gstvaallocator.h / gstvadisplay.h and
 //! libva va.h / va_drmcommon.h (VADRMPRIMESurfaceDescriptor).
 use gstreamer as gst;
-use std::{ffi::c_void, os::fd::{AsRawFd, FromRawFd, OwnedFd}};
+use std::{ffi::c_void, os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd}};
 
 const NV12: u32 = u32::from_le_bytes(*b"NV12");
 const R8: u32 = u32::from_le_bytes(*b"R8  ");
@@ -38,20 +38,23 @@ pub(crate) enum ExportError { Unavailable, Unsupported, InvalidDescriptor, Sync(
 pub(crate) struct ExportedFrame {
     _sample: gst::Sample,
     descriptor: Descriptor,
+    visible: (u32, u32),
     _fds: Vec<OwnedFd>,
 }
-pub(crate) struct Plane {
-    pub fd: i32, pub width: u32, pub height: u32, pub fourcc: u32,
+pub(crate) struct Plane<'a> {
+    pub fd: BorrowedFd<'a>, pub width: u32, pub height: u32, pub fourcc: u32,
     pub offset: u32, pub pitch: u32, pub modifier: u64,
 }
 impl ExportedFrame {
-    pub(crate) fn dimensions(&self) -> (u32, u32) { (self.descriptor.width, self.descriptor.height) }
+    pub(crate) fn dimensions(&self) -> (u32, u32) { self.visible }
+    pub(crate) fn storage_dimensions(&self) -> (u32, u32) { (self.descriptor.width, self.descriptor.height) }
     /// Borrowed fd valid only while this frame lives; Y then UV.
-    pub(crate) fn plane(&self, index: usize) -> Option<Plane> {
+    pub(crate) fn plane(&self, index: usize) -> Option<Plane<'_>> {
         let layer = self.descriptor.layers.get(index).filter(|_| index < 2)?;
         let object = &self.descriptor.objects[layer.object_index[0] as usize];
-        let (width, height) = self.dimensions();
-        Some(Plane { fd: object.fd, offset: layer.offset[0], pitch: layer.pitch[0],
+        let (width, height) = self.storage_dimensions();
+        let fd = self._fds.iter().find(|fd| fd.as_raw_fd() == object.fd)?.as_fd();
+        Some(Plane { fd, offset: layer.offset[0], pitch: layer.pitch[0],
             modifier: object.modifier, fourcc: layer.fourcc,
             width: if index == 0 { width } else { width.div_ceil(2) },
             height: if index == 0 { height } else { height.div_ceil(2) } })
@@ -121,7 +124,8 @@ impl Exporter {
         let fds = unsafe { adopt_fds(&descriptor) };
         if status != 0 { return Err(ExportError::Export(status)); }
         validate(&descriptor, (info.width(), info.height()), modifiers)?;
-        Ok(ExportedFrame { _sample: sample, descriptor, _fds: fds })
+        let visible = (info.width(), info.height());
+        Ok(ExportedFrame { _sample: sample, descriptor, visible, _fds: fds })
     }
 }
 
@@ -139,7 +143,11 @@ fn dimensions(w: u32, h: u32) -> bool {
 }
 fn validate(d: &Descriptor, expected: (u32, u32), modifiers: &[u64]) -> Result<(), ExportError> {
     let invalid = || ExportError::InvalidDescriptor;
-    if d.fourcc != NV12 || (d.width, d.height) != expected || !dimensions(d.width, d.height)
+    if d.fourcc != NV12 || !dimensions(expected.0, expected.1)
+        || d.width < expected.0 || d.height < expected.1
+        || d.width - expected.0 > 255 || d.height - expected.1 > 255
+        || d.width > 8192 || d.height > 8192
+        || u64::from(d.width) * u64::from(d.height) > (4096 + 255) * (2160 + 255)
         || !(1..=4).contains(&d.num_objects) || d.num_layers != 2 || modifiers.is_empty() || modifiers.len() > 64 {
         return Err(invalid());
     }
@@ -226,6 +234,22 @@ mod tests {
         assert_eq!(std::mem::size_of::<Descriptor>(), 312);
     }
     #[test]
+    fn validates_padded_1080_storage_and_full_plane_bounds() {
+        let mut d = fixture(3);
+        d.width = 1920; d.height = 1088;
+        d.objects[0].size = 1920 * 1088 * 3 / 2;
+        d.layers[0].pitch[0] = 1920;
+        d.layers[1].pitch[0] = 1920;
+        d.layers[1].offset[0] = 1920 * 1088;
+        assert!(validate(&d, (1920, 1080), &[0]).is_ok());
+        assert!(validate(&d, (1664, 1080), &[0]).is_err());
+        assert!(validate(&d, (1920, 832), &[0]).is_err());
+        assert!(validate(&d, (1921, 1080), &[0]).is_err());
+        assert!(validate(&d, (1920, 1089), &[0]).is_err());
+        d.objects[0].size = 1920 * 1080 * 3 / 2;
+        assert!(validate(&d, (1920, 1080), &[0]).is_err());
+    }
+    #[test]
     fn frame_owns_fds_and_exposes_plane_geometry() {
         use std::{io::Read, os::fd::IntoRawFd};
         gst::init().unwrap();
@@ -233,12 +257,13 @@ mod tests {
         peer.set_nonblocking(true).unwrap();
         let descriptor = fixture(owner.into_raw_fd());
         let fds = unsafe { adopt_fds(&descriptor) };
-        let frame = ExportedFrame { _sample: gst::Sample::builder().build(), descriptor, _fds: fds };
-        assert_eq!(frame.dimensions(), (16, 8));
+        let frame = ExportedFrame { _sample: gst::Sample::builder().build(), descriptor, visible: (15, 7), _fds: fds };
+        assert_eq!(frame.dimensions(), (15, 7));
+        assert_eq!(frame.storage_dimensions(), (16, 8));
         let plane = frame.plane(1).unwrap();
         assert_eq!((plane.width, plane.height, plane.fourcc, plane.offset, plane.pitch, plane.modifier),
             (8, 4, GR88, 128, 16, 0));
-        assert!(plane.fd >= 0);
+        assert!(plane.fd.as_raw_fd() >= 0);
         assert!(frame.plane(2).is_none());
         assert_eq!(peer.read(&mut [0]).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
         drop(frame);
