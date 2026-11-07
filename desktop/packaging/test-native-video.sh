@@ -17,4 +17,5 @@ export SECPAR_GPU_REVIEW=1 LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe MESA_
 /artifacts/test --exact video::yuv_shader::egl_test::gpu_nv12_colors_orientation_and_padding_on_gl_and_gles --ignored --nocapture
 /artifacts/test video::dmabuf::tests --nocapture
 /artifacts/test video::dma_import::tests --nocapture
+/artifacts/test video::native_decode::tests --nocapture
 CONTAINER
