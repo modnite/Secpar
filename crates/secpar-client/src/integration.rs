@@ -51,7 +51,7 @@ async fn streams_with_packet_loss_and_sends_authenticated_input() {
         let p=Pairing{name:"Fixture".into(),hosts:vec!["127.0.0.1".into()],port,fingerprint:pin,otp:"once".into(),relay_url:None,pc_id:Some("pc1".into())};
         let c=Connected::pair(p,"Secpar test").await.unwrap();let(tx,rx)=mpsc::channel(8);let(ev_tx,mut ev_rx)=mpsc::channel(8);
         let client=tokio::spawn(session::run(c,Options{discover_public:false,..Default::default()},rx,ev_tx));
-        let mut heard_audio=false;
+        let (mut heard_audio,mut saw_video)=(false,false);
         let (mut audio_notice,mut clipboard,mut negotiated)=(false,false,false);
         loop {
             let event=ev_rx.recv().await.unwrap();
@@ -59,7 +59,10 @@ async fn streams_with_packet_loss_and_sends_authenticated_input() {
             if let Event::AudioUnavailable(ref msg)=event {assert_eq!(msg,"Synthetic audio source unavailable");audio_notice=true;}
             if let Event::Clipboard(ref text)=event {assert_eq!(text,"Host clipboard fixture");clipboard=true;}
             if let Event::StreamInfo{width,height,fps}=event {assert_eq!((width,height,fps),(320,240,60));negotiated=true;}
-            if let Event::Video(frame)=event {assert_eq!(frame.id,7);assert_eq!(frame.data,vec![93;7000]);break;}
+            if let Event::Video(frame)=event {assert_eq!(frame.id,7);assert_eq!(frame.data,vec![93;7000]);saw_video=true;}
+            // Control uses TLS/WebSocket; media uses UDP. Neither transport
+            // orders delivery against the other, even on the loopback device.
+            if saw_video && heard_audio && audio_notice && clipboard && negotiated {break;}
         }
         assert!(heard_audio);
         assert!(audio_notice && clipboard && negotiated,"Optional host audio failure must not end video or clipboard delivery");

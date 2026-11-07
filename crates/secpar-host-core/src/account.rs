@@ -262,6 +262,8 @@ mod tests {
         Registration { computer: "00000000-0000-4000-8000-000000000001".into(), owner: "fixture".into(), certificate_fp: "ab".repeat(32), credential: format!("h1_{}", "a".repeat(64)) }
     }
     fn account(server: &MockServer, storage: Arc<Memory>) -> Account {
+        // Each fixture must initialize TLS without depending on another test.
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
         Account { inner: Mutex::new(Inner { registration: None, state: State::default() }), storage, fingerprint: registration().certificate_fp, client: Client::new(), origin: server.uri() }
     }
     #[test]
