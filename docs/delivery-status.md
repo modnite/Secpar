@@ -1,6 +1,53 @@
 # Secpar delivery record
 
-## CURRENT — 3.11.1 PUBLISHED, 2026-11-07
+## CURRENT — 3.12.0 DESKTOP PUBLISHED, 2026-11-07
+
+https://github.com/modnite/Secpar/releases/tag/v3.12.0, source/tag66a75c4.
+Windows/Linux3.12.0; Android stays3.11.1 (unchanged engines). All four portable
+CI42369602992 jobs PASS; website deployment42370081936 PASS. Live releases.json
+advertises these per-platform versions. Windows remains installed3.11.0; no host
+restart needed for this Linux client update. Preserve active remote connections.
+
+Reproduced paused-UI transport blockage with pinned TLS/WebSocket/authenticated
+UDP: original bounded event queue stalled keepalives. New bounded/coalesced state,
+discardable telemetry/media and keyframe recovery keep network processing alive.
+A6.3-second paused-UI test exceeds the host watchdog, retains probes/audio callback,
+recovers on IDR and discovers a changed endpoint. Re-probes after2s packet silence.
+This reproduces a real bug; protected host diagnostics do not prove that this was
+the cause of the user's exact outage. Read was approved, filtered/address-redacted
+locally; no settings, permissions or running host services changed.
+
+Desktop audio now reaches the UNCHANGED Audio engine on a dedicated thread,
+independent of UI repaint. Bounded16 compressed packets, stale200ms discard,
+separate per-session routes and output retry.12 client tests pass on both systems;
+32 Windows desktop/36 Linux desktop tests pass (platform gates separately).
+Actual isolated Pulse output gate passes240 generated Opus packets across600ms
+silence with zero UI polling and deliberately broken ALSA. Final AppImage passes
+accepted audio/silence/fallback gates and native Wayland rendering. Windows worker
+opens shared default output using silence only. No user audio recorded.
+
+Assets in D:/Secpar-CI/publish-3.12.0:
+- Windows6,659,571 bytes SHA a7e2f32952469a400237fdc7c92a56b4cddb38c4b472d0c1edfc0d92a83712d2
+- Linux22,657,528 bytes SHA d3f1f8bd16a0080ce7fe415a21ba1c877b2d1acbc35ff369010000109bc6e426
+Optimized releases, no debug/test fixtures. Physical Linux acceptance pending:
+minimize/cover20s, audio and connection on return, visible received FPS/decoder.
+No local Windows release builds remain running during the user's retest.
+
+## IN PROGRESS — native Linux GPU presentation (isolated, NOT ACTIVE)
+
+User stats before3.12:1080p60 Direct, RTT3ms,0.8Mbps,21.9 received FPS,
+software(VA-API too slow), later no authenticated packets. Hardware performance
+remains OPEN. Legacy VA path reads back/converts RGB then uploads a UI texture.
+Branch feat/linux-native-renderer at41e3d98, separate work/secpar-native-renderer.
+Modules are TEST-ONLY: production has not switched renderers. Implemented retained
+VA NV12 DMA-BUF export, EGL plane importer with fence retirement, GPU YUV shader.
+Six FD/layout tests and four importer tests pass;16 software GL/GLES render cases
+verify colors, crop, padding and orientation. No GPU on OMV; actual VA/EGL import,
+full integration, GPU lifetime and sustained X250 throughput remain UNVERIFIED.
+See docs/linux-native-renderer-prototype.md in that branch. Do not advertise
+software fallback or shader fixtures as hardware acceleration/performance proof.
+
+## PREVIOUS — 3.11.1 PUBLISHED, 2026-11-07
 
 https://github.com/modnite/Secpar/releases/tag/v3.11.1, source/tag669baef.
 Original Lucide0.468.0 icons now replace hand-drawn menu symbols on desktop and
@@ -22,50 +69,6 @@ Assets:
 Windows installer UI payload matches host/src-tauri/unified/secpar-desktop.exe;
 CI shares D:/Secpar-CI/target and overwrites that cache, so do not compare later
 cached binaries against staged payloads. Use isolated release targets next time.
-
-## IN PROGRESS — client backpressure/audio independence, after3.11.1
-
-User reports1920x1080/60 Direct, RTT3ms,0.8Mbps,21.9 received fps, actual label
-software(VA-API too slow). It is fallback software, not hardware currently working.
-While typing, stream dropped: no authenticated stream packets reached client.
-Host protected log read with user approval, filtered/address-redacted locally in
-D:/Secpar-CI/secpar-host-stream-diagnostics.log. No service restart/settings changes.
-Historical logs show RTT spikes/bitrate cuts but do not prove current outage cause.
-
-Reproduced independent bug with real pinned TLS/WebSocket/encrypted UDP fixture:
-pausing UI consumption fills8-event channel and stops authenticated keepalives.
-Test failed on release code, passes on candidate. New bounded/coalesced critical
-UI state and discardable telemetry/media avoid transport backpressure; missing
-compressed video resumes only at a new IDR. Client retries candidate routes after
-2s silence and distinguishes established-stream packet loss from initial failure.
-
-Candidate audio delivery uses nonblocking Options.audio_sink callback + dedicated
-desktop worker owning the UNCHANGED Audio engine. Audio bypasses UI event queue;
-retry swaps output route, new sessions get independent routes, logout clears it.
-Stale fallback UI/audio-worker packets expire at200ms; bounded16-packet input.
-12 client tests pass incl UI-paused probes, continuous callback audio and IDR
-recovery. Windows32 desktop pass/1 ignored; native Linux36 pass/5 ignored. Real Pulse worker gate PASS with bundled AppImage libraries/plugins and deliberately
-broken ALSA:240 generated Opus packets reach monitor before/after600ms silence,
-with zero UI polling. Windows silent shared-output worker startup PASS (no content
-played/recorded). Paused-UI integration now exceeds5s host timeout, keeps audio
-callback/probes alive, resumes on IDR and recovers a newly advertised endpoint.
-12 Windows client tests pass. Desktop candidate3.12.0, Android stays3.11.1. NOT
-released/installed. Optimized Windows/Linux build + final native gates next.
-Native VA/EGL rendering not implemented; remains separate priority (linux-rendering.md).
-
-
-## IN PROGRESS — glyphs and Linux native rendering, 2026-11-07
-
-User confirms Linux hardware performance still below Moonlight. Do NOT call3.11
-hardware fallback a performance fix. Current VA path downloads frames, CPU-converts
-RGB and uploads an egui texture. Investigating native VA-surface/EGL presentation.
-Icon rule persisted in AGENTS/user-requirements: always established library assets,
-never improvised text symbols or painter line art. Menus switched to original
-Lucide0.468.0 SVG artwork, commitf12b0de177fbc2a6795e99be065887e72b237123,
-ISC notice retained. Android and desktop include DPI-aware raster derivatives.
-Code compiles on Windows; Android build and actual visual checks in progress.
-Latest Mac CI42365335046 ALL FOUR jobs PASS (including both Mac package builds).
-Windows3.11 installed/user has an active stream; no restarts for these changes.
 
 ## CURRENT — 3.11.0 PUBLISHED, 2026-11-07
 
