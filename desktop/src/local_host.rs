@@ -49,7 +49,26 @@ pub async fn call(command: &str, args: Value) -> Result<Value, String> {
 pub async fn call(command: &str, args: Value) -> Result<Value, String> {
     secpar_host_linux::backend::call(command, args).await
 }
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+pub async fn call(command: &str, args: Value) -> Result<Value, String> {
+    use secpar_host_macos::{backend::Backend, config_directory, native::MacPlatform};
+    use std::sync::Arc;
+    static HOST: tokio::sync::OnceCell<Arc<Backend>> = tokio::sync::OnceCell::const_new();
+    // Capture, audio and input have not run on a physical Mac yet. Sign-in enrolls the host on
+    // every platform, so hosting stays off unless a tester sets SECPAR_MACOS_HOST=1.
+    if std::env::var_os("SECPAR_MACOS_HOST").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return Err("Hosting on this platform is still in development".into());
+    }
+    let backend = HOST
+        .get_or_try_init(|| async {
+            let directory = config_directory(std::env::var_os("HOME"))?;
+            let bind = "0.0.0.0:48999".parse().map_err(|_| "Invalid host address".to_string())?;
+            Backend::start(&directory, Arc::new(MacPlatform), bind).await
+        })
+        .await?;
+    backend.command(command, args).await
+}
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub async fn call(_command: &str, _args: Value) -> Result<Value, String> {
     Err("Hosting on this platform is still in development".into())
 }

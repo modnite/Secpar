@@ -62,6 +62,9 @@ gstreamer = "0.24.5"
 gstreamer-app = "0.24.5"
 gstreamer-video = "0.24.5"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+secpar-host-macos = { path = "../crates/secpar-host-macos" }
+
 [[bin]]
 name = "secpar-tray-review"
 path = "src/tray_review_main.rs"
