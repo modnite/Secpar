@@ -4,6 +4,8 @@
 mod dmabuf;
 #[cfg(all(test,target_os="linux"))]
 mod yuv_shader;
+#[cfg(all(test,target_os="linux"))]
+mod dma_import;
 use eframe::egui::{ColorImage, Context};
 use openh264::{decoder::Decoder, formats::YUVSource};
 use secpar_client::receiver::VideoFrame;
