@@ -115,6 +115,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Use the desktop version for build and package metadata
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("desktop/Cargo.toml").read_text())["package"]["version"]
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"SECPAR_RELEASE_TAG=v{version}\n")
+          PY
       - run: |
           for manifest in crates/secpar-host-core/Cargo.toml crates/secpar-stream/Cargo.toml crates/secpar-network/Cargo.toml crates/secpar-client/Cargo.toml desktop/Cargo.toml; do
             cargo test --locked --manifest-path "$manifest"

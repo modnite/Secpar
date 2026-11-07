@@ -25,14 +25,19 @@ Wayland clipboard exchange, and real delayed native decode→software recovery.
 Android release cold-launch passes on owned5556. Latest13 Android instrumentation
 checks PASS. User S23 and X250 acceptance of NEW changes remains pending.
 
-CI42351875638: Windows and Linux PASS. Mac x64/arm64 still running, no Mac release.
+CI42351875638: Windows/Linux PASS; Mac tests/builds PASS but packaging FAIL (below).
 Earlier run exposed test-order assumptions: TCP clipboard/control may arrive after
 UDP video; account fixtures must initialize their own TLS provider. Corrected in
 c8c46ce; no production changes/rebuild needed. Windows core26/client10 also pass.
 
-Windows installer started only after host reported ZERO connected Secpar devices.
-Administrator prompt requested; awaiting user approval. Installed3.11 verification
-NOT complete yet; preserve other remote software. Never claim installed from launch.
+Windows3.11.0 installed after user approved administrator prompt. Installed UI
+and host hashes exactly match verified installer payloads. Secpar service RUNNING,
+IPC responds, all4 paired devices preserved,1 device now connected. Desktop app
+is running. Do not restart/replace it for further verification.
+Mac CI tests and optimized x64/arm64 compilation passed; packaging failed because
+portable workflow omitted SECPAR_RELEASE_TAG after build.rs became version-driven.
+Workflow now reads Cargo version into GITHUB_ENV for BOTH compile and packaging.
+No Mac package published; fixed workflow still needs a CI run.
 Next acceptance: Automatic decoder on X250 (Software confirmed smooth workaround),
 Windows↔Linux text clipboard/Ctrl+V, Windows→KDE host, local corner menu interaction.
 Do not repeat accepted3.10.1 audio/alignment checks. Android engines untouched.
