@@ -24,11 +24,17 @@ Windows 10, fake `Platform`, real loopback UDP and real PRS cipher:
 They cover permission denial reserving no slot, three streams plus a refused fourth and slot reuse, stop during startup, input gating and cleanup, identity and device-id persistence, the pairing link pinning the persisted fingerprint, and the transport: probe pairing, encrypted video arrives, input is applied, drop releases the held input, the capture source and the stream slot.
 Also tested: key map (no unintended collisions), AVCC conversion (truncated/oversized lengths rejected), display fit sizing, audio interleaving.
 
-## Not verified (no Mac available)
+## Mac runner results (GitHub Actions, macos-15 arm64, run 42316592862, branch claude/macos-host)
 
-- `native.rs`, `native_media.rs` and `native_input.rs` have NEVER been compiled. They were written against the real `screencapturekit` 11.1.2 and `apple-cf` sources, and hand-declared VideoToolbox/CoreMedia/CoreGraphics C signatures. Expect a first round of compile fixes on the Mac runner (most likely: `SCStream`/handler `Send` bounds, exact method names).
-- No capture, encode, audio or input has run. No hardware acceleration, audible audio, end-to-end stream or latency claim is made.
-- Keychain, TCC prompts and display listing remain unverified.
+- Compiles natively: the whole crate including `native.rs`, `native_media.rs`, `native_input.rs` built without errors, and the desktop release build and dev package succeeded. This is compilation only.
+- `cargo test --locked` for secpar-host-macos: 17 passed on the Mac, including the loopback transport test. The macOS-only modules have no unit tests of their own.
+- The runner needs the newest installed Xcode: `screencapturekit` pulls `apple-metal`, whose Swift bridge fails on the default SDK (missing Metal 4 types). Anyone building locally needs an Xcode with that SDK. Consider this cost before keeping the dependency.
+- `desktop/package.py` could not find a release tag on this branch, so the workflow now sets `SECPAR_RELEASE_TAG=v3.9.0-secpar-desktop-dev.1` (development artifact only).
+
+## Not verified (no physical Mac)
+
+- No capture, encode, audio or input has run, on the runner or anywhere. Headless runners have no Screen Recording consent or display session. No hardware acceleration, audible audio, end-to-end stream or latency claim is made.
+- Keychain, TCC prompts, display listing, and account linking against the real service remain unverified.
 
 ## Known gaps
 
