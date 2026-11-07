@@ -130,3 +130,14 @@ upstream engine migration while retaining Secpar accounts, ownership, UI, automa
 updates and one-app-per-OS packaging (Android client-only). Park the bespoke
 VA/EGL renderer work; do not spend more building a parallel custom media stack.
 Preserve the installed working connection while developing/testing replacements.
+
+2026-11-07: choose the better upstream streaming implementation based on code,
+platform support and validation; no requirement to prefer Artemis/Apollo by name.
+Selected migration baseline Moonlight Qt6.2.0, Moonlight Android12.2 and Sunshine
+2026.914.233613; keep Artemis/Apollo as feature references. Selection is not a
+claim of measured parity on X250/S23. Keep client devices awake throughout active
+remote sessions on ALL OSes and release sleep inhibition on disconnect. Android
+PiP belongs only to the active stream; launcher, computer list and settings must
+not enter PiP, even via desktop-window controls. Current MainActivity declares
+PiP support; use a separate stream activity in migration rather than merely
+switching auto-enter off on the launcher. This restriction is not yet shipped.
