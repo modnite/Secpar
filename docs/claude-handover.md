@@ -151,7 +151,7 @@ Host::approve requires secpar_identity_binding=1, exact client ID + certificate
 SHA256, and forwards those preconditions to the approval POST. Original Sunshine
 lacks this binding metadata and is intentionally rejected. Do not remove this gate
 or approve by device name/address/global stdin PIN. That API patch is now prepared
-and its full source build is running; see the exact checkpoint below.
+and its full source build passes; see the exact checkpoint below.
 
 ## Latest host patch checkpoint — read before continuing
 
