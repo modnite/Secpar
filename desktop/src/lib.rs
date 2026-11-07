@@ -2,6 +2,7 @@ mod account;
 mod client_settings;
 mod video;
 mod audio;
+mod audio_worker;
 mod design;
 mod hosting;
 mod input;
@@ -136,7 +137,8 @@ struct App {
     session_account: Option<String>,
     owned_connecting: Option<(String,String)>,
     decoder: Option<video::Worker>,
-    audio: Option<audio::Audio>,
+    audio: Option<audio_worker::Worker>,
+    audio_route:audio_worker::Route,
     audio_error: Option<String>,
     clipboard: Option<secpar_clipboard::Bridge>,
     notice: Option<String>,
@@ -220,6 +222,7 @@ impl App {
             owned_connecting: None,
             decoder: None,
             audio: None,
+            audio_route:audio_worker::Route::default(),
             audio_error: None,
             clipboard: None,
             notice: None,
@@ -342,12 +345,15 @@ impl App {
         self.session_account=self.computer_account.clone();
         let lan_first = self.computer_account.is_some();
         let computer = self.computer.clone();
+        self.audio_route.output(None);
+        self.audio_route=audio_worker::Route::default();
         self.open_audio();
         self.clipboard=self.client.clipboard.then(secpar_clipboard::Bridge::start);
         self.notice=None;self.connection_error=None;
         self.stream_stats=None;
         let options = Options {
             audio: self.client.audio,
+            audio_sink:Some(self.audio_route.sink()),
             ..self.options.clone()
         };
         let ctx = ctx.clone();
@@ -411,9 +417,11 @@ impl App {
     }
     fn open_audio(&mut self) {
         self.audio_error=None;
-        self.audio=if self.client.audio {match audio::Audio::new() {
+        self.audio_route.output(None);
+        self.audio=if self.client.audio {match audio_worker::Worker::start() {
             Ok(output)=>Some(output), Err(error)=>{self.audio_error=Some(error);None}
         }} else {None};
+        self.audio_route.output(self.audio.as_ref());
     }
     fn capture(&mut self, ctx: &egui::Context, on: bool) {
         self.auto_capture_pending = false;
@@ -448,7 +456,7 @@ impl App {
             }
         }
         if self.audio.as_ref().is_some_and(|audio|audio.failed()) {
-            self.audio=None;self.audio_error=Some("Audio output stopped. Check the selected system output and retry.".into());
+            self.audio_route.output(None);self.audio=None;self.audio_error=Some("Audio output stopped. Check the selected system output and retry.".into());
         }
         let mut messages = vec![];
         if let Some(rx) = self.events.as_mut() {
@@ -476,9 +484,11 @@ impl App {
                     self.pair_link.clear();
                 }
                 Event::Status(s) => { self.status=s; }
-                Event::Audio(packet) => {
-                    if let Some(audio) = self.audio.as_mut() {
-                        audio.packet(&packet);
+                Event::Audio{packet,received_at} => {
+                    // A covered window may resume with a few old events queued.
+                    // Skip stale compressed audio instead of replaying it late.
+                    if received_at.elapsed()<=Duration::from_millis(200) {
+                        if let Some(audio)=self.audio.as_mut(){audio.packet(&packet);}
                     }
                 }
                 Event::AudioUnavailable(error)=>self.notice=Some(format!("Host audio: {error}")),
@@ -536,6 +546,7 @@ impl App {
                     self.events = None;
                     self.status = s;
                     self.decoder = None;
+                    self.audio_route.output(None);
                     self.audio = None;
                     self.texture = None;
                     self.video_rect = None;self.pointer_in_video=false;self.remote_keyboard=false;
@@ -713,7 +724,7 @@ impl eframe::App for App {
         self.poll(ctx);
         self.account.poll();
         if std::mem::take(&mut self.account.signed_out) && self.computer_account.is_some() {
-            self.clipboard=None;self.capture(ctx,false); self.send(Command::Stop);
+            self.clipboard=None;self.audio_route.output(None);self.audio=None;self.capture(ctx,false); self.send(Command::Stop);
             self.computer=None; self.computer_account=None; self.owned_connecting=None;
         }
         if self.command.is_none() {

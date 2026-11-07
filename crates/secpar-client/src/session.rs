@@ -1,3 +1,5 @@
+mod events;
+use events::UiEvents;
 use crate::{
     control::{self, Computer, Connected},
     receiver::{Receiver, VideoFrame},
@@ -28,7 +30,7 @@ pub enum Event {
     Paired(Computer),
     Status(String),
     Video(VideoFrame),
-    Audio(Vec<u8>),
+    Audio {packet:Vec<u8>,received_at:Instant},
     CursorShape { png: Vec<u8>, hotspot: [i32; 2] },
     Displays(Value),
     Cursor { x: i16, y: i16, visible: bool },
@@ -47,6 +49,8 @@ pub struct Options {
     pub max_kbps: u32,
     pub discover_public: bool,
     pub audio: bool,
+    /// Optional nonblocking audio delivery independent of UI event consumption.
+    pub audio_sink: Option<Arc<dyn Fn(Vec<u8>)+Send+Sync>>,
     pub clipboard: bool,
 }
 impl Default for Options {
@@ -58,6 +62,7 @@ impl Default for Options {
             max_kbps: 30_000,
             discover_public: true,
             audio: true,
+            audio_sink: None,
             clipboard: true,
         }
     }
@@ -237,23 +242,17 @@ fn emit(receiver: &mut Receiver, peer: &Peer, typ: Type, body: &[u8]) -> Result<
     peer.send(&packet);
     Ok(())
 }
-async fn notify(events: &mpsc::Sender<Event>, event: Event) -> Result<(), String> {
-    events
-        .send(event)
-        .await
-        .map_err(|_| "Client window closed".into())
-}
-
 /// Runs a paired control connection and its PRS stream until Stop, disconnect or UI closure.
-/// A bounded event queue applies backpressure; the datagram queue is separately bounded.
+/// UI state is bounded/coalesced; a stalled UI cannot stop network keepalives.
 pub async fn run(
     mut conn: Connected,
     options: Options,
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
 ) -> Result<(), String> {
-    notify(&events, Event::Paired(conn.computer.clone())).await?;
-    notify(&events, Event::Status("Finding a stream route".into())).await?;
+    let mut events=UiEvents::new(events);
+    events.emit(Event::Paired(conn.computer.clone()))?;
+    events.emit(Event::Status("Finding a stream route".into()))?;
     let direct = conn.direct_host.clone();
     let discover_public = options.discover_public;
     let (socket, cands) = tokio::task::spawn_blocking(move || {
@@ -298,6 +297,7 @@ pub async fn run(
     let (mut high_seq, mut report_base, mut received, mut last_frame, mut rtt) =
         (None::<u32>, 0u32, 0u32, 0u32, 0u16);
     let mut last_packet = Instant::now();
+    let mut received_authenticated=false;
     let mut turn_started = false;
     let (turn_tx, mut turn_rx) = mpsc::channel::<Option<SocketAddrV4>>(1);
     let mut inputs = std::collections::VecDeque::new();
@@ -333,11 +333,11 @@ pub async fn run(
                 match v["t"].as_str().unwrap_or(""){
                     "stream.ready"=>{
                         if v["codec"]!="h264"{return Err("Host did not negotiate H.264".into());}
-                        notify(&events,Event::StreamInfo {
+                        events.emit(Event::StreamInfo {
                             width:v["w"].as_u64().unwrap_or(options.width as u64).clamp(1,8192) as u32,
                             height:v["h"].as_u64().unwrap_or(options.height as u64).clamp(1,8192) as u32,
                             fps:v["fps"].as_u64().unwrap_or(options.fps as u64).clamp(1,240) as u32,
-                        }).await?;
+                        })?;
                         let id=v["session"].as_u64().and_then(|v|u32::try_from(v).ok()).ok_or("Invalid stream session")?;
                         if session_id!=Some(id){
                             let key: [u8;32]=base64::engine::general_purpose::STANDARD.decode(v["key"].as_str().ok_or("Missing stream key")?).map_err(|_|"Invalid stream key")?.try_into().map_err(|_|"Invalid stream key length")?;
@@ -348,19 +348,19 @@ pub async fn run(
                         peer.permit();
                     }
                     "stream.cand"=>if let Some(c)=v["c"].as_str().and_then(|s|s.parse::<SocketAddr>().ok()).filter(SocketAddr::is_ipv4){if peer.targets.len()<32 && !peer.targets.contains(&c){peer.targets.push(c);peer.permit();}},
-                    "stream.displays"=>notify(&events,Event::Displays(v)).await?,
+                    "stream.displays"=>events.emit(Event::Displays(v))?,
                     "cursor.shape"=>{
                         if let(Some(encoded),Some(hx),Some(hy))=(v["png"].as_str().filter(|s|s.len()<=350_000),v["hx"].as_i64().and_then(|n|i32::try_from(n).ok()),v["hy"].as_i64().and_then(|n|i32::try_from(n).ok())) {
-                            if let Ok(png)=base64::engine::general_purpose::STANDARD.decode(encoded){notify(&events,Event::CursorShape{png,hotspot:[hx,hy]}).await?;}
+                            if let Ok(png)=base64::engine::general_purpose::STANDARD.decode(encoded){events.emit(Event::CursorShape{png,hotspot:[hx,hy]})?;}
                         }
                     },
                     "clip"=>if clipboard_enabled && v["mime"]=="text/plain" {
-                        if let Some(text)=v["data"].as_str().filter(|s|s.len()<=1_000_000){notify(&events,Event::Clipboard(text.into())).await?;}
+                        if let Some(text)=v["data"].as_str().filter(|s|s.len()<=1_000_000){events.emit(Event::Clipboard(text.into()))?;}
                     },
-                    "error" if v["code"]=="audio_unavailable"=>notify(&events,Event::AudioUnavailable(v["msg"].as_str().unwrap_or("Host audio is unavailable").into())).await?,
+                    "error" if v["code"]=="audio_unavailable"=>events.emit(Event::AudioUnavailable(v["msg"].as_str().unwrap_or("Host audio is unavailable").into()))?,
                     "error" if matches!(v["of"].as_str(),Some("clip"|"clip.sub"))=>{
                         clipboard_enabled=false;
-                        notify(&events,Event::ClipboardUnavailable(v["msg"].as_str().unwrap_or("Clipboard sharing is unavailable on the host").into())).await?;
+                        events.emit(Event::ClipboardUnavailable(v["msg"].as_str().unwrap_or("Clipboard sharing is unavailable on the host").into()))?;
                     },
                     "stream.error"|"error"=>return Err(v["msg"].as_str().unwrap_or("Host refused the stream").to_string()),
                     _=>{},
@@ -370,32 +370,43 @@ pub async fn run(
                 let Some(r)=receiver.as_mut()else{continue;};let Some((h,plain))=r.open(&packet.data)else{continue;};
                 stats_bytes=stats_bytes.saturating_add(packet.data.len() as u64);
                 let route=Some((packet.from,packet.relayed));
-                if peer.confirmed!=route {peer.confirmed=route;notify(&events,Event::Status(if packet.relayed{"Relay"}else{"Direct"}.into())).await?;}
-                last_packet=Instant::now();
+                if peer.confirmed!=route {peer.confirmed=route;events.emit(Event::Status(if packet.relayed{"Relay"}else{"Direct"}.into()))?;}
+                last_packet=Instant::now();received_authenticated=true;
                 if high_seq.is_none() && matches!(h.typ,Type::Video|Type::Fec){report_base=h.seq;high_seq=Some(h.seq);}
                 if let Some(high)=high_seq.as_mut(){*high=(*high).max(h.seq);received=received.saturating_add(1);}
                 match h.typ{
-                    Type::Video|Type::Fec=>if let Some(frame)=r.assembler.push(h,plain,Instant::now()){last_frame=frame.id;stats_frames+=1;notify(&events,Event::Video(frame)).await?;},
-                    Type::Audio if plain.len()>8 => notify(&events,Event::Audio(plain[8..].to_vec())).await?,
+                    Type::Video|Type::Fec=>if let Some(frame)=r.assembler.push(h,plain,Instant::now()){last_frame=frame.id;stats_frames+=1;events.emit(Event::Video(frame))?;},
+                    Type::Audio if plain.len()>8 => {
+                        let packet=plain[8..].to_vec();
+                        if let Some(sink)=&options.audio_sink{sink(packet);}
+                        else{events.emit(Event::Audio{packet,received_at:Instant::now()})?;}
+                    },
                     Type::Probe if plain.len()>=16=>{peer_t=u64::from_be_bytes(plain[..8].try_into().unwrap());let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{rtt=((now-echo)/1000).min(u16::MAX as u64) as u16;rtt_known=true;}},
-                    Type::Cursor if plain.len()>=5=>notify(&events,Event::Cursor{x:i16::from_be_bytes(plain[..2].try_into().unwrap()),y:i16::from_be_bytes(plain[2..4].try_into().unwrap()),visible:plain[4]!=0}).await?,
+                    Type::Cursor if plain.len()>=5=>events.emit(Event::Cursor{x:i16::from_be_bytes(plain[..2].try_into().unwrap()),y:i16::from_be_bytes(plain[2..4].try_into().unwrap()),visible:plain[4]!=0})?,
                     Type::Bye=>return Err("Host ended the stream".into()),
                     _=>{},
                 }
             },
             Some(relayed)=turn_rx.recv()=>if let Some(c)=relayed{control::send(&mut conn.socket,json!({"t":"stream.cand","c":c.to_string()})).await?;},
             _=tick.tick()=>{
+                events.flush()?;
                 if stats_at.elapsed()>=Duration::from_secs(1) {
                     let seconds=stats_at.elapsed().as_secs_f32();
-                    notify(&events,Event::Stats{rtt_ms:rtt_known.then_some(rtt),mbps:stats_bytes as f32*8./seconds/1_000_000.,received_fps:stats_frames as f32/seconds}).await?;
+                    events.emit(Event::Stats{rtt_ms:rtt_known.then_some(rtt),mbps:stats_bytes as f32*8./seconds/1_000_000.,received_fps:stats_frames as f32/seconds})?;
                     stats_at=Instant::now();stats_bytes=0;stats_frames=0;
                 }
-                if start.elapsed()>Duration::from_secs(20) && last_packet.elapsed()>Duration::from_secs(15){return Err("No authenticated stream packets reached this client".into());}
+                if start.elapsed()>Duration::from_secs(20) && last_packet.elapsed()>Duration::from_secs(15){
+                    return Err(if received_authenticated{"Stream packets stopped arriving for 15 seconds"}else{"Host control connected, but no authenticated stream packets arrived"}.into());
+                }
+                if peer.confirmed.is_some() && last_packet.elapsed()>Duration::from_secs(2) {
+                    peer.confirmed=None;probe_at=Instant::now()-Duration::from_secs(1);
+                    events.emit(Event::Status("Reconnecting stream route".into()))?;
+                }
                 if let Some(r)=receiver.as_mut(){
                     r.assembler.tick(Instant::now());
                     if probe_at.elapsed()>Duration::from_millis(if peer.confirmed.is_some(){1000}else{200}){probe_at=Instant::now();let mut body=(start.elapsed().as_micros() as u64).to_be_bytes().to_vec();body.extend(peer_t.to_be_bytes());emit(r,&peer,Type::Probe,&body)?;}
                     if report_at.elapsed()>Duration::from_millis(100){report_at=Instant::now();let expected=high_seq.map(|h|h.saturating_sub(report_base)).unwrap_or(0);let loss=if expected==0{0}else{expected.saturating_sub(received).saturating_mul(1000)/expected};let mut body=[0;16];body[..4].copy_from_slice(&last_frame.to_be_bytes());body[4..6].copy_from_slice(&(loss.min(1000) as u16).to_be_bytes());body[10..12].copy_from_slice(&rtt.to_be_bytes());emit(r,&peer,Type::Report,&body)?;report_base=high_seq.unwrap_or(0);received=0;}
-                    if r.assembler.needs_keyframe() && idr_at.elapsed()>Duration::from_millis(250){idr_at=Instant::now();emit(r,&peer,Type::Idr,&[])?;}
+                    if (r.assembler.needs_keyframe() || events.needs_keyframe()) && idr_at.elapsed()>Duration::from_millis(250){idr_at=Instant::now();emit(r,&peer,Type::Idr,&[])?;}
                 }
                 if ping_at.elapsed()>Duration::from_secs(10){ping_at=Instant::now();control::send(&mut conn.socket,json!({"t":"ping"})).await?;}
                 if !turn_started && peer.confirmed.is_none() && start.elapsed()>Duration::from_secs(3) && conn.computer.relay.is_some(){

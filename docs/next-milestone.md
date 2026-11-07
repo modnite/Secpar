@@ -44,8 +44,13 @@ desktop worker owning the UNCHANGED Audio engine. Audio bypasses UI event queue;
 retry swaps output route, new sessions get independent routes, logout clears it.
 Stale fallback UI/audio-worker packets expire at200ms; bounded16-packet input.
 12 client tests pass incl UI-paused probes, continuous callback audio and IDR
-recovery. Windows32 desktop pass/1 ignored; native Linux36 pass/5 ignored. New real
-Pulse generated-audio worker/silence gate in progress. NOT released/installed.
+recovery. Windows32 desktop pass/1 ignored; native Linux36 pass/5 ignored. Real Pulse worker gate PASS with bundled AppImage libraries/plugins and deliberately
+broken ALSA:240 generated Opus packets reach monitor before/after600ms silence,
+with zero UI polling. Windows silent shared-output worker startup PASS (no content
+played/recorded). Paused-UI integration now exceeds5s host timeout, keeps audio
+callback/probes alive, resumes on IDR and recovers a newly advertised endpoint.
+12 Windows client tests pass. Desktop candidate3.12.0, Android stays3.11.1. NOT
+released/installed. Optimized Windows/Linux build + final native gates next.
 Native VA/EGL rendering not implemented; remains separate priority (linux-rendering.md).
 
 

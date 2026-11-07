@@ -55,7 +55,7 @@ async fn streams_with_packet_loss_and_sends_authenticated_input() {
         let (mut audio_notice,mut clipboard,mut negotiated)=(false,false,false);
         loop {
             let event=ev_rx.recv().await.unwrap();
-            if let Event::Audio(ref packet)=event {assert_eq!(packet,&vec![1,2,3]);heard_audio=true;}
+            if let Event::Audio{ref packet,..}=event {assert_eq!(packet,&vec![1,2,3]);heard_audio=true;}
             if let Event::AudioUnavailable(ref msg)=event {assert_eq!(msg,"Synthetic audio source unavailable");audio_notice=true;}
             if let Event::Clipboard(ref text)=event {assert_eq!(text,"Host clipboard fixture");clipboard=true;}
             if let Event::StreamInfo{width,height,fps}=event {assert_eq!((width,height,fps),(320,240,60));negotiated=true;}
@@ -70,4 +70,90 @@ async fn streams_with_packet_loss_and_sends_authenticated_input() {
         tx.send(Command::Input(json!({"t":"key","vk":65,"down":true}))).await.unwrap();rx_ack.await.unwrap();
         tx.send(Command::Stop).await.unwrap();client.await.unwrap().unwrap();server.await.unwrap();
     }).await.expect("Loopback stream must finish promptly");
+}
+
+/// A minimized/covered UI must not stop reports/probes or strand compressed video.
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn paused_ui_keeps_network_alive_and_recovers_video_at_a_keyframe() {
+    use std::sync::atomic::{AtomicUsize,Ordering};
+    tokio::time::timeout(Duration::from_secs(12),async {
+        let _=rustls::crypto::ring::default_provider().install_default();
+        let rcgen::CertifiedKey{cert,signing_key}=rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let pin:[u8;32]=ring::digest::digest(&ring::digest::SHA256,cert.der()).as_ref().try_into().unwrap();
+        let cfg=rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(vec![cert.der().clone()],PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into()).unwrap();
+        let accept=TlsAcceptor::from(Arc::new(cfg));
+        let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let port=listener.local_addr().unwrap().port();
+        let mut udp=UdpSocket::bind("127.0.0.1:0").await.unwrap();let address=udp.local_addr().unwrap();
+        let(rebind_ack,rebound)=oneshot::channel();
+        let probes=Arc::new(AtomicUsize::new(0));let observed=probes.clone();
+        let audio_packets=Arc::new(AtomicUsize::new(0));let heard=audio_packets.clone();
+        let server=tokio::spawn(async move {
+            let(tcp,_)=listener.accept().await.unwrap();
+            let mut ws=tokio_tungstenite::accept_async(accept.accept(tcp).await.unwrap()).await.unwrap();
+            let _=ws.next().await.unwrap().unwrap();
+            let token=base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([17;32]);
+            for value in [json!({"t":"paired","pc":{"id":"pc1","name":"Fixture"},"token":token}),json!({"t":"remote","url":"wss://relay.example","dev":"dev1","ticket":token})] {
+                ws.send(Message::text(value.to_string())).await.unwrap();
+            }
+            let _=ws.next().await.unwrap().unwrap();
+            ws.send(Message::text(json!({"t":"stream.ready","codec":"h264","w":320,"h":240,"fps":60,"port":address.port(),"session":42,"key":base64::engine::general_purpose::STANDARD.encode([251;32]),"cands":[address.to_string()]}).to_string())).await.unwrap();
+            let crypt=Crypt::new(&[251;32],42);let mut peer=None;let mut seq=1;let mut id=1;let mut key=true;
+            let mut route_ack=Some(rebind_ack);let mut migrating=false;let mut last_auth=std::time::Instant::now();
+            let mut bytes=[0u8;2048];let mut tick=tokio::time::interval(Duration::from_millis(20));
+            loop {tokio::select! {
+                packet=udp.recv_from(&mut bytes)=>{
+                    let(n,from)=packet.unwrap();let Some((header,payload))=crypt.open(Dir::PhoneToHost,&bytes[..n])else{continue};peer=Some(from);last_auth=std::time::Instant::now();
+                    if header.typ==Type::Probe && payload.len()>=8 {
+                        observed.fetch_add(1,Ordering::Relaxed);
+                        if migrating {if let Some(ack)=route_ack.take(){let _=ack.send(());}}
+                        let mut echo=100u64.to_be_bytes().to_vec();echo.extend_from_slice(&payload[..8]);
+                        let h=Header{typ:Type::Probe,flags:0,k:0,seq,frame_id:0,frag:0,count:0};seq+=1;
+                        udp.send_to(&crypt.seal(Dir::HostToPhone,&h,&echo),from).await.unwrap();
+                    }
+                    if header.typ==Type::Idr {key=true;}
+                },
+                _=tick.tick()=>if let Some(to)=peer {
+                    assert!(last_auth.elapsed()<Duration::from_secs(5),"Fixture host timed out waiting for client keepalives");
+                    let data=vec![93;128];let fh=FrameHeader{len:128,capture_us:id as u64*20000,keyframe:key,codec:Codec::H264};key=false;
+                    let audio=Header{typ:Type::Audio,flags:0,k:0,seq,frame_id:id,frag:0,count:0};seq+=1;
+                    udp.send_to(&crypt.seal(Dir::HostToPhone,&audio,&[0,0,0,0,0,0,0,100,1,2,3]),to).await.unwrap();
+                    for(mut header,data)in frame::packetize(id,&fh,&data,0){header.seq=seq;seq+=1;udp.send_to(&crypt.seal(Dir::HostToPhone,&header,&data),to).await.unwrap();}id+=1;
+                },
+                message=ws.next()=>{
+                    let Some(Ok(Message::Text(text)))=message else{break};
+                    let value:Value=serde_json::from_str(&text).unwrap();
+                    if value["t"]=="stream.stop" {break;}
+                    if value["t"]=="stream.display" && value["id"]=="rebind-fixture" {
+                        udp=UdpSocket::bind("127.0.0.1:0").await.unwrap();peer=None;key=true;migrating=true;
+                        ws.send(Message::text(json!({"t":"stream.cand","c":udp.local_addr().unwrap().to_string()}).to_string())).await.unwrap();
+                    }
+                }
+            }}
+        });
+        let pairing=Pairing{name:"Fixture".into(),hosts:vec!["127.0.0.1".into()],port,fingerprint:pin,otp:"once".into(),relay_url:None,pc_id:Some("pc1".into())};
+        let connection=Connected::pair(pairing,"Secpar test").await.unwrap();
+        let(tx,rx)=mpsc::channel(8);let(events,mut ui)=mpsc::channel(8);
+        let client=tokio::spawn(session::run(connection,Options{discover_public:false,clipboard:false,audio:true,audio_sink:Some(Arc::new(move|packet|{
+            assert_eq!(packet,vec![1,2,3]);heard.fetch_add(1,Ordering::Relaxed);
+        })),..Default::default()},rx,events));
+        loop {if matches!(ui.recv().await,Some(Event::Video(_))){break;}}
+        let before=probes.load(Ordering::Relaxed);let audio_before=audio_packets.load(Ordering::Relaxed);
+        // Leave a full UI queue alone for longer than the Windows host silence timeout.
+        tokio::time::sleep(Duration::from_millis(6300)).await;
+        let kept_alive=probes.load(Ordering::Relaxed)>=before+2;
+        if !kept_alive {
+            drop(ui);let _=client.await;let _=server.await;
+            panic!("A paused UI blocked authenticated network keepalives");
+        }
+        assert!(audio_packets.load(Ordering::Relaxed)>audio_before+100,"Audio delivery must continue while UI is paused");
+        loop {if let Some(Event::Video(frame))=ui.recv().await {
+            if frame.header.keyframe && frame.id>100 {break;}
+        }}
+        // A newly advertised path cannot send until the client punches it.
+        // Keep the UI paused again while route recovery probes candidates.
+        tx.send(Command::Display("rebind-fixture".into())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(4),rebound).await.expect("Client stayed pinned to a dead confirmed route").unwrap();
+        tx.send(Command::Stop).await.unwrap();drop(ui);
+        let _=client.await.unwrap();server.await.unwrap();
+    }).await.expect("Paused-UI stream must recover promptly");
 }
