@@ -3770,6 +3770,7 @@ dependencies = [
  "gstreamer-video",
  "image",
  "keyring",
+ "libloading",
  "open",
  "openh264",
  "opus",

@@ -62,6 +62,7 @@ secpar-host-linux = { path = "../crates/secpar-host-linux" }
 gstreamer = "0.24.5"
 gstreamer-app = "0.24.5"
 gstreamer-video = "0.24.5"
+libloading = "=0.8.9"
 
 [[bin]]
 name = "secpar-tray-review"

@@ -1,5 +1,7 @@
 //! Decode away from the interface thread. Bound compressed work and publish only
 //! the latest decoded image; dropping dependent frames requires a new keyframe.
+#[cfg(all(test, target_os = "linux"))]
+mod dmabuf;
 use eframe::egui::{ColorImage, Context};
 use openh264::{decoder::Decoder, formats::YUVSource};
 use secpar_client::receiver::VideoFrame;
