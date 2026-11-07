@@ -49,7 +49,7 @@ Also tested: key map (no unintended collisions), AVCC conversion (truncated/over
 1. `desktop/Cargo.toml`: macOS-only dependency on `secpar-host-macos` (`desktop/Cargo.lock` gains 5 packages, nothing changed or removed).
 2. `desktop/src/local_host.rs`: a macOS `call()` that starts `Backend` once (`~/Library/Application Support/secpar`, port 48999, `MacPlatform`) and forwards commands. The fallback cfg is now `not(any(windows, linux, macos))`.
 3. Off by default. Account sign-in calls `host_account_state` with enrollment on every platform, so without a guard a Mac would be enrolled and listening before capture is verified. The call returns the old "still in development" error unless `SECPAR_MACOS_HOST=1` is set. A tester on a physical Mac sets it to try hosting; remove the guard only after the physical tests pass.
-4. Checked on Windows: desktop `local_host` tests pass (3). The macOS branch of `call()` has not been compiled yet. The Mac workflow run for this commit will show that.
+4. Checked: desktop `local_host` tests pass on Windows (3). The macOS `call()` compiles and the desktop release build and dev package succeed on the Mac runner (run 42344567349, commit 6c27338). Compilation only; hosting has not been started on a Mac.
 
 ## Shared integration Codex must apply later (not in this branch)
 
