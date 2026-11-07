@@ -1,5 +1,45 @@
 # Secpar delivery record
 
+## CURRENT — 3.10.0 published; physical acceptance pending
+
+- Public release: https://github.com/modnite/Secpar/releases/tag/v3.10.0,
+  tag/source929ec17, branch release/3.10.0. Website refresh42319008952 passed.
+- Desktop: windowed free native pointer, capture only in fullscreen, Alt+F toggle;
+  local controls and popup layers excluded from remote input. Video engine unchanged.
+- Linux audio: AppImage uses host ALSA/Pulse/PipeWire libraries; all native PCM
+  formats supported, visible output failure and Retry audio without reconnect.
+  Isolated Arch test reproduces old package's missing ALSA plugin; candidate sends
+  actual decoded Opus through native output to a synthetic Pulse sink/monitor.
+  96000 input frames,0 dropped,85306 audible; monitor confirms nonzero audio.
+  Virtual fixture uses norewinds=1 to avoid null sink's artificial2-second blocks;
+  production output buffering was NOT retuned. Physical CachyOS audio not accepted yet.
+- Android: reproduced double navigation pop from retained outgoing stream callback,
+  leaving empty NavHost. Guard exact entry identity and provide Home fallback.
+  252 JVM tests and10 navigation/PiP/input/video instrumentation tests pass; optimized
+  APK cold-launch/background-return smoke passes. Exact S23/YouTube trigger and
+  long-duration recovery still require user acceptance. Streaming engines unchanged.
+- Windows29 desktop checks pass/1 keychain ignored; final extra real egui video-layer
+  versus foreground-popup hit-test passed separately. Linux32 desktop checks pass/
+  2 ignored, plus real native audio output and Wayland launch checks.
+- Optimized packages verified against public asset digests. APK code525, signing
+  unchanged, non-debuggable/R8, no review fixtures. Windows stripped/no debug sections.
+  Stage D:/Secpar-CI/publish-3.10.0. SHA256:
+  APK17b9375c12871360380e115e023a178fadd7b53f931748c342a388246b4d525b;
+  Linux3f6c2938bc8954b6f34921b8588a2024756770b8df55632e66cb30df35fbb82d;
+  Windows1631e72bc810d09f312c69ec280542b0a0f5269135fe3b2fad3d023798dd8e81.
+- Windows STILL INSTALLED3.9.0, account flow physically accepted. One active session
+  observed; do NOT install/restart3.10 while connected. Android/Linux3.10 work with
+  host3.9. User was asked for Linux audio/free-pointer/Alt+F and Android YouTube/PiP
+  return acceptance; last async tool output truncated, avoid immediately repeating.
+- Screenshot: outputs/ui-review/client-settings-640x400.png, actual native Linux
+  renderer in isolated synthetic environment, visually reviewed and shown to user.
+- Claude owns separate macOS checkout; shared fixes now committed, coordinate before
+  integration. Linux remote HOST relay/STUN/TURN remains unimplemented and next.
+- Controller support: Windows virtual Xbox/per-device isolation and Android touch
+  gamepad exist. Physical USB/Bluetooth forwarding on both clients, Linux/macOS
+  virtual pads and real4-player/rumble tests remain unfinished. Three stream slots
+  do not establish complete controller multiplayer.
+
 ## Verified: Windows installed and account flow accepted
 
 Windows3.9 installer exit0; installed host/UI versions and hashes match staged
