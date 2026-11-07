@@ -121,3 +121,12 @@ Use a consistent family/weight/size across menus. Secpar triangle is approved br
 art, not a generic UI glyph. User rejects current hand-drawn desktop menu symbols.
 Linux hardware playback remains below Moonlight after3.11.0. Software is the known
 smooth workaround; fallback is NOT proof that hardware rendering is fixed.
+
+Streaming architecture correction,2026-11-07: user reports720p also hitches with
+BOTH decoders; never mark it smooth60fps or imply hardware choice solves this.
+User explicitly requests using mature Artemis/Apollo/Moonlight/Sunshine code
+DIRECTLY instead of continuing the custom PRS streaming engine. Prioritize an
+upstream engine migration while retaining Secpar accounts, ownership, UI, automatic
+updates and one-app-per-OS packaging (Android client-only). Park the bespoke
+VA/EGL renderer work; do not spend more building a parallel custom media stack.
+Preserve the installed working connection while developing/testing replacements.

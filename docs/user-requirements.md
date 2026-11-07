@@ -160,3 +160,20 @@ smooth workaround; fallback is NOT proof that hardware rendering is fixed.
 actual decoder software(VA-API too slow). Stream later drops with no authenticated
 packets error while typing elsewhere. Preserve icon work and pursue both renderer
 performance and UI-independent stream/audio transport. Do not call fallback fixed.
+
+2026-11-07 acceptance/correction: Linux3.12.0 audio continues and connection stays
+up when covered/minimized20s. Glyphs approved.1080p video remains poor regardless
+of hardware/software decoder, while720p is usable. Do not assume decoder choice
+alone explains1080p slowdown.720p stream has coloured fringes around Windows text;
+inspect chroma/subpixel scaling and actual matrix/range before claiming a fix.
+Android menu version footer needs explicit compact text metrics; inherited body
+letter spacing/line height at10sp is inappropriate. Preserve accepted audio paths.
+
+Streaming architecture correction,2026-11-07: user reports720p also hitches with
+BOTH decoders; never mark it smooth60fps or imply hardware choice solves this.
+User explicitly requests using mature Artemis/Apollo/Moonlight/Sunshine code
+DIRECTLY instead of continuing the custom PRS streaming engine. Prioritize an
+upstream engine migration while retaining Secpar accounts, ownership, UI, automatic
+updates and one-app-per-OS packaging (Android client-only). Park the bespoke
+VA/EGL renderer work; do not spend more building a parallel custom media stack.
+Preserve the installed working connection while developing/testing replacements.

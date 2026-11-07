@@ -29,11 +29,27 @@ opens shared default output using silence only. No user audio recorded.
 Assets in D:/Secpar-CI/publish-3.12.0:
 - Windows6,659,571 bytes SHA a7e2f32952469a400237fdc7c92a56b4cddb38c4b472d0c1edfc0d92a83712d2
 - Linux22,657,528 bytes SHA d3f1f8bd16a0080ce7fe415a21ba1c877b2d1acbc35ff369010000109bc6e426
-Optimized releases, no debug/test fixtures. Physical Linux acceptance pending:
-minimize/cover20s, audio and connection on return, visible received FPS/decoder.
+Optimized releases, no debug/test fixtures. User CONFIRMS Linux audio continues
+and connection survives covering/minimizing20s. Glyphs approved. New correction:
+1080p video poor with EITHER decoder,720p usable but Windows text has colour fringe.
+Keep1080p performance open across decoder paths. Android footer metrics in progress.
 No local Windows release builds remain running during the user's retest.
 
-## IN PROGRESS — native Linux GPU presentation (isolated, NOT ACTIVE)
+## PRIORITY — upstream streaming engine migration,2026-11-07
+
+Latest user:720p also hitches with either decoder, so it is not smooth60fps.
+Explicit instruction to use Artemis/Apollo/Moonlight/Sunshine code directly.
+Stop extending custom PRS/VA renderer; retain prototype branch as parked work.
+Investigate/pin upstream client+host sources, replace mature media/input paths as
+whole components rather than reimplementing their scheduling. Preserve accounts,
+owned pairing, LAN-first/remote access, compact UI, three remote viewers and one
+installed app per desktop OS. Android stays client-only. Do not change installed
+services or publish migration as complete based only on compilation.
+Android footer explicit11sp/16sp/zero letter-spacing fix implemented; real emulator
+mouse open/close/disconnect gate PASS. Not yet released. Software BT.601 conversion
+mismatch with Windows BT.709 identified; no rushed converter patch added.
+
+## PARKED — native Linux GPU presentation (isolated, NOT ACTIVE)
 
 User stats before3.12:1080p60 Direct, RTT3ms,0.8Mbps,21.9 received FPS,
 software(VA-API too slow), later no authenticated packets. Hardware performance

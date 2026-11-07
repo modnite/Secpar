@@ -142,8 +142,18 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                 android.net.Uri.parse("https://secpar.win/help/#stream-menu"))) }
             androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
             StreamMenuRow(R.drawable.lucide_log_out, "Disconnect", destructive = true) { a.disconnect() }
-            Text("Secpar " + com.pcremote.BuildConfig.VERSION_NAME, color = Color(0xff94999e), fontSize = 10.sp,
-                modifier = Modifier.padding(start = 14.dp, top = 4.dp, bottom = 2.dp))
+            Text("Secpar " + com.pcremote.BuildConfig.VERSION_NAME,
+                color = Color(0xff94999e),
+                style = androidx.compose.ui.text.TextStyle(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                    fontWeight = FontWeight.Normal,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    letterSpacing = 0.sp,
+                    platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+                ),
+                maxLines = 1,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
         } else {
             StreamMenuRow(R.drawable.lucide_arrow_left, when(page) { 1 -> "Keys"; 2 -> "Media keys"; else -> "Displays" }) { page = if (page == 2) 1 else 0 }
             androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
