@@ -163,7 +163,8 @@ Original manual UI behavior is preserved when both expected fields are absent.
 Focused pairing-binding-review.cpp PASS: independent OpenSSL fingerprint, correct
 identity, wrong identity/hash, incomplete grant, invalid certificate, control
 characters, oversize PEM, equivalent CRLF PEM and legacy manual behavior.
-Full patched host compilation is IN PROGRESS, not yet an API/pairing acceptance.
+Full patched host Release compilation PASSES; isolated --version PASSES with
+Secpar publisher metadata. This is not yet an API/pairing acceptance.
 No product platform is wired to it and no release was changed.
 
 IMPORTANT outstanding security correction: controller initialization currently
@@ -177,16 +178,22 @@ initializer and official unpatched host; repeat with the safe initializer and
 rebuilt patched host. Exact identity enforcement still needs real HTTPS pairing
 tests, including wrong-fingerprint refusal and successful matching approval.
 
-Active OMV build:
+Completed OMV build:
 - Source /tmp/secpar-upstream-host/source, pinned recursive checkout plus patch.
 - Docker image secpar-sunshine-build:local (Debian trixie, GCC14, CUDA disabled).
   Recipe integrations/gamestream/linux-host.Dockerfile. Dependencies built OK.
 - /tmp/secpar-upstream-host/deps-build.log and host-build.log retain output.
 - CMake Release, docs/tests/tray/CUDA OFF, publisher Secpar; ninja target sunshine
-  -j4. Last observed207/260 compilation steps, no failure yet. Do not launch a
-  duplicate build. Check existing container/process and log first.
-- Running local shell session62493 may be unavailable to Claude; remote build
-  continues independently. Inspect via ssh cdsrv. No user devices/display mounted.
+  -j4. Finished successfully (linked sunshine), shell session62493 exited0.
+  No build job remains running. Do not repeat this compilation without changes.
+- Binary /tmp/secpar-upstream-host/source/build-secpar/sunshine (45MiB LOCAL
+  unstripped artifact). Runtime assets build-secpar/assets must be installed/mounted
+  at /usr/local/assets. The initial version check omitted assets and failed; with
+  assets mounted it exits0 in networkless, rootless, read-only isolated container.
+  No user devices/display mounted. Do not publish this review binary.
+- Built version string is0.0.0-63d35f7-dirty, because local CMake checkout lacks
+  release version metadata. Set intentional version metadata for release packaging;
+  the exact upstream pin remains verified. No application release was made.
 - OMV root last7.3GiB available; /tmp tmpfs12GiB available. Monitor space, avoid
   blind cache deletion. Source/build under /tmp is temporary, not durable.
 - Test header and focused review source also at /tmp/secpar-upstream-host/.
@@ -299,7 +306,8 @@ Cloudflare/Resend secrets are already configured. Do not copy or print their val
 
 User requests handing the FULL project to Claude around10% remaining in the current
 five-hour allowance. Read mcp__codex_app__get_usage_limits; primary.usedPercent is
-used, not remaining. Latest check86% used /14% remaining: prepare handover NOW.
+used, not remaining. Latest check88% used /12% remaining: handover prepared and checkpointed.
+Code checkpoint2cd50eb; subsequent documentation commits contain final build result.
 Recheck at meaningful milestones. Around90% used: finish a safe checkpoint, push
 all authorized code, update this file with exact state/tests/running jobs, supply a
 short Claude startup prompt and link. No need to wait until the limit is exhausted.
