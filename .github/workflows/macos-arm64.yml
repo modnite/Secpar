@@ -20,6 +20,8 @@ jobs:
     env:
       CARGO_TARGET_DIR: /tmp/secpar-target
       MACOSX_DEPLOYMENT_TARGET: '13.0'
+      # Development artifact only; desktop/package.py cannot derive a tag from build.rs on this branch.
+      SECPAR_RELEASE_TAG: v3.9.0-secpar-desktop-dev.1
     steps:
       - uses: actions/checkout@v4
         with:
