@@ -2,6 +2,11 @@
 
 ## CURRENT — 3.10.0 published; physical acceptance pending
 
+- FOLLOW-UP after3.10 (not released): shared secpar-network::relay_auth now matches
+  Worker/Windows HMAC vectors. Linux ticket uses ticket:<pc>:<device> with existing
+  master and device auth retained. Windows subset5 and actual Linux13 host tests
+  pass; network9 pass/1 live-STUN ignored. No relay enabled or engine changed yet.
+  Linux backend wiring, registration, bounded transport and NAT/media remain next.
 - Public release: https://github.com/modnite/Secpar/releases/tag/v3.10.0,
   tag/source929ec17, branch release/3.10.0. Website refresh42319008952 passed.
 - Desktop: windowed free native pointer, capture only in fullscreen, Alt+F toggle;

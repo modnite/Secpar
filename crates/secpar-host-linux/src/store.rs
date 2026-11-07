@@ -264,18 +264,31 @@ impl PairingStore for Store {
         let key = URL_SAFE_NO_PAD
             .decode(&self.data.master)
             .expect("valid master key");
-        ring::hmac::sign(
-            &ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &key),
-            id.as_bytes(),
-        )
-        .as_ref()
-        .try_into()
-        .unwrap()
+        // Linux has not exported relay access yet. Use the Worker contract before
+        // enabling it; keep the master key and all existing device auth tokens.
+        secpar_network::relay_auth::device_ticket(&key, self.id(), id)
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn worker_ticket_upgrade_preserves_existing_device_authentication() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path()).unwrap();
+        let (id, token) = store.add_device("Existing device").unwrap();
+        // Existing schema has no migration/version field. Reopen its unchanged
+        // private state using a deterministic key/PC so the Worker vector applies.
+        store.data.id = "pc1".into();
+        store.data.master = URL_SAFE_NO_PAD.encode([7; 32]);
+        store.save().unwrap();
+        drop(store);
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.auth(&token), Ok(id.clone()));
+        assert_eq!(URL_SAFE_NO_PAD.encode(store.ticket("dev1")),
+            "Apu-dBssItiqztSY2R7lwB90YggnWttqG85Fei6VQzs");
+        assert_eq!(store.ticket(&id), secpar_network::relay_auth::device_ticket(&[7; 32], "pc1", &id));
+    }
     #[test]
     fn account_pairing_is_private_per_device_and_revoked_when_unlinked() {
         let dir=tempfile::tempdir().unwrap(); let mut store=Store::open(dir.path()).unwrap();
