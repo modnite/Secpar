@@ -33,7 +33,9 @@ whole media pipeline with Secpar-specific scheduling again.
 
 - Full Moonlight Qt release worker compiled on the isolated Linux runner. Its
   media implementation is unchanged. Small reviewed patches set a separate
-  Secpar settings identity, internal executable name and Alt+F fullscreen shortcut.
+  Secpar settings identity, internal executable name and Alt+F fullscreen shortcut. A managed-pairing
+  environment flag exits the standard CLI pairing flow with success/failure instead
+  of leaving a confirmation dialog open; upstream crypto is unchanged.
 - Actual worker `--version` and `stream --help` run with no network, user home,
   audio, display or GPU mounts. A source audit matches511 tracked files, including
   pinned nested dependencies. Stripped worker2.2MiB (runtime libraries not included).
@@ -71,6 +73,37 @@ python integrations/gamestream/prepare.py moonlight-android D:/Secpar-CI/engine-
 
 These debug artifacts stay local. Existing app/release builds do not include the
 harness unless `secparUpstreamSource` is explicitly supplied.
+
+## Actual host/client interoperability gate
+
+`interop-smoke.sh` runs a real Sunshine host and the built Secpar-named Moonlight
+worker in one isolated container. The host sees only a private generated X display;
+the client uses a second display. A generated500Hz tone plays into a host-only Pulse
+sink, while a separate sink receives the streamed client audio. Its monitor must
+contain that tone (RMS and zero-crossing checks), not just silence or an open device.
+
+The test rejects an incorrect PIN from a separate client profile, then authenticates
+the correct client, checks received/decoded/rendered frames and recovered audio.
+PASS: generated640x360/30fps software fixture, including normal stream teardown.
+This is interoperability evidence, not X250 hardware throughput or1080p acceptance.
+The rejected profile is separate: retrying the same rejected identity immediately
+can encounter Sunshine's pending-session409. Do not work around this in production
+by silently rotating device identities; the ownership broker needs bounded pending
+pairing cleanup/retry handling.
+
+The test uses the official Sunshine2026.914.233613 x86-64 AppImage, not a rebuilt
+Secpar host. The asset SHA256 is verified before running it. No host installation,
+user display, audio device, render node, input device, network or home is mounted.
+All test credentials, paired profiles and generated audio stay in container tmpfs.
+
+After building the client dependency image and preparing the worker:
+
+```sh
+sh integrations/gamestream/run-interop.sh /path/to/Sunshine.AppImage /path/to/secpar-stream
+```
+
+The fixture asset is available at:
+https://github.com/LizardByte/Sunshine/releases/download/v2026.914.233613/Sunshine_2026.914.233613_x86_64.AppImage
 
 ## Required integration before switching the product
 

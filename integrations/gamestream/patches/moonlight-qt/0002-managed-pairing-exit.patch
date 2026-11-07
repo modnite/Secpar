@@ -1,0 +1,16 @@
+--- a/app/cli/pair.cpp
++++ b/app/cli/pair.cpp
+@@ -110,6 +110,13 @@
+             }
+             break;
+         }
++        // Secpar's authenticated pairing broker needs a bounded child process,
++        // not an upstream confirmation dialog after completion. Destruction of
++        // ComputerManager flushes the same upstream host/certificate settings.
++        if (qEnvironmentVariableIntValue("SECPAR_MANAGED_PAIRING") == 1 &&
++            (m_State == StateComplete || m_State == StateFailure)) {
++            QCoreApplication::exit(m_State == StateComplete ? 0 : 1);
++        }
+     }
+ 
+     Launcher *q_ptr;
