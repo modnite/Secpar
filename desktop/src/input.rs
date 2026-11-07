@@ -302,4 +302,30 @@ mod tests {
         assert!(!fullscreen_shortcut(&event(Modifiers{ctrl:true,..alt},true,false)));
         assert!(!fullscreen_shortcut(&event(Modifiers{shift:true,..alt},true,false)));
     }
+
+    #[test]
+    fn painted_video_layer_is_hittable_but_local_popups_take_precedence() {
+        use eframe::egui::{self,Context,RawInput,Rect,pos2,vec2};
+        let ctx=Context::default();
+        let mut video=None;
+        for _ in 0..2 {
+            let _=ctx.run(RawInput{screen_rect:Some(Rect::from_min_size(pos2(0.,0.),vec2(640.,400.))),..Default::default()},|ctx| {
+                egui::CentralPanel::default().show(ctx,|ui| {
+                    let (_,rect)=ui.allocate_space(ui.available_size());
+                    ui.painter().rect_filled(rect,0.,egui::Color32::BLACK);
+                    video=Some((rect,ui.layer_id()));
+                });
+            });
+        }
+        let (rect,layer)=video.unwrap();
+        assert_eq!(ctx.layer_id_at(rect.center()),Some(layer),"A painted video surface must accept free-pointer input");
+        for _ in 0..2 {
+            let _=ctx.run(RawInput{screen_rect:Some(Rect::from_min_size(pos2(0.,0.),vec2(640.,400.))),..Default::default()},|ctx| {
+                egui::CentralPanel::default().show(ctx,|ui|{ui.allocate_space(ui.available_size());});
+                egui::Area::new(egui::Id::new("local-stream-menu")).order(egui::Order::Foreground)
+                    .fixed_pos(rect.center()-vec2(40.,20.)).show(ctx,|ui|{ui.allocate_space(vec2(80.,40.));});
+            });
+        }
+        assert_ne!(ctx.layer_id_at(rect.center()),Some(layer),"A local popup must not forward input into the remote desktop");
+    }
 }
