@@ -1,6 +1,7 @@
 //! Decode away from the interface thread. Bound compressed work and publish only
 //! the latest decoded image; dropping dependent frames requires a new keyframe.
-use eframe::egui::{ColorImage, Context};
+use crate::picture::Picture;
+use eframe::egui::Context;
 use openh264::{decoder::Decoder, formats::YUVSource};
 use secpar_client::receiver::VideoFrame;
 use std::{collections::VecDeque, sync::{Arc, Condvar, Mutex}, thread::JoinHandle, time::{Duration,Instant}};
@@ -53,14 +54,13 @@ impl Backend {
         match self {Self::Software(_)=>false,#[cfg(target_os="linux")] Self::Hardware(_)=>true}
     }
     fn label(&self)->&'static str {if self.is_hardware(){"H.264 · VA-API"}else{"H.264 · software"}}
-    fn decode(&mut self,bytes:&[u8])->Result<Option<ColorImage>,DecodeError> {
+    fn decode(&mut self,bytes:&[u8])->Result<Option<Picture>,DecodeError> {
         match self {
             Self::Software(decoder)=> {
                 let Some(yuv)=decoder.decode(bytes).map_err(|_|DecodeError::Invalid)? else {return Ok(None)};
                 let (w,h)=yuv.dimensions();
-                if w==0 || h==0 || w>8192 || h>8192 || w*h>4096*2160 {return Err(DecodeError::Dimensions)}
-                let mut pixels=vec![0;w*h*3];yuv.write_rgb8(&mut pixels);
-                Ok(Some(ColorImage::from_rgb([w,h],&pixels)))
+                let (sy,su,sv)=yuv.strides();
+                Picture::from_i420([w,h],(yuv.y(),sy),(yuv.u(),su),(yuv.v(),sv)).map(Some).ok_or(DecodeError::Dimensions)
             }
             #[cfg(target_os="linux")]
             Self::Hardware(decoder)=>decoder.decode(bytes).map_err(|_|DecodeError::Invalid),
@@ -71,7 +71,7 @@ impl Backend {
 #[derive(Default)]
 struct State {
     queue: VecDeque<VideoFrame>,
-    image: Option<ColorImage>,
+    image: Option<Picture>,
     waiting_key: bool,
     request_key: bool,
     key_requested: Option<Instant>,
@@ -97,7 +97,7 @@ impl State {
     }
 }
 pub struct Output {
-    pub image: Option<ColorImage>,
+    pub image: Option<Picture>,
     pub request_key: bool,
     pub error: Option<String>,
     pub backend: Option<&'static str>,
@@ -253,8 +253,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         };
         assert_eq!(image.size,[128,128]);
-        let pixel=image.pixels[0];
-        for (expected,actual) in [40i16,200,20].into_iter().zip([pixel.r(),pixel.g(),pixel.b()]) {
+        let pixel=image.rgb_at(0,0,crate::picture::Matrix::Bt601);
+        for (expected,actual) in [40i16,200,20].into_iter().zip(pixel) {
             assert!((expected-actual as i16).abs()<16);
         }
         let start=Instant::now(); drop(worker);

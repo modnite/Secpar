@@ -1,6 +1,8 @@
 mod account;
 mod client_settings;
 mod video;
+mod picture;
+mod gpu;
 mod audio;
 mod audio_worker;
 mod design;
@@ -144,6 +146,8 @@ struct App {
     notice: Option<String>,
     connection_error: Option<String>,
     texture: Option<TextureHandle>,
+    gpu: Option<gpu::Handle>,
+    gpu_live: bool,
     brand: TextureHandle,
     mark: TextureHandle,
     stream_menu_open: bool,
@@ -228,6 +232,8 @@ impl App {
             notice: None,
             connection_error: None,
             texture: None,
+            gpu: cc.gl.as_ref().and_then(gpu::new),
+            gpu_live: false,
             brand,
             mark,
             stream_menu_open: false,
@@ -258,6 +264,9 @@ impl App {
             app.texture=Some(cc.egui_ctx.load_texture("Stream sample",image,TextureOptions::LINEAR));
             app.dimensions=[1280,720];app.stream_fps=60;app.status="Direct".into();
             app.client.active_decoder=Some("H.264 · software".into());app.stream_stats=Some((Some(2),18.4,60.));
+            if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("bars")) {
+                if let Some(handle)=&app.gpu {gpu::submit(handle,picture::Picture::bars(1280,720));app.gpu_live=true;}
+            }
             app.stream_menu_open=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("menu"));
         }
         app
@@ -571,13 +580,24 @@ impl App {
                 self.send(Command::Stop);
             }
             if output.request_key { self.send(Command::Keyframe); }
-            if let Some(image) = output.image {
-                self.dimensions = image.size;
+            if let Some(picture) = output.image {
+                self.dimensions = picture.size;
+                let gpu = self.gpu.clone().filter(|handle| !gpu::failed(handle));
+                self.gpu_live = gpu.is_some();
+                let image = match gpu {
+                    Some(handle) => {
+                        gpu::submit(&handle, picture);
+                        // The texture only marks a live stream; the shader draws the picture.
+                        egui::ColorImage::new([1, 1], vec![Color32::BLACK])
+                    }
+                    None => picture.to_color_image(picture::Matrix::Bt709),
+                };
                 if let Some(texture) = self.texture.as_mut() {
                     texture.set(image, TextureOptions::LINEAR);
                 } else {
                     self.texture = Some(ctx.load_texture("Remote desktop", image, TextureOptions::LINEAR));
                 }
+                ctx.request_repaint();
             }
         }
         if self.auto_capture_pending && self.focused && self.texture.is_some() {
@@ -904,12 +924,17 @@ impl eframe::App for App {
                     let picture = egui::Rect::from_center_size(rect.center(), display);
                     self.video_rect=Some(picture);self.video_layer=Some(ui.layer_id());
                     ui.painter().rect_filled(rect, 0., Color32::BLACK);
-                    ui.painter().image(
-                        texture.id(),
-                        picture,
-                        egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
-                        Color32::WHITE,
-                    );
+                    match self.gpu.clone().filter(|_| self.gpu_live) {
+                        Some(handle) => { ui.painter().add(gpu::callback(handle, picture)); }
+                        None => {
+                            ui.painter().image(
+                                texture.id(),
+                                picture,
+                                egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
+                                Color32::WHITE,
+                            );
+                        }
+                    }
                     #[cfg(feature="ui-review")]
                     if self.review_commands.is_some() {ui.painter().text(picture.center(),egui::Align2::CENTER_CENTER,"Stream layout sample",egui::FontId::proportional(16.),design::MUTED);}
                     if self.cursor.2 && (self.input.captured || !self.pointer_in_video) {

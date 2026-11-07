@@ -1,4 +1,4 @@
-use eframe::egui::ColorImage;
+use crate::picture::Picture;
 use gstreamer::{self as gst, prelude::*};
 use gstreamer_app::{AppSink, AppSrc};
 use gstreamer_video::{VideoFrameRef, VideoInfo};
@@ -13,7 +13,7 @@ pub struct Hardware {
 impl Hardware {
     pub fn open(factory: &str) -> Result<Self, ()> {
         gst::init().map_err(|_| ())?;
-        let description = format!("appsrc name=input is-live=true format=time block=false max-buffers=2 caps=video/x-h264,stream-format=byte-stream,alignment=au ! h264parse ! {factory} ! videoconvert ! video/x-raw,format=RGB ! appsink name=output sync=false max-buffers=1 drop=true enable-last-sample=false");
+        let description = format!("appsrc name=input is-live=true format=time block=false max-buffers=2 caps=video/x-h264,stream-format=byte-stream,alignment=au ! h264parse ! {factory} ! videoconvert ! video/x-raw,format=NV12 ! appsink name=output sync=false max-buffers=1 drop=true enable-last-sample=false");
         let pipeline = gst::parse::launch(&description).map_err(|_| ())?.downcast::<gst::Pipeline>().map_err(|_| ())?;
         let input = pipeline.by_name("input").ok_or(())?.downcast::<AppSrc>().map_err(|_| ())?;
         let output = pipeline.by_name("output").ok_or(())?.downcast::<AppSink>().map_err(|_| ())?;
@@ -21,7 +21,7 @@ impl Hardware {
         hardware.pipeline.set_state(gst::State::Playing).map_err(|_| ())?;
         Ok(hardware)
     }
-    pub fn decode(&mut self, bytes:&[u8]) -> Result<Option<ColorImage>, ()> {
+    pub fn decode(&mut self, bytes:&[u8]) -> Result<Option<Picture>, ()> {
         // appsrc's advertised maximum alone doesn't bound a nonblocking source.
         if self.input.property::<u64>("current-level-buffers") >= 2 { return Err(()); }
         let mut buffer = gst::Buffer::from_mut_slice(bytes.to_vec());
@@ -37,16 +37,11 @@ impl Hardware {
         let (w,h) = (info.width() as usize,info.height() as usize);
         if w==0 || h==0 || w>8192 || h>8192 || w*h>4096*2160 { return Err(()); }
         let frame = VideoFrameRef::from_buffer_ref_readable(sample.buffer().ok_or(())?,&info).map_err(|_| ())?;
-        let stride = frame.plane_stride()[0];
-        if stride < (w*3) as i32 { return Err(()); }
-        let data = frame.plane_data(0).map_err(|_| ())?;
-        let mut rgb = Vec::with_capacity(w*h*3);
-        for row in data.chunks(stride as usize).take(h) {
-            if row.len()<w*3 { return Err(()); }
-            rgb.extend_from_slice(&row[..w*3]);
-        }
-        if rgb.len()!=w*h*3 { return Err(()); }
-        Ok(Some(ColorImage::from_rgb([w,h],&rgb)))
+        let strides = frame.plane_stride();
+        if strides[0] < 0 || strides[1] < 0 { return Err(()); }
+        let luma = frame.plane_data(0).map_err(|_| ())?;
+        let chroma = frame.plane_data(1).map_err(|_| ())?;
+        Picture::from_nv12([w,h],(luma,strides[0] as usize),(chroma,strides[1] as usize)).map(Some).ok_or(())
     }
 }
 impl Drop for Hardware {
@@ -73,8 +68,8 @@ fn verify(factory:&str,fixture:&[u8]) -> bool {
     for _ in 0..4 {
         match decoder.decode(fixture) {
             Ok(Some(image)) => {
-                let pixel=image.pixels[0];
-                return image.size==[128,128] && [40i16,200,20].into_iter().zip([pixel.r(),pixel.g(),pixel.b()]).all(|(a,b)|(a-b as i16).abs()<20);
+                let pixel=image.rgb_at(0,0,crate::picture::Matrix::Bt601);
+                return image.size==[128,128] && [40i16,200,20].into_iter().zip(pixel).all(|(a,b)|(a-b as i16).abs()<20);
             }
             Ok(None) => {}, Err(_) => return false,
         }
