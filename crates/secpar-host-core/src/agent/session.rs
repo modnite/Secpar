@@ -33,6 +33,13 @@ enum Frame {
     Other, // ping/pong: activity only
 }
 
+// Async cancellation skips code after an await. Keep the connection registry
+// consistent even when a relay task is aborted while its writer is blocked.
+struct Registration(Arc<Ctx>, u64);
+impl Drop for Registration {
+    fn drop(&mut self) { self.0.unregister(self.1); }
+}
+
 /// The next frame, or None on close, error or `idle` silence.
 async fn next_frame(ws: &mut impl Rx, idle: std::time::Duration) -> Option<Frame> {
     match timeout(idle, ws.next()).await {
@@ -168,6 +175,7 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
         },
     );
     let sid = ctx.register(&device, tx);
+    let registration = Registration(ctx.clone(), sid);
     loop {
         tokio::select! {
             f = next_frame(&mut inc, ctx.idle) => {
@@ -197,6 +205,6 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
             Some(b) = bin_rx.recv() => if ws.send(Message::binary(b)).await.is_err() { break },
         }
     }
-    ctx.unregister(sid);
+    drop(registration);
     drop(session); // releases held keys/buttons, stops subscriptions
 }

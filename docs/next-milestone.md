@@ -1,5 +1,31 @@
 # Active Secpar work — 2026-11-06
 
+## UNRELEASED — shared relay control, after accepted3.10.1
+
+Added secpar_host_core::agent::relay::serve: Worker envelopes to real authenticated
+agent sessions,16 pending/authenticated control peers, per-peer bounded queues,
+16MiB global inbound/outbound queued-byte budgets,5s socket write timeout,
+heartbeat/disconnect handling and cancellation cleanup. Session close shares the
+reply queue so it cannot overtake an auth error. Revocation remains per device.
+Shared session registry now unregisters via RAII even when its future is aborted.
+Five new in-memory transport tests exercise actual core auth/session lifecycle,
+revocation isolation, stalled-writer cancellation, socket EOF, framing/budget and
+pending-peer limits. Core26 tests PASS on Windows AND native Linux. No real Worker
+connection/TLS/NAT tested here; no platform activation and no release/install.
+NEXT: Linux relay registration/reconnect connector, owner/manual relay bootstrap
+links and media STUN/TURN routing, preserving existing device auth and3.10.1 engines.
+Claude may reuse the shared mux for macOS; coordinate shared-file integration.
+
+## ACCEPTED BASELINE — 3.10.1, 2026-11-07
+
+User physically confirms BOTH fixes: Linux stream audio plays; Android Home stays
+aligned after returning from YouTube with PiP. These are USER-ACCEPTED, not pending.
+Preserve3.10.1 Android engines/window restoration and Linux desktop-service output.
+No repeat acceptance questions. Next: Linux remote HOST relay/STUN/TURN, followed
+by physical controller forwarding and remaining friends/guest/multiplayer scope.
+Windows3.9 host remains installed; do not restart it while connected. Claude owns
+macOS native host in its separate checkout. New prompts accumulate.
+
 ## CURRENT — 3.10.1 PUBLISHED, 2026-11-07
 
 - Website release refresh42343540816 passed. User asked for3.10.1 Linux audio

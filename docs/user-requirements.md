@@ -1,5 +1,9 @@
 # Secpar: persistent user requirements
 
+Accepted 2026-11-07: user confirms Linux3.10.1 audio plays and Android3.10.1
+Home stays aligned on YouTube/PiP return. Preserve this accepted baseline;
+do not repeat those acceptance questions. Continue remaining platform work.
+
 Latest feedback 2026-11-07: Android3.10 returns with asymmetric home layout:
 left margin enlarged and header under status bar when returning with YouTube PiP;
 force-stop/reopen restores it. Grey screen improved but lifecycle/layout issue is

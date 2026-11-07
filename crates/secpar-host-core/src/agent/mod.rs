@@ -1,6 +1,7 @@
 //! TLS WebSocket agent on 48999 (docs/protocol.md).
 
 mod session;
+pub mod relay;
 pub use session::{Rx, Tx};
 
 use crate::proto::{ClientMsg, PcInfo, ServerMsg};
