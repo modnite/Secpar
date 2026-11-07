@@ -53,7 +53,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
@@ -62,3 +62,10 @@ panic = "abort"
 [dev-dependencies]
 tokio = { version = "1.53.3", features = ["test-util", "macros", "rt-multi-thread"] }
 wiremock = "0.6.5"
+
+# Packetizing and erasure coding are per-frame hot loops, so they stay fully optimized.
+[profile.release.package.reed-solomon-erasure]
+opt-level = 3
+
+[profile.release.package.secpar-stream]
+opt-level = 3
