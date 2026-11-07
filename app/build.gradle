@@ -14,8 +14,8 @@ android {
         minSdk 26
         targetSdk 36
 
-        versionName "3.10.0"
-        versionCode = 525
+        versionName "3.10.1"
+        versionCode = 526
     }
 
     flavorDimensions.add("root")

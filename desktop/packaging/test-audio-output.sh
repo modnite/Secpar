@@ -18,6 +18,10 @@ mkdir -m 700 "$XDG_RUNTIME_DIR"
 mkdir "$HOME/old" "$HOME/candidate"
 (cd "$HOME/old" && /artifacts/old.AppImage --appimage-extract >/dev/null)
 (cd "$HOME/candidate" && /artifacts/candidate.AppImage --appimage-extract >/dev/null)
+LD_LIBRARY_PATH="$HOME/candidate/squashfs-root/usr/lib" /artifacts/desktop-test --list >"$HOME/tests.list"
+for test_name in renders_opus_through_system_audio_output desktop_service_plays_when_default_alsa_format_is_unavailable missing_desktop_service_can_fall_back_to_alsa; do
+  grep -q "audio::device_tests::$test_name: test" "$HOME/tests.list" || { echo "Missing required audio test: $test_name"; exit 1; }
+done
 export SECPAR_AUDIO_REVIEW=1 ALSA_CONFIG_PATH="$HOME/alsa.conf"
 unset ALSA_PLUGIN_DIR
 printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > "$ALSA_CONFIG_PATH"
@@ -65,4 +69,38 @@ assert max(abs(v) for v in values)<0.5, 'Unexpected output clipping'
 print('PASS: real Opus decoding/PCM conversion/ALSA/Pulse output reached the isolated monitor.')
 PY
 test "$result" -eq 0
+
+# Match the reported failure: no usable ALSA default, while the desktop's
+# sound service remains available. Use the shipped GStreamer plugins/libraries.
+printf 'pcm.!default { type secpar_nonexistent_pcm }\n' >"$HOME/broken-alsa.conf"
+timeout 6s parec --device=secpar_review.monitor --raw --format=float32le --rate=48000 --channels=2 --latency-msec=10 >"$HOME/service.raw" &
+capture=$!
+ALSA_CONFIG_PATH="$HOME/broken-alsa.conf" \
+GST_PLUGIN_SYSTEM_PATH_1_0="$HOME/candidate/squashfs-root/usr/lib/gstreamer-1.0" \
+GST_PLUGIN_PATH_1_0="$HOME/candidate/squashfs-root/usr/lib/gstreamer-1.0" \
+GST_PLUGIN_SCANNER="$HOME/candidate/squashfs-root/usr/bin/gst-plugin-scanner" \
+GST_REGISTRY="$HOME/service-registry.bin" \
+LD_LIBRARY_PATH="$HOME/candidate/squashfs-root/usr/lib" /artifacts/desktop-test \
+  --exact audio::device_tests::desktop_service_plays_when_default_alsa_format_is_unavailable --ignored --nocapture
+wait "$capture" || test "$?" -eq 124
+python3 - <<'PY'
+import os,struct,math
+from pathlib import Path
+data=(Path(os.environ['HOME'])/'service.raw').read_bytes()
+samples=[v[0] for v in struct.iter_unpack('<f',data)]
+assert samples and all(math.isfinite(v) for v in samples)
+windows=[max(map(abs,samples[i:i+9600]),default=0)>0.01 for i in range(0,len(samples),9600)]
+active=[i for i,v in enumerate(windows) if v]
+assert len(active)>=12, 'Desktop sound service did not render enough generated audio'
+assert any(b-a>=4 for a,b in zip(active,active[1:])), 'Generated silence gap was not observed'
+assert active[-1]-active[0]>=18, 'Output did not return after the silence gap'
+assert max(map(abs,samples))<0.5, 'Desktop output clipped'
+print('PASS: desktop-service audio rendered before and after silence with ALSA default deliberately unavailable.')
+PY
+printf 'pcm.!default { type null }\n' >"$HOME/null-alsa.conf"
+ALSA_CONFIG_PATH="$HOME/null-alsa.conf" PULSE_SERVER="unix:$HOME/nonexistent-pulse" \
+GST_PLUGIN_SYSTEM_PATH_1_0="$HOME/candidate/squashfs-root/usr/lib/gstreamer-1.0" \
+GST_PLUGIN_SCANNER="$HOME/candidate/squashfs-root/usr/bin/gst-plugin-scanner" \
+LD_LIBRARY_PATH="$HOME/candidate/squashfs-root/usr/lib" /artifacts/desktop-test \
+  --exact audio::device_tests::missing_desktop_service_can_fall_back_to_alsa --ignored --nocapture
 CONTAINER

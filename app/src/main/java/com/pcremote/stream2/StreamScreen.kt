@@ -420,6 +420,7 @@ private fun Immersive() {
     val activity = LocalContext.current as? Activity ?: return
     DisposableEffect(activity) {
         val prev = activity.requestedOrientation
+        (activity as? com.pcremote.MainActivity)?.setStreamWindowActive(true)
         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         val ctl = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
         ctl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -427,6 +428,7 @@ private fun Immersive() {
         onDispose {
             ctl.show(WindowInsetsCompat.Type.systemBars())
             activity.requestedOrientation = prev
+            (activity as? com.pcremote.MainActivity)?.setStreamWindowActive(false)
         }
     }
 }

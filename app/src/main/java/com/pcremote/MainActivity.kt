@@ -49,8 +49,42 @@ class MainActivity : ComponentActivity() {
         private set
     var onStreamHidden: (() -> Unit)? = null
     private var pipActive = false
+    private var streamWindowActive = false
     private var pipAspect = android.util.Rational(16, 9)
     val supportsPip get() = packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    /** Keep non-stream screens out of the previous landscape/immersive window state. */
+    fun setStreamWindowActive(active: Boolean) {
+        streamWindowActive = active
+        refreshWindowInsets()
+    }
+
+    private fun refreshWindowInsets() {
+        val decor = window.decorView
+        decor.postOnAnimation {
+            if (isDestroyed) return@postOnAnimation
+            if (!streamWindowActive && !isInPictureInPictureMode) {
+                androidx.core.view.WindowCompat.getInsetsController(window, decor).apply {
+                    systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                    show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                }
+            }
+            // A handled configuration change retains the Compose view. Ask the
+            // current window for fresh insets after its resize, rather than keeping
+            // a previous landscape cutout/status-bar snapshot after background/PiP.
+            androidx.core.view.ViewCompat.requestApplyInsets(decor)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshWindowInsets()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        refreshWindowInsets()
+    }
 
     fun configureStreamPip(active: Boolean, width: Int = 16, height: Int = 9) {
         pipActive = active && supportsPip
@@ -101,6 +135,7 @@ class MainActivity : ComponentActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         pipVisible = isInPictureInPictureMode
         if (isInPictureInPictureMode) desktopCapture?.setRequested(false)
+        else refreshWindowInsets()
     }
 
     var desktopCapture: com.pcremote.stream2.DesktopCapture? = null
@@ -119,6 +154,7 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) desktopCapture?.lostFocus() else desktopCapture?.gainedFocus()
+        if (hasFocus) refreshWindowInsets()
     }
 
     private lateinit var home: HomeController

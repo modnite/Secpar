@@ -1,5 +1,31 @@
 # Secpar delivery record
 
+## CURRENT — 3.10.1 candidates, 2026-11-07
+
+- User rejects3.10 Linux audio: exact error "no usable audio output format found";
+  Retry remains silent. Default CPAL Linux backend is ALSA, not KDE's selected
+  desktop service. New Linux output uses GStreamer pulsesink via PulseAudio or
+  PipeWire's Pulse-compatible service FIRST; ALSA compatibility is fallback.
+  Existing video, network, Android audio and Windows host engines unchanged.
+- Real isolated tests: broken ALSA default + live desktop service renders generated
+  Opus before/after600ms silence (96000 frames,0 decode errors); unavailable Pulse
+  service falls back to synthetic ALSA null PCM. Separate real ALSA/Pulse monitor
+  gate still passes. New script verifies requested tests exist (version changes
+  change executable hash; NEVER accept an exact filter running0 tests).
+- Linux32 unit checks pass/4 environment gates ignored by default; all3 relevant
+  output gates explicitly passed separately. No physical laptop acceptance yet.
+- Android user reports Home shifted right and header under status bar on return
+  with YouTube PiP; force-stop fixes. Refresh actual insets on resume/focus/config/
+  PiP exit and restore system bars only outside immersive stream. Explicit stream
+  window ownership prevents normal-home repair from showing bars during streaming.
+- Baseline3.10 fails lingering-immersive-bars resume check; candidate passes.
+  Synthetic stale inset injection recovers on BOTH baseline and candidate, so it
+  is not proof of exact Samsung side-offset root cause.12 layout/nav/PiP/input/video
+  instrumentation cases +252 JVM tests pass; portrait checking/online render saved
+  outputs/ui-review/home-insets-{checking,connected}-1080x2340.png. Samsung acceptance
+  remains pending. Lean Android3.10.1/code526 built/signed/cold-launch verified on
+  owned5556 only; phone untouched. Keep debug local. Release not published yet.
+
 ## CURRENT — 3.10.0 published; physical acceptance pending
 
 - FOLLOW-UP after3.10 (not released): shared secpar-network::relay_auth now matches

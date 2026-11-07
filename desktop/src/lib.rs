@@ -684,6 +684,16 @@ impl eframe::App for App {
                             if let Some(error)=self.audio_error.clone() {
                                 if ui.button("Retry audio").on_hover_text(error).clicked(){self.open_audio();}
                             }
+                            if self.client.audio {
+                                ui.menu_button("Audio", |ui| {
+                                    if let Some(audio) = self.audio.as_ref() {
+                                        let details = audio.details();
+                                        ui.label(&details);
+                                        if ui.button("Copy details").clicked() { ui.ctx().copy_text(details); }
+                                    } else if let Some(error) = &self.audio_error { ui.label(error); }
+                                    if ui.button("Reopen system output").clicked() { self.open_audio(); ui.close(); }
+                                });
+                            }
                         }
                         if self.command.is_some() {
                             if ui.button("Disconnect").clicked() {

@@ -1,5 +1,13 @@
 # Secpar: persistent user requirements
 
+Latest feedback 2026-11-07: Android3.10 returns with asymmetric home layout:
+left margin enlarged and header under status bar when returning with YouTube PiP;
+force-stop/reopen restores it. Grey screen improved but lifecycle/layout issue is
+NOT accepted as fixed. Linux3.10 audio STILL SILENT; do not treat virtual-sink
+success as physical acceptance. Root owns both defects; Linux outside-LAN work
+remains queued. User has not yet answered whether Retry audio appears or KDE
+shows Secpar as a playback app. Do not assume routing versus transport root cause.
+
 Latest corrections: desktop client must have a free native pointer in a window,
 capture only in fullscreen, Alt+F fullscreen toggle. This desktop request does not
 override Android's approved free dock pointer. User confirms Linux video is perfect
