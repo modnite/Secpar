@@ -351,26 +351,32 @@ fn dedup_inputs(bytes: &[u8], last: &mut Option<u64>) -> Vec<ClientMsg> {
 mod audio {
     use super::*;
     use gstreamer::{self as gst, prelude::*};
-    pub fn run(shared: Arc<Shared>) -> Result<(), String> {
-        // Never fall back to a default source: that can be the microphone.
-        let output = std::process::Command::new("pactl")
-            .arg("get-default-sink")
-            .output()
-            .map_err(|_| "Install pipewire-pulse/pactl for desktop audio")?;
-        if !output.status.success() {
-            return Err("No default system audio output is available".into());
-        }
-        let sink = String::from_utf8(output.stdout).map_err(|_| "Invalid audio output name")?;
-        let sink = sink.trim();
-        if sink.is_empty() {
-            return Err("No default system audio output is available".into());
-        }
+    pub(super) fn default_monitor() -> Result<String,String> {
         gst::init().map_err(|_| "Could not initialize desktop audio")?;
+        let provider=gst::DeviceProviderFactory::by_name("pulsedeviceprovider")
+            .ok_or("Desktop audio device discovery is unavailable")?;
+        provider.start().map_err(|_|"Could not connect to the desktop sound service")?;
+        let sink=provider.devices().into_iter().find(|device|
+            device.device_class().as_str()=="Audio/Sink" && device.properties()
+                .and_then(|p|p.get::<bool>("is-default").ok())==Some(true))
+            .and_then(|device|device.create_element(None).ok())
+            .and_then(|element|element.property::<Option<String>>("device"));
+        provider.stop();
+        // Select only the default speaker's monitor, never the default source
+        // (which can be a microphone). No external pactl executable is needed.
+        sink.filter(|s|!s.is_empty()).map(|s|format!("{s}.monitor"))
+            .ok_or_else(||"No default system audio output is available".into())
+    }
+    pub fn run(shared: Arc<Shared>) -> Result<(), String> {
+        let monitor=default_monitor()?;
         let source = gst::ElementFactory::make("pulsesrc")
-            .property("device", format!("{sink}.monitor"))
+            .property("device", monitor)
             .property("do-timestamp", true)
             .build()
             .map_err(|_| "Install GStreamer PulseAudio support")?;
+        run_source(shared,source)
+    }
+    pub(super) fn run_source(shared: Arc<Shared>,source: gst::Element) -> Result<(),String> {
         let convert = gst::ElementFactory::make("audioconvert")
             .build()
             .map_err(|_| "Missing audio converter")?;
@@ -400,9 +406,11 @@ mod audio {
             .map_err(|_| "Could not build audio pipeline")?;
         gst::Element::link_many([&source, &convert, &resample, &caps, appsink.upcast_ref()])
             .map_err(|_| "Could not link audio pipeline")?;
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|_| "Could not start system audio capture")?;
+        if pipeline.set_state(gst::State::Playing).is_err() {
+            let error=output_error(&pipeline).unwrap_or_else(||"Could not start system audio capture".into());
+            let _=pipeline.set_state(gst::State::Null);
+            return Err(error);
+        }
         let result = (|| {
             let mut encoder =
                 opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::LowDelay)
@@ -415,6 +423,7 @@ mod audio {
             while !shared.stop.load(Ordering::Relaxed) {
                 let Some(sample) = appsink.try_pull_sample(gst::ClockTime::from_mseconds(100))
                 else {
+                    if let Some(error)=output_error(&pipeline) {return Err(error);}
                     continue;
                 };
                 let Some(buffer) = sample.buffer() else {
@@ -446,15 +455,64 @@ mod audio {
         let _ = pipeline.set_state(gst::State::Null);
         result
     }
+    fn output_error(pipeline:&gst::Pipeline)->Option<String> {
+        let message=pipeline.bus()?.pop_filtered(&[gst::MessageType::Error,gst::MessageType::Eos])?;
+        Some(match message.view() {
+            gst::MessageView::Error(error)=>format!("System audio capture stopped: {}",error.error()),
+            _=>"System audio capture ended".into(),
+        })
+    }
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "Requires isolated synthetic Pulse service and named output monitor"]
+    fn desktop_output_monitor_is_discovered_without_pactl() {
+        assert_eq!(std::env::var("SECPAR_AUDIO_REVIEW").as_deref(),Ok("1"));
+        assert_eq!(super::audio::default_monitor().unwrap(),"secpar_review.monitor");
+    }
     use super::*;
+    use gstreamer::{self as gst,prelude::*};
     #[test]
     fn udp_input_deduplicates_and_cannot_start_other_operations() {
         let mut last = None;
         let p=br#"[{"i":2,"t":"mouse.move","dx":5,"dy":0},{"i":1,"t":"mouse.move","dx":1,"dy":0},{"i":3,"t":"power","a":"shutdown"}]"#;
         assert_eq!(dedup_inputs(p, &mut last).len(), 2);
         assert!(dedup_inputs(p, &mut last).is_empty());
+    }
+    fn synthetic_shared()->Arc<Shared> {
+        Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false)})
+    }
+    #[test]
+    fn unavailable_audio_source_preserves_video_transport() {
+        gst::init().unwrap();
+        // Explicit nonexistent server: never connect to this machine's audio session.
+        let source=gst::ElementFactory::make("pulsesrc")
+            .property("server","unix:/tmp/secpar-no-audio-review-server")
+            .property("device","secpar_missing_monitor.monitor").build().unwrap();
+        let shared=synthetic_shared();
+        let error=audio::run_source(shared.clone(),source).expect_err("Missing virtual output must fail");
+        eprintln!("Synthetic host audio startup failure: {error}");
+        assert!(!shared.stop.load(Ordering::Relaxed),"Optional audio must not stop media");
+        let receiver=UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        *shared.peer.lock().unwrap()=Some(receiver.local_addr().unwrap());
+        shared.send(header(Type::Video,1),b"synthetic-video-after-audio-failure");
+        let mut packet=[0u8;2048];
+        let size=receiver.recv(&mut packet).unwrap();
+        let (h,p)=shared.crypt.open(Dir::HostToPhone,&packet[..size]).unwrap();
+        assert_eq!(h.typ,Type::Video);assert_eq!(p,b"synthetic-video-after-audio-failure");
+    }
+    #[test]
+    fn asynchronous_audio_pipeline_error_is_reported_instead_of_hanging() {
+        gst::init().unwrap();
+        let source=gst::parse::bin_from_description("audiotestsrc is-live=true ! identity error-after=2",true).unwrap();
+        let shared=synthetic_shared();
+        let started=Instant::now();
+        let error=audio::run_source(shared.clone(),source.upcast()).expect_err("Synthetic source must fail");
+        eprintln!("Synthetic asynchronous host audio failure: {error}");
+        assert!(started.elapsed()<Duration::from_secs(3),"Asynchronous failure must not loop forever");
+        assert!(error.contains("System audio capture stopped"),"{error}");
+        assert!(!shared.stop.load(Ordering::Relaxed));
     }
 }

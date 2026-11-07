@@ -5,6 +5,7 @@ mod audio;
 mod design;
 mod hosting;
 mod input;
+mod stream_menu;
 mod local_host;
 #[cfg(windows)]
 mod native_window;
@@ -115,6 +116,8 @@ enum Page {
 struct App {
     #[cfg(feature = "ui-review")]
     review_frames: u32,
+    #[cfg(feature="ui-review")]
+    review_commands: Option<mpsc::Receiver<Command>>,
     #[cfg(windows)]
     tray: Option<tray::Tray>,
     updates: updates::Panel,
@@ -134,11 +137,22 @@ struct App {
     decoder: Option<video::Worker>,
     audio: Option<audio::Audio>,
     audio_error: Option<String>,
+    clipboard: Option<secpar_clipboard::Bridge>,
+    notice: Option<String>,
+    connection_error: Option<String>,
     texture: Option<TextureHandle>,
     brand: TextureHandle,
+    mark: TextureHandle,
+    stream_menu_open: bool,
+    menu_page: u8,
+    show_stream_stats: bool,
+    stream_menu_bounds: Option<egui::Rect>,
+    stream_menu_button_bounds: Option<egui::Rect>,
     brand_scale: f32,
     input: input::Input,
     dimensions: [usize; 2],
+    stream_fps: u32,
+    stream_stats: Option<(Option<u16>,f32,f32)>,
     options: Options,
     displays: Vec<(String, String)>,
     display: String,
@@ -177,11 +191,18 @@ impl App {
         );
         let client=client_settings::Settings::load();
         let options=client.options();
-        Self {
+        let icon=image::load_from_memory(include_bytes!("../../assets/branding/secpar-icon.png")).expect("Secpar icon")
+            .resize_exact((24.*brand_scale).round().max(1.) as u32,(24.*brand_scale).round().max(1.) as u32,image::imageops::FilterType::Lanczos3).to_rgba8();
+        let mark=cc.egui_ctx.load_texture("Secpar menu",egui::ColorImage::from_rgba_unmultiplied(
+            [icon.width() as usize,icon.height() as usize],icon.as_raw()),TextureOptions::LINEAR);
+        #[allow(unused_mut)]
+        let mut app=Self {
             client,
             shortcut_key: None,
             #[cfg(feature = "ui-review")]
             review_frames: 0,
+            #[cfg(feature="ui-review")]
+            review_commands: None,
             #[cfg(windows)]
             tray: tray::Tray::new(cc),
             updates: updates::Panel::new(),
@@ -199,11 +220,22 @@ impl App {
             decoder: None,
             audio: None,
             audio_error: None,
+            clipboard: None,
+            notice: None,
+            connection_error: None,
             texture: None,
             brand,
+            mark,
+            stream_menu_open: false,
+            menu_page: 0,
+            show_stream_stats: false,
+            stream_menu_bounds: None,
+            stream_menu_button_bounds: None,
             brand_scale,
             input: Default::default(),
             dimensions: [0, 0],
+            stream_fps: 60,
+            stream_stats: None,
             options,
             displays: vec![],
             display: String::new(),
@@ -214,7 +246,17 @@ impl App {
             auto_capture_pending: false,
             video_rect: None, video_layer: None, remote_keyboard: false, pointer_in_video: false,
             observed_fullscreen: None,
+        };
+        #[cfg(feature="ui-review")]
+        if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("stream")) {
+            let (tx,rx)=mpsc::channel(256);app.command=Some(tx);app.review_commands=Some(rx);
+            let image=egui::ColorImage::new([640,360],vec![Color32::from_rgb(37,48,56);640*360]);
+            app.texture=Some(cc.egui_ctx.load_texture("Stream sample",image,TextureOptions::LINEAR));
+            app.dimensions=[1280,720];app.stream_fps=60;app.status="Direct".into();
+            app.client.active_decoder=Some("H.264 · software".into());app.stream_stats=Some((Some(2),18.4,60.));
+            app.stream_menu_open=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("menu"));
         }
+        app
     }
     fn pairing_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         design::surface().show(ui, |ui| {
@@ -300,6 +342,9 @@ impl App {
         let lan_first = self.computer_account.is_some();
         let computer = self.computer.clone();
         self.open_audio();
+        self.clipboard=self.client.clipboard.then(secpar_clipboard::Bridge::start);
+        self.notice=None;self.connection_error=None;
+        self.stream_stats=None;
         let options = Options {
             audio: self.client.audio,
             ..self.options.clone()
@@ -373,7 +418,7 @@ impl App {
         self.auto_capture_pending = false;
         if on && self.fullscreen && self.texture.is_some() && self.command.is_some() {
             self.input.capture();
-            ctx.send_viewport_cmd(ViewportCommand::CursorGrab(CursorGrab::Locked));
+            ctx.send_viewport_cmd(ViewportCommand::CursorGrab(CursorGrab::Confined));
             ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
         } else {
             for event in self.input.release() {
@@ -384,6 +429,7 @@ impl App {
         }
     }
     fn set_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
+        self.stream_menu_open=false;
         self.capture(ctx, false);
         self.fullscreen = on;
         self.remote_keyboard = true;
@@ -393,6 +439,13 @@ impl App {
         else if self.focused && self.texture.is_some() && self.command.is_some() {self.input.free();}
     }
     fn poll(&mut self, ctx: &egui::Context) {
+        if let Some(bridge)=&self.clipboard {
+            match bridge.poll() {
+                Some(secpar_clipboard::Event::Text(text))=>self.send(Command::Clipboard(text)),
+                Some(secpar_clipboard::Event::Unavailable)=>self.notice=Some("Local clipboard is unavailable".into()),
+                None=>{},
+            }
+        }
         if self.audio.as_ref().is_some_and(|audio|audio.failed()) {
             self.audio=None;self.audio_error=Some("Audio output stopped. Check the selected system output and retry.".into());
         }
@@ -427,6 +480,11 @@ impl App {
                         audio.packet(&packet);
                     }
                 }
+                Event::AudioUnavailable(error)=>self.notice=Some(format!("Host audio: {error}")),
+                Event::ClipboardUnavailable(error)=>{self.clipboard=None;self.notice=Some(error);},
+                Event::Clipboard(text)=>{if let Some(bridge)=&self.clipboard {bridge.set(text);}},
+                Event::StreamInfo{width,height,fps}=>{self.dimensions=[width as usize,height as usize];self.stream_fps=fps;},
+                Event::Stats{rtt_ms,mbps,received_fps}=>self.stream_stats=Some((rtt_ms,mbps,received_fps)),
                 Event::Displays(v) => {
                     self.display = v["current"].as_str().unwrap_or("").into();
                     self.displays = v["list"]
@@ -469,6 +527,8 @@ impl App {
                 }
                 Event::Cursor { x, y, visible } => self.cursor = (x, y, visible),
                 Event::Ended(s) => {
+                    self.connection_error=if s=="Disconnected" {None}else{Some(s.clone())};
+                    self.clipboard=None;
                     self.session_account=None;
                     self.capture(ctx, false);
                     self.command = None;
@@ -483,7 +543,8 @@ impl App {
                 }
                 Event::Video(frame) => {
                     let preference = self.client.decoder;
-                    let decoder = self.decoder.get_or_insert_with(|| video::Worker::new(ctx.clone(),preference));
+                    let fps=self.stream_fps;
+                    let decoder = self.decoder.get_or_insert_with(|| video::Worker::with_frame_rate(ctx.clone(),preference,fps));
                     decoder.submit(frame);
                 }
             }
@@ -538,10 +599,35 @@ impl eframe::App for App {
             if released { self.shortcut_key=None; }
         }
         let ready = self.texture.is_some() && self.command.is_some();
+        if ready && self.stream_menu_open && !self.fullscreen {
+            if self.input.enabled {self.capture(ctx,false);}
+            self.remote_keyboard=false;
+            let button=self.stream_menu_button_bounds.unwrap_or_else(||egui::Rect::from_min_size(egui::pos2(12.,12.),egui::vec2(40.,40.)));
+            if raw.events.iter().any(|e|matches!(e,UiEvent::PointerButton{pos,pressed:true,..}
+                if !button.contains(*pos) && !self.stream_menu_bounds.is_some_and(|r|r.contains(*pos)))) {
+                self.stream_menu_open=false;
+            }
+            return;
+        }
         if ready && self.fullscreen {
+            let button=self.stream_menu_button_bounds.unwrap_or_else(||egui::Rect::from_min_size(egui::pos2(12.,12.),egui::vec2(40.,40.)));
+            let pointer=raw.events.iter().rev().find_map(|e|match e {
+                UiEvent::PointerMoved(p)|UiEvent::PointerButton{pos:p,..}=>Some(*p),_=>None
+            }).or_else(||ctx.pointer_latest_pos());
+            let local=self.stream_menu_open || pointer.is_some_and(|p|button.contains(p));
+            if local {
+                if self.input.enabled {self.capture(ctx,false);}
+                self.remote_keyboard=false;
+                if self.stream_menu_open && raw.events.iter().any(|e|matches!(e,UiEvent::PointerButton{pos,pressed:true,..}
+                    if !button.contains(*pos) && !self.stream_menu_bounds.is_some_and(|r|r.contains(*pos)))) {
+                    self.stream_menu_open=false;
+                }
+                return;
+            }
             if !self.input.captured { self.capture(ctx, true); }
             for m in self.input.modifiers(raw.modifiers) { self.send(Command::Input(m)); }
             for event in std::mem::take(&mut raw.events) {
+                if matches!(event,UiEvent::PointerMoved(_)|UiEvent::PointerGone){raw.events.push(event);continue;}
                 for m in self.input.event(&event) { self.send(Command::Input(m)); }
             }
             return;
@@ -587,6 +673,10 @@ impl eframe::App for App {
                     for m in self.input.modifiers(raw.modifiers){self.send(Command::Input(m));}
                     for m in self.input.event(&event){self.send(Command::Input(m));}
                 }
+                UiEvent::Copy|UiEvent::Cut|UiEvent::Paste(_) if self.remote_keyboard=>{
+                    for m in self.input.modifiers(raw.modifiers){self.send(Command::Input(m));}
+                    for m in self.input.event(&event){self.send(Command::Input(m));}
+                }
                 UiEvent::MouseMoved(_) => {}, // free mode uses absolute positions, never raw deltas
                 _ => local.push(event),
             }
@@ -622,7 +712,7 @@ impl eframe::App for App {
         self.poll(ctx);
         self.account.poll();
         if std::mem::take(&mut self.account.signed_out) && self.computer_account.is_some() {
-            self.capture(ctx,false); self.send(Command::Stop);
+            self.clipboard=None;self.capture(ctx,false); self.send(Command::Stop);
             self.computer=None; self.computer_account=None; self.owned_connecting=None;
         }
         if self.command.is_none() {
@@ -655,7 +745,7 @@ impl eframe::App for App {
         if self.command.is_none() && self.input.enabled {
             self.capture(ctx, false);
         }
-        if !(self.fullscreen && self.input.captured) {
+        if self.command.is_none() {
             egui::TopBottomPanel::top("toolbar")
                 .frame(
                     egui::Frame::new()
@@ -770,6 +860,17 @@ impl eframe::App for App {
                     });
                 });
         }
+        if self.command.is_none() {
+            if let Some(error)=self.connection_error.clone() {
+                egui::TopBottomPanel::top("connection-error").show(ctx,|ui|{
+                    ui.horizontal_wrapped(|ui|{
+                        ui.colored_label(Color32::from_rgb(255,160,140),&error);
+                        if ui.small_button("Copy error").clicked(){ui.ctx().copy_text(error);}
+                        if ui.small_button("Dismiss").clicked(){self.connection_error=None;}
+                    });
+                });
+            }
+        }
 
         egui::CentralPanel::default()
             .frame(
@@ -797,6 +898,8 @@ impl eframe::App for App {
                         egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
                         Color32::WHITE,
                     );
+                    #[cfg(feature="ui-review")]
+                    if self.review_commands.is_some() {ui.painter().text(picture.center(),egui::Align2::CENTER_CENTER,"Stream layout sample",egui::FontId::proportional(16.),design::MUTED);}
                     if self.cursor.2 && (self.input.captured || !self.pointer_in_video) {
                         let p = picture.min
                             + egui::vec2(self.cursor.0 as f32, self.cursor.1 as f32) * scale;
@@ -878,6 +981,7 @@ impl eframe::App for App {
                 }
             });
         if self.command.is_some() {
+            self.stream_menu(ctx);
             ctx.request_repaint_after(Duration::from_millis(8));
         }
         #[cfg(feature = "ui-review")]

@@ -157,28 +157,28 @@ impl Capture {
         options: VideoOptions,
         portal: Option<Arc<Portal>>,
     ) -> Result<Self, String> {
-        let mut attempted = false;
+        let mut failures = Vec::new();
         for encoder in candidates(&options) {
             if gst::ElementFactory::find(encoder.factory).is_none() {
                 continue;
             }
-            attempted = true;
-            let pipeline =
-                match gst::parse::launch(&description(source, &encoder, &options, native))
-                    .ok()
-                    .and_then(|p| p.downcast::<gst::Pipeline>().ok())
-                {
-                    Some(p) => p,
-                    None => continue,
-                };
+            let pipeline = match gst::parse::launch(&description(source, &encoder, &options, native)) {
+                Ok(p) => match p.downcast::<gst::Pipeline>() {
+                    Ok(p) => p,
+                    Err(_) => {failures.push(format!("{}: invalid capture pipeline",encoder.factory));continue;}
+                },
+                Err(error) => {failures.push(format!("{}: {error}",encoder.factory));continue;}
+            };
             let Some(sink) = pipeline
                 .by_name("output")
                 .and_then(|e| e.downcast::<AppSink>().ok())
             else {
+                failures.push(format!("{}: missing encoded output",encoder.factory));
                 let _ = pipeline.set_state(gst::State::Null);
                 continue;
             };
             if pipeline.set_state(gst::State::Playing).is_err() {
+                failures.push(format!("{}: {}",encoder.factory,pipeline_error(&pipeline).unwrap_or_else(||"could not start capture".into())));
                 let _ = pipeline.set_state(gst::State::Null);
                 continue;
             }
@@ -200,10 +200,11 @@ impl Capture {
                     capture.first = Some(frame);
                     return Ok(capture);
                 }
-                _ => continue,
+                Ok(None) => failures.push(format!("{}: no encoded frame received within 2 seconds",encoder.factory)),
+                Err(error) => failures.push(format!("{}: {error}",encoder.factory)),
             }
         }
-        Err(if attempted {"Could not start an encoder for the selected monitor. Check GStreamer/PipeWire and the GPU driver."}else{"No compatible GStreamer encoder is installed. Install gst-plugins-ugly (x264) or the VA/NVENC plugins."}.into())
+        Err(if failures.is_empty() {"No compatible GStreamer encoder is installed. Install gst-plugins-ugly (x264) or the VA/NVENC plugins.".into()}else{format!("Could not start desktop capture: {}",failures.join("; "))})
     }
     pub fn size(&self) -> (u32, u32) {
         self.size
@@ -233,14 +234,7 @@ impl Capture {
         let Some(sample) = self.sink.try_pull_sample(gst::ClockTime::from_nseconds(
             timeout.as_nanos().min(u64::MAX as u128) as u64,
         )) else {
-            if let Some(bus) = self.pipeline.bus() {
-                if bus
-                    .pop_filtered(&[gst::MessageType::Error, gst::MessageType::Eos])
-                    .is_some()
-                {
-                    return Err("Desktop capture stopped. Select a monitor again.".into());
-                }
-            }
+            if let Some(error) = pipeline_error(&self.pipeline) {return Err(error);}
             return Ok(None);
         };
         let buffer = sample.buffer().ok_or("Encoder returned an empty sample.")?;
@@ -278,6 +272,13 @@ impl Capture {
             capture_us: crate::now_us().saturating_sub(age),
         }))
     }
+}
+fn pipeline_error(pipeline: &gst::Pipeline) -> Option<String> {
+    let message=pipeline.bus()?.pop_filtered(&[gst::MessageType::Error,gst::MessageType::Eos])?;
+    Some(match message.view() {
+        gst::MessageView::Error(error)=>format!("{}: {}",error.src().map(|s|s.name().to_string()).unwrap_or_else(||"capture".into()),error.error()),
+        _=>"Desktop capture ended before another frame was available".into(),
+    })
 }
 impl Drop for Capture {
     fn drop(&mut self) {
@@ -337,5 +338,14 @@ mod tests {
             }
         }
         assert!(key, "On-demand recovery keyframe");
+    }
+    #[test]
+    fn startup_preserves_the_actual_capture_failure() {
+        gst::init().unwrap();
+        let options=VideoOptions {width:320,height:180,fps:30,kbps:2000,codecs:vec!["h264".into()]};
+        let result=Capture::from_source("secpar_missing_capture_source",(320,180),options,None);
+        let error=result.err().expect("Missing synthetic source must fail");
+        assert!(error.contains("secpar_missing_capture_source"),"{error}");
+        assert!(error.contains("264enc"),"Encoder attempt must be identified: {error}");
     }
 }

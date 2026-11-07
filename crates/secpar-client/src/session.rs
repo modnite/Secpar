@@ -21,6 +21,8 @@ pub enum Command {
     Stop,
     Keyframe,
     Display(String),
+    Clipboard(String),
+    ClipboardSharing(bool),
 }
 pub enum Event {
     Paired(Computer),
@@ -31,6 +33,11 @@ pub enum Event {
     Displays(Value),
     Cursor { x: i16, y: i16, visible: bool },
     Ended(String),
+    Clipboard(String),
+    ClipboardUnavailable(String),
+    AudioUnavailable(String),
+    StreamInfo {width:u32,height:u32,fps:u32},
+    Stats {rtt_ms:Option<u16>,mbps:f32,received_fps:f32},
 }
 #[derive(Clone)]
 pub struct Options {
@@ -40,6 +47,7 @@ pub struct Options {
     pub max_kbps: u32,
     pub discover_public: bool,
     pub audio: bool,
+    pub clipboard: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -50,6 +58,7 @@ impl Default for Options {
             max_kbps: 30_000,
             discover_public: true,
             audio: true,
+            clipboard: true,
         }
     }
 }
@@ -273,6 +282,8 @@ pub async fn run(
     let (peer, mut packets) = Peer::new(socket);
     let mut peer = peer;
     control::send(&mut conn.socket,json!({"t":"stream.start","w":options.width,"h":options.height,"fps":options.fps,"maxKbps":options.max_kbps,"codecs":["h264"],"audio":options.audio,"cands":cands,"display":""})).await?;
+    let mut clipboard_enabled=options.clipboard;
+    if clipboard_enabled {control::send(&mut conn.socket,json!({"t":"clip.sub","on":true})).await?;}
     let mut receiver = None::<Receiver>;
     let mut session_id = None;
     let mut peer_t = 0u64;
@@ -291,12 +302,20 @@ pub async fn run(
     let (turn_tx, mut turn_rx) = mpsc::channel::<Option<SocketAddrV4>>(1);
     let mut inputs = std::collections::VecDeque::new();
     let mut input_id = 0u64;
+    let (mut stats_at,mut stats_bytes,mut stats_frames,mut rtt_known)=(Instant::now(),0u64,0u32,false);
     let result:Result<(),String>=async {loop{
         tokio::select!{
             command=commands.recv()=>match command{
                 None|Some(Command::Stop)=>break Ok(()),
                 Some(Command::Display(id))=>control::send(&mut conn.socket,json!({"t":"stream.display","id":id})).await?,
                 Some(Command::Keyframe)=>if let Some(r)=receiver.as_mut(){emit(r,&peer,Type::Idr,&[])?;},
+                Some(Command::Clipboard(text))=>if clipboard_enabled && text.len()<=1_000_000 {
+                    control::send(&mut conn.socket,json!({"t":"clip","mime":"text/plain","data":text})).await?;
+                },
+                Some(Command::ClipboardSharing(on))=>{
+                    clipboard_enabled=on;
+                    control::send(&mut conn.socket,json!({"t":"clip.sub","on":on})).await?;
+                },
                 Some(Command::Input(mut value))=>{
                     let typ=value["t"].as_str().unwrap_or("");
                     if !matches!(typ,"key"|"mouse.move"|"mouse.button"|"mouse.scroll"|"mouse.pos"|"pad"|"pad.off"){continue;}
@@ -314,6 +333,11 @@ pub async fn run(
                 match v["t"].as_str().unwrap_or(""){
                     "stream.ready"=>{
                         if v["codec"]!="h264"{return Err("Host did not negotiate H.264".into());}
+                        notify(&events,Event::StreamInfo {
+                            width:v["w"].as_u64().unwrap_or(options.width as u64).clamp(1,8192) as u32,
+                            height:v["h"].as_u64().unwrap_or(options.height as u64).clamp(1,8192) as u32,
+                            fps:v["fps"].as_u64().unwrap_or(options.fps as u64).clamp(1,240) as u32,
+                        }).await?;
                         let id=v["session"].as_u64().and_then(|v|u32::try_from(v).ok()).ok_or("Invalid stream session")?;
                         if session_id!=Some(id){
                             let key: [u8;32]=base64::engine::general_purpose::STANDARD.decode(v["key"].as_str().ok_or("Missing stream key")?).map_err(|_|"Invalid stream key")?.try_into().map_err(|_|"Invalid stream key length")?;
@@ -330,21 +354,30 @@ pub async fn run(
                             if let Ok(png)=base64::engine::general_purpose::STANDARD.decode(encoded){notify(&events,Event::CursorShape{png,hotspot:[hx,hy]}).await?;}
                         }
                     },
+                    "clip"=>if clipboard_enabled && v["mime"]=="text/plain" {
+                        if let Some(text)=v["data"].as_str().filter(|s|s.len()<=1_000_000){notify(&events,Event::Clipboard(text.into())).await?;}
+                    },
+                    "error" if v["code"]=="audio_unavailable"=>notify(&events,Event::AudioUnavailable(v["msg"].as_str().unwrap_or("Host audio is unavailable").into())).await?,
+                    "error" if matches!(v["of"].as_str(),Some("clip"|"clip.sub"))=>{
+                        clipboard_enabled=false;
+                        notify(&events,Event::ClipboardUnavailable(v["msg"].as_str().unwrap_or("Clipboard sharing is unavailable on the host").into())).await?;
+                    },
                     "stream.error"|"error"=>return Err(v["msg"].as_str().unwrap_or("Host refused the stream").to_string()),
                     _=>{},
                 }
             },
             Some(packet)=packets.recv()=>{
                 let Some(r)=receiver.as_mut()else{continue;};let Some((h,plain))=r.open(&packet.data)else{continue;};
+                stats_bytes=stats_bytes.saturating_add(packet.data.len() as u64);
                 let route=Some((packet.from,packet.relayed));
                 if peer.confirmed!=route {peer.confirmed=route;notify(&events,Event::Status(if packet.relayed{"Relay"}else{"Direct"}.into())).await?;}
                 last_packet=Instant::now();
                 if high_seq.is_none() && matches!(h.typ,Type::Video|Type::Fec){report_base=h.seq;high_seq=Some(h.seq);}
                 if let Some(high)=high_seq.as_mut(){*high=(*high).max(h.seq);received=received.saturating_add(1);}
                 match h.typ{
-                    Type::Video|Type::Fec=>if let Some(frame)=r.assembler.push(h,plain,Instant::now()){last_frame=frame.id;notify(&events,Event::Video(frame)).await?;},
+                    Type::Video|Type::Fec=>if let Some(frame)=r.assembler.push(h,plain,Instant::now()){last_frame=frame.id;stats_frames+=1;notify(&events,Event::Video(frame)).await?;},
                     Type::Audio if plain.len()>8 => notify(&events,Event::Audio(plain[8..].to_vec())).await?,
-                    Type::Probe if plain.len()>=16=>{peer_t=u64::from_be_bytes(plain[..8].try_into().unwrap());let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{rtt=((now-echo)/1000).min(u16::MAX as u64) as u16;}},
+                    Type::Probe if plain.len()>=16=>{peer_t=u64::from_be_bytes(plain[..8].try_into().unwrap());let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{rtt=((now-echo)/1000).min(u16::MAX as u64) as u16;rtt_known=true;}},
                     Type::Cursor if plain.len()>=5=>notify(&events,Event::Cursor{x:i16::from_be_bytes(plain[..2].try_into().unwrap()),y:i16::from_be_bytes(plain[2..4].try_into().unwrap()),visible:plain[4]!=0}).await?,
                     Type::Bye=>return Err("Host ended the stream".into()),
                     _=>{},
@@ -352,6 +385,11 @@ pub async fn run(
             },
             Some(relayed)=turn_rx.recv()=>if let Some(c)=relayed{control::send(&mut conn.socket,json!({"t":"stream.cand","c":c.to_string()})).await?;},
             _=tick.tick()=>{
+                if stats_at.elapsed()>=Duration::from_secs(1) {
+                    let seconds=stats_at.elapsed().as_secs_f32();
+                    notify(&events,Event::Stats{rtt_ms:rtt_known.then_some(rtt),mbps:stats_bytes as f32*8./seconds/1_000_000.,received_fps:stats_frames as f32/seconds}).await?;
+                    stats_at=Instant::now();stats_bytes=0;stats_frames=0;
+                }
                 if start.elapsed()>Duration::from_secs(20) && last_packet.elapsed()>Duration::from_secs(15){return Err("No authenticated stream packets reached this client".into());}
                 if let Some(r)=receiver.as_mut(){
                     r.assembler.tick(Instant::now());

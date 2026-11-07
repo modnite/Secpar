@@ -9,6 +9,7 @@ publish = false
 secpar-host-core = { path = "../secpar-host-core" }
 secpar-stream = { path = "../secpar-stream" }
 secpar-network = { path = "../secpar-network" }
+secpar-clipboard = { path = "../secpar-clipboard" }
 base64 = "0.23.1"
 ring = "0.17.14"
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }

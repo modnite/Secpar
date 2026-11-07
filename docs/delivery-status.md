@@ -1,5 +1,49 @@
 # Secpar delivery record
 
+## IN PROGRESS — 3.11.0 candidates, 2026-11-07
+
+User wants ONE top-left translucent stream menu in WINDOWED AND FULLSCREEN on
+all clients. Desktop streaming toolbar and Android right-edge handle removed;
+Android More keys contains shortcut/media submenus; Disconnect is the final red row.
+Flat icon rows and submenus follow the reviewed Parsec reference. Optional stats
+float separately: negotiated resolution/FPS, actual decoder, route and measured
+RTT/receive bitrate/FPS. Display/fullscreen, clipboard and Audio live in the menu.
+Ctrl+C/X/V were intercepted by egui as Copy/Cut/Paste; new input handling forwards
+remote chords. Text clipboard now uses a separate secpar-clipboard worker on both
+desktop clients and Linux host; OS operations never run on video/UI thread. First
+clipboard is seeded, not exported; remote writes suppress echoes;1MB limit. Existing
+Linux profiles migrate clipboard support once, later explicit opt-out preserved.
+Windows/Linux real control+UDP integration proves bidirectional clipboard and
+optional host audio errors do not kill video. Persistent connection errors with
+Copy error replace silent list return. Linux host capture errors retain encoder/
+plugin details; async audio errors no longer spin forever. Native monitor discovery
+replaces pactl dependency and never falls back to microphone; isolated native
+monitor gate passes with PATH excluding all external tools.
+
+IMPORTANT new Linux3.10.1 regression feedback: ~2fps video remains choppy with
+audio OFF. User confirms SOFTWARE decoding RESTORES smooth playback. Hardware
+sample probe proved only compatibility. Added sustained actual-frame-budget native
+decode fallback using negotiated FPS; real delayed GStreamer native pipeline test
+recovers at fresh software keyframe. Physical Automatic fallback still unverified.
+Do not undo accepted desktop-service audio or Android alignment baseline.
+
+Gates: latest flat-list Android menu passes13 instrumentation checks, including
+injected dock mouse clicks, PiP, return alignment and video surface pacing;
+252 JVM checks passed before the UI-only revision. Windows32 pass/1 keychain
+ignored. Native Linux desktop36 pass/4 environment checks ignored by default;
+host17 pass/1 native-monitor check explicitly passes separately. Transport10 pass.
+Actual isolated Sway/Wayland clipboard Unicode/multiline/echo check passes.
+Desktop640x400 and Android1024x700 screenshots reviewed; no clipped main-menu
+controls. All packages versioned3.11.0, Android code527. Production packages and
+final bundled-runtime gates are next. No public3.11 release/install yet.
+Original Secpar3.9 Windows service remains running; preserve connected sessions.
+
+Research completed: Parsec overlay/stats, immersive mode, hotkeys, connectivity,
+feature matrix; original Secpar help in cloud/site/public/help, linked from menus
+and site. docs/writing-style.md + AGENTS persist anti-fluff writing requirements.
+No copied articles/screenshots or fake metrics. Claude remains macOS owner.
+Linux remote relay connector/media, friends/controllers remain later scope.
+
 ## UNRELEASED — shared relay control, after accepted3.10.1
 
 Added secpar_host_core::agent::relay::serve: Worker envelopes to real authenticated

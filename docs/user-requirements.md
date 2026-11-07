@@ -1,5 +1,22 @@
 # Secpar: persistent user requirements
 
+Latest correction: floating top-left stream menu in WINDOWED AND FULLSCREEN
+on desktop and Android. Remove desktop windowed streaming toolbar strip and
+Android right-edge handle. Ctrl+C/X/V currently fail on Windows client because
+eframe emits Copy/Cut/Paste events; translate those to remote shortcuts.
+
+Latest work, 2026-11-07: top-left translucent fullscreen stream menu required on
+BOTH desktop and Android. Remove Android right-edge handle; move its controls into
+that menu. Research/adapt relevant Parsec support docs into original Secpar app
+and site help. Persist researched writing rules in docs/writing-style.md.
+Windows/Linux text clipboard needs implementation both directions. Windows client
+cannot finish Linux hosting after KDE consent; optional host-audio failure is
+incorrectly fatal in client, actual capture diagnostics were also being hidden.
+Linux3.10.1 video regression: STILL CHOPPY with audio OFF; user confirms SOFTWARE
+decoding RESTORES smooth playback. Hardware path is implicated; protect software
+and accepted audio. Add actual negotiated-rate decode budget fallback rather than
+claiming128px hardware sample proves streaming performance. Other scope stays.
+
 Accepted 2026-11-07: user confirms Linux3.10.1 audio plays and Android3.10.1
 Home stays aligned on YouTube/PiP return. Preserve this accepted baseline;
 do not repeat those acceptance questions. Continue remaining platform work.

@@ -30,6 +30,14 @@ enum Backend {
     Hardware(linux::Hardware),
 }
 enum DecodeError { Invalid, Dimensions }
+struct DecodeBudget { limit:Duration, slow:u8 }
+impl DecodeBudget {
+    fn new(fps:u32)->Self {Self {limit:Duration::from_secs_f64(1.5/fps.clamp(1,240) as f64),slow:0}}
+    fn exceeded(&mut self,elapsed:Duration)->bool {
+        self.slow=if elapsed>self.limit {self.slow.saturating_add(1)}else{0};
+        self.slow>=3
+    }
+}
 impl Backend {
     fn new(preference:Preference) -> Result<Self,()> {
         #[cfg(target_os="linux")]
@@ -99,10 +107,18 @@ pub struct Worker {
     thread: Option<JoinHandle<()>>,
 }
 impl Worker {
+    #[cfg(test)]
     pub fn new(ctx: Context, preference:Preference) -> Self {
-        Self::spawn(ctx,move|| Backend::new(preference))
+        Self::with_frame_rate(ctx,preference,60)
     }
+    pub fn with_frame_rate(ctx:Context,preference:Preference,fps:u32) -> Self {
+        Self::spawn_at_rate(ctx,fps,move||Backend::new(preference))
+    }
+    #[cfg(all(test,target_os="linux"))]
     fn spawn(ctx:Context, create:impl FnOnce()->Result<Backend,()>+Send+'static) -> Self {
+        Self::spawn_at_rate(ctx,60,create)
+    }
+    fn spawn_at_rate(ctx:Context,fps:u32,create:impl FnOnce()->Result<Backend,()>+Send+'static)->Self {
         let state = Arc::new((Mutex::new(State { waiting_key: true, ..Default::default() }), Condvar::new()));
         let shared = state.clone();
         let thread = std::thread::spawn(move || {
@@ -116,6 +132,8 @@ impl Worker {
                 }
             };
             let mut missing_output = 0;
+            let mut budget=DecodeBudget::new(fps);
+            let mut slow_fallback=false;
             loop {
                 let (frame, generation) = {
                     let state = lock.lock().unwrap();
@@ -123,7 +141,13 @@ impl Worker {
                     if state.stopped { break; }
                     (state.queue.pop_front().unwrap(), state.generation)
                 };
+                let started=Instant::now();
                 let mut decoded = decoder.decode(&frame.data);
+                if decoder.is_hardware() && budget.exceeded(started.elapsed()) {
+                    // A small capability sample proves compatibility, not real
+                    // stream throughput. Include native decode and GPU readback.
+                    slow_fallback=true;decoded=Err(DecodeError::Invalid);
+                }
                 if decoder.is_hardware() && matches!(decoded,Ok(None)) {
                     missing_output += 1;
                     if missing_output >= 4 { decoded=Err(DecodeError::Invalid); }
@@ -151,7 +175,7 @@ impl Worker {
                 };
                 let mut state = lock.lock().unwrap();
                 if generation == state.generation && !state.stopped {
-                    if let Some(image) = image { state.image = Some(image); state.backend=Some(decoder.label()); }
+                    if let Some(image) = image { state.image = Some(image); state.backend=Some(if slow_fallback {"H.264 · software (VA-API too slow)"}else{decoder.label()}); }
                 }
                 drop(state);
                 ctx.request_repaint();
@@ -184,6 +208,17 @@ impl Drop for Worker {
 mod tests {
     use super::*;
     use secpar_stream::frame::{Codec, FrameHeader};
+    #[test]
+    fn hardware_budget_ignores_a_single_spike_but_rejects_sustained_slow_decode() {
+        let mut budget=DecodeBudget::new(60);
+        assert!(!budget.exceeded(Duration::from_millis(500)));
+        assert!(!budget.exceeded(Duration::from_millis(5)));
+        assert!(!budget.exceeded(Duration::from_millis(100)));
+        assert!(!budget.exceeded(Duration::from_millis(100)));
+        assert!(budget.exceeded(Duration::from_millis(100)));
+        let mut lower_rate=DecodeBudget::new(30);
+        for _ in 0..10 {assert!(!lower_rate.exceeded(Duration::from_millis(30)));}
+    }
     fn frame(id:u32,key:bool) -> VideoFrame {
         VideoFrame { id, header:FrameHeader {len:1,capture_us:0,keyframe:key,codec:Codec::H264},data:vec![0] }
     }
@@ -224,6 +259,34 @@ mod tests {
         }
         let start=Instant::now(); drop(worker);
         assert!(start.elapsed()<Duration::from_secs(1),"Idle decoder failed to stop");
+    }
+    #[cfg(target_os="linux")]
+    #[test]
+    fn slow_native_decoder_recovers_with_software_at_a_fresh_keyframe() {
+        use openh264::{encoder::Encoder,formats::{RgbSliceU8,YUVBuffer}};
+        let rgb:Vec<u8>=(0..128*128).flat_map(|_|[40,200,20]).collect();
+        let yuv=YUVBuffer::from_rgb_source(RgbSliceU8::new(&rgb,(128,128)));
+        let packet=Encoder::new().unwrap().encode(&yuv).unwrap().to_vec();
+        // Real native decode with a 50ms downstream delay, rather than a GPU claim.
+        let worker=Worker::spawn_at_rate(Context::default(),60,||linux::Hardware::open("openh264dec ! identity sleep-time=50000").map(Backend::Hardware));
+        let until=Instant::now()+Duration::from_secs(5);
+        for id in 0..3 {
+            let mut f=frame(id,true);f.data=packet.clone();f.header.len=f.data.len() as u32;worker.submit(f);
+            loop {
+                let output=worker.output();assert!(output.error.is_none());
+                if output.request_key || output.image.is_some(){break;}
+                assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let mut f=frame(4,true);f.data=packet;f.header.len=f.data.len() as u32;worker.submit(f);
+        loop {
+            let output=worker.output();assert!(output.error.is_none());
+            if let Some(image)=output.image {
+                assert_eq!(image.size,[128,128]);
+                assert_eq!(output.backend,Some("H.264 · software (VA-API too slow)"));break;
+            }
+            assert!(Instant::now()<until,"Slow native decode did not recover");std::thread::sleep(Duration::from_millis(5));
+        }
     }
     #[cfg(target_os="linux")]
     #[test]

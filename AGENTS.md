@@ -106,3 +106,10 @@ recovery still fails; do not call it fixed. Prioritize shared host regression an
 real audio recovery, then Linux decoder acceleration. Linux wordmark/logo look
 jagged: fix high-quality physical-pixel downsampling while retaining approved art.
 Additional prompts accumulate; never drop previous scope due to steering.
+
+Read docs/writing-style.md before app/site/help copy changes. User explicitly
+requires plain, original writing without canned AI phrasing or promotional fluff.
+
+For Windows Python text writes, specify UTF-8 and LF newlines (or write UTF-8
+bytes). Default newline conversion creates broad CRLF diffs; default encoding
+can corrupt punctuation. Keep patches focused.

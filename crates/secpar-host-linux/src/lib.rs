@@ -5,6 +5,8 @@ pub mod account;
 pub mod backend;
 #[cfg(target_os = "linux")]
 pub mod capture;
+#[cfg(target_os = "linux")]
+mod clipboard;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub mod input;

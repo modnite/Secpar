@@ -43,3 +43,5 @@ footer{border-top:1px solid var(--line);display:flex;align-items:center;gap:36px
  .open-source{display:block;margin-top:66px;padding-top:35px;padding-bottom:38px}.open-source>div+div{margin-top:24px}.open-source>div>p:not(.eyebrow){font-size:14px}footer{display:block;padding-top:26px;padding-bottom:28px}footer p{margin:16px 0}footer>div{gap:20px;flex-wrap:wrap}.button{font-size:14px}.button.primary{min-height:48px}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}a{transition:none}}
+
+@media(max-width:600px){.nav nav{gap:14px}.nav .brand img{width:114px}.nav nav .button{padding:9px 12px;gap:8px}}

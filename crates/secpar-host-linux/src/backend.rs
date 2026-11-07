@@ -121,7 +121,7 @@ impl Backend {
             "set_config" => {
                 let config: Config = serde_json::from_value(args["config"].clone())
                     .map_err(|_| "Invalid hosting settings")?;
-                self.store.lock().unwrap().set_config(config).map_err(|_|"This Linux preview supports local owner streaming; remote relay, files and clipboard are not enabled")?;
+                self.store.lock().unwrap().set_config(config).map_err(|_|"Remote hosting and file transfers are not enabled on Linux yet")?;
                 Ok(Value::Null)
             }
             "new_qr" => {
@@ -178,7 +178,7 @@ impl Handlers for Backend {
         Box::pin(async move { pc })
     }
     fn caps(&self) -> Vec<String> {
-        vec!["stream".into(), "input".into()]
+        vec!["stream".into(), "input".into(), "clip".into()]
     }
     fn session(&self, _device: &str, out: Outbox) -> Box<dyn Session> {
         let (cancel, _) = watch::channel(false);
@@ -188,6 +188,7 @@ impl Handlers for Backend {
             state: Arc::new(Mutex::new(State::default())),
             out,
             cancel,
+            clipboard: None,
         })
     }
 }
@@ -198,6 +199,7 @@ struct State {
     generation: u64,
 }
 struct OwnerSession {
+    clipboard: Option<crate::clipboard::Sharing>,
     store: Arc<Mutex<Store>>,
     active: Arc<secpar_host_core::limits::StreamSlots>,
     state: Arc<Mutex<State>>,
@@ -277,6 +279,24 @@ impl OwnerSession {
 impl Session for OwnerSession {
     fn on_msg(&mut self, msg: ClientMsg) -> Option<ServerMsg> {
         match msg {
+            ClientMsg::ClipSub{on}=>{
+                if !on {self.clipboard=None;return None;}
+                if !self.store.lock().unwrap().config().allow_clip {
+                    return Some(ServerMsg::error("unsupported","Clipboard sharing is off in Hosting settings",Some("clip.sub")));
+                }
+                if self.clipboard.is_none(){self.clipboard=Some(crate::clipboard::Sharing::start(self.store.clone(),self.out.clone()));}
+                None
+            }
+            ClientMsg::Clip{mime,data}=>{
+                if mime!="text/plain" || !secpar_clipboard::valid(&data) {
+                    return Some(ServerMsg::error("bad_request","Clipboard supports text up to 1 MB",Some("clip")));
+                }
+                if !self.store.lock().unwrap().config().allow_clip {
+                    return Some(ServerMsg::error("unsupported","Clipboard sharing is off in Hosting settings",Some("clip")));
+                }
+                if self.clipboard.as_ref().is_some_and(|sharing|sharing.set(data)) {None}
+                else {Some(ServerMsg::error("clipboard_unavailable","Clipboard sharing is unavailable",Some("clip")))}
+            }
             ClientMsg::StreamStart {
                 w,
                 h,

@@ -78,6 +78,9 @@ impl Input {
             return vec![];
         }
         match event {
+            Event::Copy => self.clipboard_chord(0x43),
+            Event::Cut => self.clipboard_chord(0x58),
+            Event::Paste(_) => self.clipboard_chord(0x56),
             Event::Key {
                 key,
                 physical_key,
@@ -146,6 +149,15 @@ impl Input {
             _ => vec![],
         }
     }
+    fn clipboard_chord(&self,vk:u32)->Vec<Value> {
+        let held=self.held.contains(&0x11);
+        let mut out=vec![];
+        if !held {out.push(json!({"t":"key","vk":0x11,"down":true}));}
+        out.push(json!({"t":"key","vk":vk,"down":true}));
+        out.push(json!({"t":"key","vk":vk,"down":false}));
+        if !held {out.push(json!({"t":"key","vk":0x11,"down":false}));}
+        out
+    }
 }
 fn vk(key: Key) -> Option<u32> {
     let name = format!("{key:?}");
@@ -198,6 +210,18 @@ fn vk(key: Key) -> Option<u32> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn toolkit_clipboard_events_forward_remote_shortcuts_without_releasing_held_control() {
+        let mut input=super::Input::default();input.free();
+        let copy=input.event(&eframe::egui::Event::Copy);
+        assert_eq!(copy.iter().map(|v|(v["vk"].as_u64().unwrap(),v["down"].as_bool().unwrap())).collect::<Vec<_>>(),
+            vec![(0x11,true),(0x43,true),(0x43,false),(0x11,false)]);
+        input.modifiers(eframe::egui::Modifiers::default());
+        input.modifiers(eframe::egui::Modifiers{ctrl:true,..Default::default()});
+        let paste=input.event(&eframe::egui::Event::Paste("Synthetic text".into()));
+        assert_eq!(paste.len(),2);assert_eq!(paste[0]["vk"],0x56);assert_eq!(paste[1]["down"],false);
+        assert!(input.release().iter().any(|v|v["vk"]==0x11 && v["down"]==false));
+    }
     use super::*;
     #[test]
     fn release_lifts_held_keys_and_buttons() {

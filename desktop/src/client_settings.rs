@@ -10,13 +10,13 @@ pub enum CaptureShortcut { #[default] CtrlAltG, CtrlShiftG, CtrlAltZ }
 #[serde(default)]
 pub struct Settings {
     pub width:u32, pub height:u32, pub fps:u32, pub kbps:u32,
-    pub audio:bool, pub shortcut:CaptureShortcut,
+    pub audio:bool, pub clipboard:bool, pub shortcut:CaptureShortcut,
     pub decoder:video::Preference,
     #[serde(skip)] pub active_decoder:Option<String>,
     #[serde(skip)] note:String,
 }
 impl Default for Settings {
-    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),active_decoder:None,note:String::new()}}
+    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),active_decoder:None,note:String::new()}}
 }
 fn path()->Option<PathBuf> {
     #[cfg(windows)]
@@ -44,7 +44,7 @@ impl Settings {
         self.note=if result.is_some(){String::new()}else{"Could not save client settings".into()};
     }
     pub fn options(&self)->secpar_client::session::Options {
-        secpar_client::session::Options{width:self.width,height:self.height,fps:self.fps,max_kbps:self.kbps,audio:self.audio,..Default::default()}
+        secpar_client::session::Options{width:self.width,height:self.height,fps:self.fps,max_kbps:self.kbps,audio:self.audio,clipboard:self.clipboard,..Default::default()}
     }
     pub fn ui(&mut self,ui:&mut egui::Ui)->bool {
         let old=self.clone();
@@ -89,6 +89,7 @@ impl Settings {
                 c[0].label("Fullscreen");
                 c[0].label("Alt+F");
                 c[1].label("Audio");c[1].checkbox(&mut self.audio,"Play host audio");
+                c[0].checkbox(&mut self.clipboard,"Share text clipboard");
             });
         });
         if !self.note.is_empty(){ui.label(&self.note);}

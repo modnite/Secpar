@@ -29,6 +29,8 @@ async fn streams_with_packet_loss_and_sends_authenticated_input() {
             let start:Value=serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();assert_eq!(start["t"],"stream.start");assert_eq!(start["codecs"],json!(["h264"]));
             let crypt=Crypt::new(&[251;32],42);
             ws.send(Message::text(json!({"t":"stream.ready","codec":"h264","w":320,"h":240,"fps":60,"port":stream_addr.port(),"session":42,"key":base64::engine::general_purpose::STANDARD.encode([251;32]),"cands":[stream_addr.to_string()]}).to_string())).await.unwrap();
+            ws.send(Message::text(json!({"t":"error","code":"audio_unavailable","of":"stream.start","msg":"Synthetic audio source unavailable"}).to_string())).await.unwrap();
+            ws.send(Message::text(json!({"t":"clip","mime":"text/plain","data":"Host clipboard fixture"}).to_string())).await.unwrap();
             let mut b=[0;2048];
             let(n,peer)=udp.recv_from(&mut b).await.unwrap();let(h,probe)=crypt.open(Dir::PhoneToHost,&b[..n]).unwrap();assert_eq!(h.typ,Type::Probe);
             let mut echo=100u64.to_be_bytes().to_vec();echo.extend_from_slice(&probe[..8]);
@@ -40,19 +42,28 @@ async fn streams_with_packet_loss_and_sends_authenticated_input() {
             let mut packets=frame::packetize(7,&fh,&payload,30);packets.remove(0);packets.reverse();
             for(i,(mut h,data))in packets.into_iter().enumerate(){h.seq=i as u32+3;let sealed=crypt.seal(Dir::HostToPhone,&h,&data);udp.send_to(&sealed,peer).await.unwrap();udp.send_to(&sealed,peer).await.unwrap();}
             loop{let(n,_)=udp.recv_from(&mut b).await.unwrap();let Some((h,p))=crypt.open(Dir::PhoneToHost,&b[..n])else{continue;};if h.typ==Type::Input{let input:Value=serde_json::from_slice(&p).unwrap();assert_eq!(input[0]["t"],"key");assert_eq!(input[0]["vk"],65);assert_eq!(input[0]["i"],1);assert_eq!(input[0]["down"],true);tx_ack.send(()).unwrap();break;}}
-            loop{let m=ws.next().await.unwrap().unwrap();if let Message::Text(t)=m{let v:Value=serde_json::from_str(&t).unwrap();if v["t"]=="stream.stop"{break;}}}
+            let mut copied=false;
+            loop{let m=ws.next().await.unwrap().unwrap();if let Message::Text(t)=m{let v:Value=serde_json::from_str(&t).unwrap();
+                if v["t"]=="clip" {assert_eq!(v["data"],"Client clipboard fixture");copied=true;}
+                if v["t"]=="stream.stop"{assert!(copied,"Client clipboard must use reliable control path");break;}}}
             let _=ws.close(None).await;
         });
         let p=Pairing{name:"Fixture".into(),hosts:vec!["127.0.0.1".into()],port,fingerprint:pin,otp:"once".into(),relay_url:None,pc_id:Some("pc1".into())};
         let c=Connected::pair(p,"Secpar test").await.unwrap();let(tx,rx)=mpsc::channel(8);let(ev_tx,mut ev_rx)=mpsc::channel(8);
         let client=tokio::spawn(session::run(c,Options{discover_public:false,..Default::default()},rx,ev_tx));
         let mut heard_audio=false;
+        let (mut audio_notice,mut clipboard,mut negotiated)=(false,false,false);
         loop {
             let event=ev_rx.recv().await.unwrap();
             if let Event::Audio(ref packet)=event {assert_eq!(packet,&vec![1,2,3]);heard_audio=true;}
+            if let Event::AudioUnavailable(ref msg)=event {assert_eq!(msg,"Synthetic audio source unavailable");audio_notice=true;}
+            if let Event::Clipboard(ref text)=event {assert_eq!(text,"Host clipboard fixture");clipboard=true;}
+            if let Event::StreamInfo{width,height,fps}=event {assert_eq!((width,height,fps),(320,240,60));negotiated=true;}
             if let Event::Video(frame)=event {assert_eq!(frame.id,7);assert_eq!(frame.data,vec![93;7000]);break;}
         }
         assert!(heard_audio);
+        assert!(audio_notice && clipboard && negotiated,"Optional host audio failure must not end video or clipboard delivery");
+        tx.send(Command::Clipboard("Client clipboard fixture".into())).await.unwrap();
         tx.send(Command::Input(json!({"t":"key","vk":65,"down":true}))).await.unwrap();rx_ack.await.unwrap();
         tx.send(Command::Stop).await.unwrap();client.await.unwrap().unwrap();server.await.unwrap();
     }).await.expect("Loopback stream must finish promptly");

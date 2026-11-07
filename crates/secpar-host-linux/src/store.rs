@@ -5,8 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::{
     io,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Instant,
 };
+
+#[cfg(test)]
+use std::time::Duration;
 
 pub fn random<const N: usize>() -> [u8; N] {
     let mut b = [0; N];
@@ -109,7 +112,7 @@ impl Default for Config {
             display: String::new(),
             max_quality: "auto".into(),
             allow_files: false,
-            allow_clip: false,
+            allow_clip: true,
             anywhere: false,
             files_dir: String::new(),
         }
@@ -132,6 +135,8 @@ struct Data {
     config: Config,
     master: String,
     #[serde(default)]
+    clipboard_ready: bool,
+    #[serde(default)]
     portal_restore: Option<String>,
 }
 pub struct Store {
@@ -144,17 +149,21 @@ impl Store {
     pub fn open(dir: &Path) -> io::Result<Self> {
         private_directory(dir)?;
         let path = dir.join("owner-devices.json");
-        let data = match read_private(&path) {
+        let mut data: Data = match read_private(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other)?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Data {
                 id: hex(&random::<16>()),
                 devices: vec![],
                 config: Config::default(),
                 master: URL_SAFE_NO_PAD.encode(random::<32>()),
+                clipboard_ready: true,
                 portal_restore: None,
             },
             Err(e) => return Err(e),
         };
+        // Older Linux builds rejected clipboard sharing altogether. Enable the
+        // newly supported feature once; subsequent explicit choices persist.
+        if !data.clipboard_ready { data.config.allow_clip=true;data.clipboard_ready=true; }
         let s = Self {
             path,
             data,
@@ -181,7 +190,7 @@ impl Store {
         self.data.config.clone()
     }
     pub fn set_config(&mut self, config: Config) -> io::Result<()> {
-        if config.anywhere || config.allow_clip || config.allow_files {
+        if config.anywhere || config.allow_files {
             return Err(io::Error::other(
                 "This Linux preview supports local owner streaming only",
             ));
@@ -272,6 +281,17 @@ impl PairingStore for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipboard_support_migration_runs_once_and_preserves_later_opt_out() {
+        let directory=tempfile::tempdir().unwrap();
+        let mut store=Store::open(directory.path()).unwrap();
+        let (id,token)=store.add_device("Existing device").unwrap();
+        store.data.clipboard_ready=false;store.data.config.allow_clip=false;store.save().unwrap();drop(store);
+        let mut store=Store::open(directory.path()).unwrap();
+        assert!(store.config().allow_clip);assert_eq!(store.auth(&token),Ok(id.clone()));
+        let mut config=store.config();config.allow_clip=false;store.set_config(config).unwrap();drop(store);
+        let store=Store::open(directory.path()).unwrap();assert!(!store.config().allow_clip);assert_eq!(store.auth(&token),Ok(id));
+    }
     #[test]
     fn worker_ticket_upgrade_preserves_existing_device_authentication() {
         let dir = tempfile::tempdir().unwrap();

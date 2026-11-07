@@ -1,7 +1,10 @@
 package com.pcremote.stream
 
 import androidx.compose.animation.*
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -14,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardTab
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -24,6 +28,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,30 +62,36 @@ private fun glass() = LocalMidnight.current.surface.copy(alpha = 0.86f)
 @Composable
 internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (Boolean) -> Unit = {}) {
     var panel by remember { mutableStateOf(false) }
+    BackHandler(enabled = panel) { panel = false }
     DisposableEffect(panel, state.keyboardOpen) {
         onLocalUi(panel || state.keyboardOpen)
         onDispose { }
     }
-    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
         AnimatedVisibility(state.connecting != null, enter = fadeIn(), exit = fadeOut()) {
             Connecting(state.pcName, state.connecting.orEmpty(), a::disconnect)
         }
-        if (!state.connected) return@Box
-        StatsPill(state, Modifier.align(Alignment.TopStart).padding(12.dp))
+        if (!state.connected) return@BoxWithConstraints
+        Box(Modifier.align(Alignment.TopStart).padding(12.dp).size(44.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).background(Color(0xff191b1d).copy(alpha = 0.7f))
+            .semantics { contentDescription = "Stream menu" }
+            .clickable { panel = !panel }, contentAlignment = Alignment.Center) {
+            Image(painterResource(R.drawable.secpar_mark), null, Modifier.size(26.dp))
+        }
+        if (state.showPerf) StatsPill(state, Modifier.align(Alignment.TopEnd).padding(start = 68.dp, end = 12.dp, top = 12.dp))
         if (state.offerLowerQuality) LowerQualityChip(a, Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
         AnimatedVisibility(state.keyboardOpen, Modifier.align(Alignment.TopCenter).padding(top = 56.dp),
             enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut()) {
             KeyboardBar(state, a)
         }
-        EdgeHandle(Modifier.align(Alignment.CenterEnd)) { panel = true }
         // Scrim + side panel
         AnimatedVisibility(panel, enter = fadeIn(), exit = fadeOut()) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f))
+            Box(Modifier.fillMaxSize().background(Color.Transparent)
                 .clickable(remember { MutableInteractionSource() }, null) { panel = false })
         }
-        AnimatedVisibility(panel, Modifier.align(Alignment.CenterEnd),
-            enter = slideInHorizontally { it } + fadeIn(), exit = slideOutHorizontally { it } + fadeOut()) {
-            EdgePanel(state, a) { panel = false }
+        AnimatedVisibility(panel, Modifier.align(Alignment.TopStart).padding(start = if (maxWidth >= 320.dp) 68.dp else 12.dp, top = if (maxWidth >= 320.dp) 12.dp else 64.dp, end = 12.dp, bottom = 12.dp),
+            enter = fadeIn(), exit = fadeOut()) {
+            EdgePanel(state, a, Modifier.heightIn(max = (maxHeight - if (maxWidth >= 320.dp) 24.dp else 76.dp).coerceAtLeast(120.dp))) { panel = false }
         }
 
     }
@@ -85,26 +99,11 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
 
 @Composable
 private fun StatsPill(state: ToolbarState, modifier: Modifier) {
-    val c = LocalMidnight.current
-    val (col, label) = when (state.link) {
-        LinkState.GOOD -> c.ok to R.string.pcr_link_good
-        LinkState.POOR -> c.warn to R.string.pcr_link_poor
-        LinkState.RECONNECTING -> c.bad to R.string.pcr_link_reconnecting
-    }
-    Column(modifier) {
-        Row(
-            Modifier.clip(MidnightShapes.pill).background(glass()).clickable { state.showPerf = !state.showPerf }
-                .padding(start = 4.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            StatusDot(col, live = state.link == LinkState.GOOD, size = 7.dp)
-            Text(stringResource(label), color = c.text, style = MaterialTheme.typography.labelMedium)
-        }
-        AnimatedVisibility(state.showPerf && state.perfText.isNotEmpty()) {
-            Text(state.perfText, color = c.text, fontSize = 11.sp, lineHeight = 14.sp,
-                modifier = Modifier.padding(top = 6.dp).clip(MidnightShapes.control).background(glass()).padding(10.dp))
-        }
-    }
+    Text(state.perfText.ifEmpty { "Waiting for stream stats" }, color = Color(0xffe9ebed),
+        fontSize = 11.sp, lineHeight = 15.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+        modifier = modifier.widthIn(max = 400.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+            .background(Color(0xff101214).copy(alpha = 0.88f)).clickable { state.showPerf = false }.padding(9.dp))
 }
 
 @Composable
@@ -121,131 +120,78 @@ private fun LowerQualityChip(a: ToolbarActions, modifier: Modifier) {
     }
 }
 
-/** A slim handle on the right edge: tap it or swipe left from it to open the panel. */
 @Composable
-private fun EdgeHandle(modifier: Modifier, open: () -> Unit) {
-    val c = LocalMidnight.current
-    val haptics = rememberHaptics()
-    Box(
-        modifier.width(28.dp).height(120.dp)
-            .pointerInput(Unit) { detectHorizontalDragGestures { _, drag -> if (drag < -12f) { haptics.tick(); open() } } }
-            .clickable(remember { MutableInteractionSource() }, null) { haptics.tick(); open() },
-        contentAlignment = Alignment.CenterEnd,
-    ) {
-        Box(Modifier.padding(end = 6.dp).width(5.dp).height(56.dp).clip(MidnightShapes.pill).background(c.text.copy(alpha = 0.45f)))
-    }
-}
-
-@Composable
-private fun EdgePanel(state: ToolbarState, a: ToolbarActions, close: () -> Unit) {
-    val c = LocalMidnight.current
-    Column(
-        Modifier.fillMaxHeight().width(320.dp).clip(MidnightShapes.card).background(c.surface.copy(alpha = 0.94f))
-            .border(1.dp, c.border, MidnightShapes.card).verticalScroll(rememberScrollState()).padding(20.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.pcr_controls), color = c.text, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            Tile(Icons.Rounded.Close, null, compact = true, onClick = close)
-        }
-        Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Tile(Icons.Rounded.Keyboard, R.string.pcr_tb_keyboard, active = state.keyboardOpen, modifier = Modifier.weight(1f)) {
-                a.keyboard(); close()
+private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier, close: () -> Unit) {
+    var page by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    Column(modifier.widthIn(max = 268.dp).fillMaxWidth()
+        .clip(androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
+        .background(Color(0xff191b1d).copy(alpha = 0.97f))
+        .verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
+        if (page == 0) {
+            StreamMenuRow(Icons.Rounded.Keyboard, "Keyboard", checked = state.keyboardOpen) { a.keyboard(); close() }
+            StreamMenuRow(Icons.Rounded.Mouse, "Trackpad", checked = state.trackpad) {
+                state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad); close()
             }
-            Tile(if (state.trackpad) Icons.Rounded.Mouse else Icons.Rounded.TouchApp,
-                if (state.trackpad) R.string.pcr_trackpad else R.string.pcr_direct_touch, modifier = Modifier.weight(1f)) {
-                state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad)
-            }
-            Tile(Icons.Rounded.Speed, R.string.pcr_tb_stats, active = state.showPerf, modifier = Modifier.weight(1f)) {
-                state.showPerf = !state.showPerf
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        if (state.canCaptureMouse) Tile(Icons.Rounded.Mouse, R.string.secpar_capture_mouse, wide = true,
-            active = state.mouseCaptured, modifier = Modifier.fillMaxWidth()) {
-            close(); a.captureMouse()
-        }
-        if (state.canPip) {
-            Spacer(Modifier.height(8.dp))
-            Tile(Icons.Rounded.PictureInPictureAlt, R.string.secpar_pip, wide = true,
-                modifier = Modifier.fillMaxWidth()) { close(); a.pictureInPicture() }
-        }
-        if (state.displays.size > 1) {
-            Section(R.string.pcr_tb_displays)
-            state.displays.forEach { d ->
-                Tile(Icons.Rounded.Monitor, null, text = d.name, wide = true, active = d.id == state.display,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                    if (d.id != state.display) { state.display = d.id; a.selectDisplay(d.id) }
-                    close()
+            if (state.canPip) StreamMenuRow(Icons.Rounded.PictureInPictureAlt, "Picture in picture") { close(); a.pictureInPicture() }
+            if (state.displays.size > 1) StreamMenuRow(Icons.Rounded.Monitor, "Switch display", arrow = true) { page = 3 }
+            StreamMenuRow(Icons.Rounded.Speed, "Stream stats", checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
+            StreamMenuRow(Icons.Rounded.KeyboardAlt, "More keys", arrow = true) { page = 1 }
+            StreamMenuRow(Icons.Rounded.HelpOutline, "Help") { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                android.net.Uri.parse("https://secpar.win/help/#stream-menu"))) }
+            androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
+            StreamMenuRow(Icons.Rounded.Logout, "Disconnect", destructive = true) { a.disconnect() }
+            Text("Secpar " + com.pcremote.BuildConfig.VERSION_NAME, color = Color(0xff94999e), fontSize = 10.sp,
+                modifier = Modifier.padding(start = 14.dp, top = 4.dp, bottom = 2.dp))
+        } else {
+            StreamMenuRow(Icons.Rounded.ArrowBack, when(page) { 1 -> "Keys"; 2 -> "Media keys"; else -> "Displays" }) { page = if (page == 2) 1 else 0 }
+            androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
+            when (page) {
+                1 -> {
+                    StreamMenuRow(Icons.Rounded.KeyboardReturn, "Escape") { a.keys(chord(listOf(VK_ESC))); close() }
+                    StreamMenuRow(Icons.Rounded.Window, "Windows key") { a.shortcut(Shortcut.WIN); close() }
+                    StreamMenuRow(Icons.Rounded.SwapHoriz, "Switch app", value = "Alt+Tab") { a.shortcut(Shortcut.ALT_TAB); close() }
+                    StreamMenuRow(Icons.Rounded.ContentCopy, "Copy", value = "Ctrl+C") { a.shortcut(Shortcut.COPY); close() }
+                    StreamMenuRow(Icons.Rounded.ContentPaste, "Paste", value = "Ctrl+V") { a.shortcut(Shortcut.PASTE); close() }
+                    StreamMenuRow(Icons.Rounded.SpaceDashboard, "Show desktop") { a.keys(chord(listOf(0x5B, 0x44))); close() }
+                    StreamMenuRow(Icons.Rounded.Monitor, "Task Manager") { a.keys(chord(listOf(0x11, 0x10, VK_ESC))); close() }
+                    StreamMenuRow(Icons.Rounded.Close, "Close window", value = "Alt+F4") { a.keys(chord(listOf(0x12, 0x73))); close() }
+                    StreamMenuRow(Icons.Rounded.MusicNote, "Media keys", arrow = true) { page = 2 }
                 }
-            }
-        }
-        Section(R.string.pcr_tb_media_keys)
-        Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-            Tile(Icons.Rounded.SkipPrevious, null, compact = true) { a.shortcut(Shortcut.PREV) }
-            Tile(Icons.Rounded.PlayArrow, null, compact = true) { a.shortcut(Shortcut.PLAY_PAUSE) }
-            Tile(Icons.Rounded.SkipNext, null, compact = true) { a.shortcut(Shortcut.NEXT) }
-            Tile(Icons.Rounded.VolumeDown, null, compact = true) { a.shortcut(Shortcut.VOL_DOWN) }
-            Tile(Icons.Rounded.VolumeUp, null, compact = true) { a.shortcut(Shortcut.VOL_UP) }
-            Tile(Icons.Rounded.VolumeOff, null, compact = true) { a.shortcut(Shortcut.MUTE) }
-        }
-        Section(R.string.pcr_shortcuts)
-        val shortcuts: List<Triple<ImageVector, Int, () -> Unit>> = listOf(
-            Triple(Icons.Rounded.Window, R.string.pcr_tb_windows_key) { a.shortcut(Shortcut.WIN) },
-            Triple(Icons.Rounded.SwapHoriz, R.string.pcr_tb_alt_tab) { a.shortcut(Shortcut.ALT_TAB) },
-            Triple(Icons.Rounded.ContentCopy, R.string.pcr_tb_copy) { a.shortcut(Shortcut.COPY) },
-            Triple(Icons.Rounded.ContentPaste, R.string.pcr_tb_paste) { a.shortcut(Shortcut.PASTE) },
-            Triple(Icons.Rounded.SpaceDashboard, R.string.pcr_sc_desktop) { a.keys(chord(listOf(0x5B, 0x44))) },
-            Triple(Icons.Rounded.Screenshot, R.string.pcr_sc_snip) { a.keys(chord(listOf(0x5B, 0x10, 0x53))) },
-            Triple(Icons.Rounded.Monitor, R.string.pcr_sc_taskmgr) { a.keys(chord(listOf(0x11, 0x10, VK_ESC))) },
-            Triple(Icons.Rounded.Close, R.string.pcr_sc_close_window) { a.keys(chord(listOf(0x12, 0x73))) },
-        )
-        shortcuts.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 10.dp)) {
-                row.forEach { (icon, label, action) -> Tile(icon, label, wide = true, modifier = Modifier.weight(1f), onClick = action) }
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        GhostButton(stringResource(R.string.pcr_tb_disconnect), a::disconnect, Modifier.fillMaxWidth(), Icons.Rounded.PowerSettingsNew)
-    }
-}
-
-@Composable
-private fun Section(title: Int) {
-    Spacer(Modifier.height(22.dp))
-    Text(stringResource(title).uppercase(), color = LocalMidnight.current.textDim, style = MaterialTheme.typography.labelSmall,
-        letterSpacing = 1.2.sp, modifier = Modifier.padding(bottom = 10.dp))
-}
-
-@Composable
-private fun Tile(icon: ImageVector, label: Int?, modifier: Modifier = Modifier, active: Boolean = false, compact: Boolean = false,
-                 wide: Boolean = false, text: String? = null, onClick: () -> Unit) {
-    val c = LocalMidnight.current
-    val haptics = rememberHaptics()
-    val bg = if (active) c.accent.copy(alpha = 0.22f) else c.surfaceHigh
-    if (wide) {
-        Row(modifier.clip(MidnightShapes.control).background(bg).clickable { haptics.tick(); onClick() }.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = c.accent, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(10.dp))
-            (text ?: label?.let { stringResource(it) })?.let { Text(it, color = c.text, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.weight(1f)) }
-        }
-    } else {
-        Column(
-            modifier.clip(MidnightShapes.control).background(bg).clickable { haptics.tick(); onClick() }
-                .padding(if (compact) 10.dp else 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Icon(icon, label?.let { stringResource(it) }, tint = if (active) c.accent else c.text, modifier = Modifier.size(22.dp))
-            if (label != null && !compact) {
-                Spacer(Modifier.height(6.dp))
-                Text(stringResource(label), color = c.textDim, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                2 -> {
+                    for ((icon, label, shortcut) in listOf(
+                        Triple(Icons.Rounded.SkipPrevious,"Previous",Shortcut.PREV),
+                        Triple(Icons.Rounded.PlayArrow,"Play / pause",Shortcut.PLAY_PAUSE),
+                        Triple(Icons.Rounded.SkipNext,"Next",Shortcut.NEXT),
+                        Triple(Icons.Rounded.VolumeDown,"Host volume down",Shortcut.VOL_DOWN),
+                        Triple(Icons.Rounded.VolumeUp,"Host volume up",Shortcut.VOL_UP),
+                        Triple(Icons.Rounded.VolumeOff,"Mute host",Shortcut.MUTE))) {
+                        StreamMenuRow(icon, label) { a.shortcut(shortcut) }
+                    }
+                }
+                3 -> state.displays.forEach { display -> StreamMenuRow(Icons.Rounded.Monitor, display.name, checked = display.id == state.display) {
+                    state.display = display.id; a.selectDisplay(display.id); close()
+                } }
             }
         }
     }
 }
 
-/** Key row with sticky modifiers (tap = once, double-tap = lock) plus navigation and F-keys. */
+@Composable
+private fun StreamMenuRow(icon: ImageVector, label: String, value: String? = null, arrow: Boolean = false,
+    checked: Boolean = false, destructive: Boolean = false, onClick: () -> Unit) {
+    val color = if (destructive) Color(0xfff2695e) else Color(0xffe9ebed)
+    Row(Modifier.fillMaxWidth().height(42.dp).semantics { contentDescription = label }
+        .clickable(onClick = onClick).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(21.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(label, color = color, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        value?.let { Text(it, color = Color(0xff94999e), fontSize = 12.sp, maxLines = 1) }
+        if (checked) Icon(Icons.Rounded.Check, null, tint = Color(0xff0affb6), modifier = Modifier.size(18.dp))
+        else if (arrow) Icon(Icons.Rounded.ChevronRight, null, tint = Color(0xff94999e), modifier = Modifier.size(18.dp))
+    }
+}
+
 @Composable
 private fun KeyboardBar(state: ToolbarState, a: ToolbarActions) {
     val c = LocalMidnight.current
