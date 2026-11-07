@@ -9,16 +9,30 @@ const MAX_SAMPLES: usize = 48_000 / 5 * 2; // 200 ms maximum; discard old audio 
 struct Buffer {
     pcm: VecDeque<f32>,
     position: f64,
+    #[cfg(test)]
+    audible_frames: u64,
+    #[cfg(test)]
+    pushed_frames: u64,
+    #[cfg(test)]
+    dropped_frames: u64,
+    #[cfg(test)]
+    rendered_frames: u64,
 }
 impl Buffer {
     fn push(&mut self, samples: &[f32]) {
+        #[cfg(test)]
+        {self.pushed_frames+=(samples.len()/2) as u64;}
         self.pcm.extend(samples.iter().copied());
         while self.pcm.len() > MAX_SAMPLES {
+            #[cfg(test)]
+            {self.dropped_frames+=1;}
             self.pcm.pop_front();
             self.pcm.pop_front();
         }
     }
     fn frame(&mut self, rate: u32) -> [f32; 2] {
+        #[cfg(test)]
+        {self.rendered_frames+=1;}
         if self.pcm.len() < 4 {
             return [0.; 2];
         }
@@ -26,6 +40,8 @@ impl Buffer {
         let a = [self.pcm[0], self.pcm[1]];
         let b = [self.pcm[2], self.pcm[3]];
         let out = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        #[cfg(test)]
+        if out[0].abs().max(out[1].abs())>0.01 {self.audible_frames+=1;}
         self.position += 48_000.0 / rate as f64;
         while self.position >= 1.0 && self.pcm.len() >= 2 {
             self.pcm.pop_front();
@@ -51,6 +67,8 @@ impl Audio {
             .map_err(|_| "No usable audio output format")?;
         let format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();
+        #[cfg(test)]
+        eprintln!("Output format: {format}, channels {}, rate {}, buffer {:?}",config.channels,config.sample_rate,config.buffer_size);
         if config.channels == 0 || config.sample_rate == 0 {
             return Err("Invalid audio output format".into());
         }
@@ -192,5 +210,8 @@ mod device_tests {
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert!(!player.failed());
+        let buffer=player.buffer.lock().unwrap();
+        eprintln!("Generated audio: pushed {}, dropped {}, rendered {}, audible {}, queued {}",buffer.pushed_frames,buffer.dropped_frames,buffer.rendered_frames,buffer.audible_frames,buffer.pcm.len());
+        assert!(buffer.audible_frames>48000,"Output callback did not consume the generated audio");
     }
 }
