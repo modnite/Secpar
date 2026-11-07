@@ -2,6 +2,8 @@
 //! the latest decoded image; dropping dependent frames requires a new keyframe.
 #[cfg(all(test, target_os = "linux"))]
 mod dmabuf;
+#[cfg(all(test,target_os="linux"))]
+mod yuv_shader;
 use eframe::egui::{ColorImage, Context};
 use openh264::{decoder::Decoder, formats::YUVSource};
 use secpar_client::receiver::VideoFrame;
