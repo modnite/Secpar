@@ -1,5 +1,54 @@
 # Active Secpar work — 2026-11-06
 
+## CURRENT — 3.11.1 PUBLISHED, 2026-11-07
+
+https://github.com/modnite/Secpar/releases/tag/v3.11.1, source/tag669baef.
+Original Lucide0.468.0 icons now replace hand-drawn menu symbols on desktop and
+Material menu symbols on Android. Desktop PNGs use DPI-aware Lanczos filtering;
+Android uses generated vectors preserving SVG geometry. Pin and ISC license in
+assets/icons/lucide; notices included in APK, Windows/Linux packages and desktop
+README for internal Mac archives. Corner button stays above Android backdrop;
+real injected-mouse open/close/disconnect test PASS. Native640x400 screenshot and
+Android vector menu screenshot reviewed. Linux optimized AppImage renders via
+Wayland. Android R8/non-debuggable code528, unchanged certificate. Streaming/audio
+engines unchanged in this release. All4 CI42367431921 jobs PASS. Live website
+releases.json points to3.11.1 for all platforms; download digests match staging.
+Windows still installed3.11.0 with active streams; do not interrupt for glyph patch.
+
+Assets:
+- Windows6,643,672 bytes SHA f5504167952528bd81633768ef02627d6aec35285b04d364e02c9eda58b0fc3d
+- Linux22,645,240 bytes SHA0c62972ec17aa5b07693391e8e7d20299572e8bda56f01753615d11e29af4f4a
+- Android24,128,404 bytes SHA6c413f314cc0d0e80c3b968c7407ffa62774e1ae7024b4d254cba67763ff6a2e
+Windows installer UI payload matches host/src-tauri/unified/secpar-desktop.exe;
+CI shares D:/Secpar-CI/target and overwrites that cache, so do not compare later
+cached binaries against staged payloads. Use isolated release targets next time.
+
+## IN PROGRESS — client backpressure/audio independence, after3.11.1
+
+User reports1920x1080/60 Direct, RTT3ms,0.8Mbps,21.9 received fps, actual label
+software(VA-API too slow). It is fallback software, not hardware currently working.
+While typing, stream dropped: no authenticated stream packets reached client.
+Host protected log read with user approval, filtered/address-redacted locally in
+D:/Secpar-CI/secpar-host-stream-diagnostics.log. No service restart/settings changes.
+Historical logs show RTT spikes/bitrate cuts but do not prove current outage cause.
+
+Reproduced independent bug with real pinned TLS/WebSocket/encrypted UDP fixture:
+pausing UI consumption fills8-event channel and stops authenticated keepalives.
+Test failed on release code, passes on candidate. New bounded/coalesced critical
+UI state and discardable telemetry/media avoid transport backpressure; missing
+compressed video resumes only at a new IDR. Client retries candidate routes after
+2s silence and distinguishes established-stream packet loss from initial failure.
+
+Candidate audio delivery uses nonblocking Options.audio_sink callback + dedicated
+desktop worker owning the UNCHANGED Audio engine. Audio bypasses UI event queue;
+retry swaps output route, new sessions get independent routes, logout clears it.
+Stale fallback UI/audio-worker packets expire at200ms; bounded16-packet input.
+12 client tests pass incl UI-paused probes, continuous callback audio and IDR
+recovery. Windows32 desktop pass/1 ignored; native Linux36 pass/5 ignored. New real
+Pulse generated-audio worker/silence gate in progress. NOT released/installed.
+Native VA/EGL rendering not implemented; remains separate priority (linux-rendering.md).
+
+
 ## CURRENT — 3.11.0 PUBLISHED, 2026-11-07
 
 Public https://github.com/modnite/Secpar/releases/tag/v3.11.0. Runtime836c4c0;

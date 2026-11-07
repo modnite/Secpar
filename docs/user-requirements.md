@@ -155,3 +155,8 @@ Use a consistent family/weight/size across menus. Secpar triangle is approved br
 art, not a generic UI glyph. User rejects current hand-drawn desktop menu symbols.
 Linux hardware playback remains below Moonlight after3.11.0. Software is the known
 smooth workaround; fallback is NOT proof that hardware rendering is fixed.
+
+2026-11-07 diagnostic: Linux1920x1080/60 Direct, RTT3ms,0.8Mbps,21.9 received FPS;
+actual decoder software(VA-API too slow). Stream later drops with no authenticated
+packets error while typing elsewhere. Preserve icon work and pursue both renderer
+performance and UI-independent stream/audio transport. Do not call fallback fixed.
