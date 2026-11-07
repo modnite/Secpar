@@ -1,5 +1,6 @@
 //! Own a private upstream Sunshine process. This does not install a service or
 //! modify another Sunshine/Apollo/Secpar instance. No media implementation lives here.
+mod contain;
 mod journal;
 mod private;
 mod tls;
@@ -154,6 +155,7 @@ fn hex(bytes: &[u8]) -> String {
 pub struct Host {
     child: Child,
     _lock: std::fs::File,
+    _contain: contain::Containment,
     api: Api,
     journal: tokio::sync::Mutex<journal::Journal>,
     pub info: Info,
@@ -245,6 +247,14 @@ impl Host {
             .arg(&conf)
             .spawn()
             .map_err(|_| Error("Could not start the bundled host"))?;
+        // From here the engine dies with this controller, crash included.
+        let contain = match contain::Containment::attach(&child) {
+            Ok(contain) => contain,
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(Error("Could not contain the bundled host process"));
+            }
+        };
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut api = None;
         loop {
@@ -272,6 +282,7 @@ impl Host {
                         let host = Self {
                             child,
                             _lock: lock,
+                            _contain: contain,
                             api: api.clone(),
                             journal: tokio::sync::Mutex::new(journal::Journal::open(
                                 &config.state,
@@ -471,6 +482,7 @@ fn command(executable: &Path) -> Command {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    contain::prepare(&mut command);
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     command
