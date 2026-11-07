@@ -3,8 +3,8 @@
 ## UPSTREAM MIGRATION FOUNDATION —2026-11-07
 
 New worktree work/secpar-upstream-engine, branch feat/upstream-streaming-migration
-at fc6f614 (pushed), draft PR https://github.com/modnite/Secpar/pull/1.
-Foundation commit e5b7fec; fc6f614 also merges the Android3.12.1 baseline.
+at42db09b (pushed), draft PR https://github.com/modnite/Secpar/pull/1.
+Foundation e5b7fec; fc6f614 merges Android3.12.1;42db09b adds actual interop.
 Pinned Moonlight Qt6.2.0, Moonlight Android12.2, Sunshine2026.914.233613; Artemis
 20.2.6/Apollo0.4.6 retained as references. Prefer mature upstream media paths as
 whole components. User says choose whichever is better, not a mandated fork.
@@ -14,6 +14,17 @@ runtime libraries still need packaging. Small patches
 only Secpar executable/settings identity and Alt+F. Actual isolated --version and
 stream --help pass; settings under temporary .config/Secpar/SecparStream.conf.
 No installed Moonlight/Secpar state touched. This is NOT yet product integration.
+Real upstream host/client interoperability PASS: pinned official Sunshine AppImage
+SHA6f80297a853bcf8cda114ff131b5c0a8c9a4d96a2a9c3dee1f04c39c54206846,
+custom-named Moonlight Qt worker, two private X displays, separate Pulse sinks.
+Incorrect PIN rejected, correct separate client authenticated, actual frames
+received/decoded/rendered, generated500Hz tone verified at client output monitor.
+640x360/30 software fixture; NOT hardware/1080p/X250 performance evidence.511 source
+files audited after both integration patches; media/crypto implementations unchanged.
+Managed pairing flag exits Qt CLI after success/failure; standard settings flush.
+Same rejected client identity can hit pending-session409 on immediate retry; broker
+must handle bounded cleanup/retry, never silently rotate identities. Next code is
+host supervision/ownership authorization/product wiring, not more custom PRS tuning.
 Android original native core/JNI and audio renderer build as a private optional
 library for ARM64/x86-64; actual JNI initialization passes on owned5556. Complete
 upstream decoder/input/activity integration and ownership/pairing bridge remain.
