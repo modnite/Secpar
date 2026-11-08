@@ -62,7 +62,7 @@ impl App {
                 egui::Frame::new().fill(Color32::from_rgba_unmultiplied(25,27,29,246)).corner_radius(5).inner_margin(6).show(ui,|ui|{
                     ui.set_width(250.);ui.spacing_mut().item_spacing.y=0.;
                     if self.menu_page==0 {
-                        if row(ui,if self.fullscreen {Icon::Windowed}else{Icon::Window},if self.fullscreen {"Window"}else{"Fullscreen"},"Ctrl+Shift+W",false,false,false).clicked(){self.set_fullscreen(ctx,!self.fullscreen);}
+                        if row(ui,if self.fullscreen {Icon::Windowed}else{Icon::Window},if self.fullscreen {"Window"}else{"Fullscreen"},"Ctrl+Alt+W",false,false,false).clicked(){self.set_fullscreen(ctx,!self.fullscreen);}
                         if row(ui,Icon::Decoder,"Decoder","",true,false,false).clicked(){self.menu_page=1;}
                         if row(ui,Icon::Display,"Resolution",&resolution_label(self.options.width,self.options.height),true,false,false).clicked(){self.menu_page=4;}
                         if self.displays.len()>1 && row(ui,Icon::Display,"Switch display","",true,false,false).clicked(){self.menu_page=2;}
@@ -74,7 +74,7 @@ impl App {
                         if row(ui,Icon::Audio,"Audio","",true,false,false).clicked(){self.menu_page=3;}
                         if row(ui,Icon::Help,"Help","",false,false,false).clicked(){let _=open::that("https://secpar.win/help/#stream-menu");}
                         ui.add_space(5.);ui.separator();ui.add_space(5.);
-                        if row(ui,Icon::Exit,"Disconnect","Ctrl+Alt+`",false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
+                        if row(ui,Icon::Exit,"Disconnect","Ctrl+Alt+Q",false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
                         ui.add_space(5.);ui.horizontal(|ui|{ui.add_space(10.);ui.label(egui::RichText::new(concat!("Secpar ",env!("CARGO_PKG_VERSION"))).size(10.).color(MUTED));});
                     } else {
                         let page=self.menu_page;
