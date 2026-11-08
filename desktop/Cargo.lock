@@ -3852,6 +3852,7 @@ dependencies = [
  "qrcode",
  "raw-window-handle",
  "reqwest",
+ "ring",
  "rustls",
  "secpar-client",
  "secpar-clipboard",

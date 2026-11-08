@@ -15,13 +15,45 @@ const CREDENTIAL: &str = "account-session";
 pub struct User {
     pub id: String,
     pub handle: String,
+    #[serde(default)]
+    pub visible: bool,
 }
+/// One registered user who chose to appear in search.
+#[derive(Clone, Deserialize)]
+pub struct Person {
+    pub handle: String,
+    pub cursor: String,
+    pub relation: String,
+}
+/// A connection request waiting for this account's answer.
+#[derive(Clone, Deserialize)]
+pub struct Incoming {
+    pub id: String,
+    pub owner: String,
+    pub guest_handle: String,
+    #[serde(default)]
+    pub computer_name: Option<String>,
+    pub requested: String,
+    pub state: String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Answer { AllowConnection, DenyConnection, AcceptFriend, DeclineFriend }
+fn default_input() -> String { "view".into() }
+fn default_connect() -> String { "ask".into() }
 #[derive(Clone, Deserialize)]
 pub struct Friend {
     pub id: String,
     pub handle: String,
     pub state: String,
     pub requester: String,
+    #[serde(default = "default_input")]
+    pub input: String,
+    #[serde(default = "default_connect")]
+    pub connect: String,
+}
+/// What this friend may do on the computers you host. Shown beside the name.
+pub fn friend_summary(input: &str, connect: &str) -> String {
+    format!("{} · {}", if connect == "always" { "Any time" } else { "Ask first" }, if input == "full" { "Keyboard and mouse" } else { "View only" })
 }
 #[derive(Clone, Deserialize)]
 pub struct OwnedComputer {
@@ -60,6 +92,8 @@ pub enum Action {
     Remove(String),
     Block(String),
     Unblock(String),
+    /// Keyboard and mouse ("view" or "full") and connect policy ("ask" or "always") for one friend.
+    Setting { id: String, input: Option<&'static str>, connect: Option<&'static str> },
 }
 pub enum Command {
     HostRefresh,
@@ -74,6 +108,9 @@ pub enum Command {
     ForgetComputer,
     ConnectOwned(String),
     RememberOwned { owner: String, id: String, computer: Computer },
+    Search(String),
+    SetVisible(bool),
+    Answer(Answer, String),
 }
 pub enum Event {
     Host(Result<local_host::State, String>),
@@ -95,6 +132,8 @@ pub enum Event {
     StorageNote(String),
     Owned(Vec<OwnedComputer>),
     OwnedConnection(OwnedConnection),
+    Directory(Result<Vec<Person>, String>),
+    Live { friends: Vec<Friend>, requests: Vec<Incoming> },
 }
 
 pub struct Panel {
@@ -110,7 +149,11 @@ pub struct Panel {
     blocked: Vec<User>,
     waiting: Option<(String, String)>,
     note: String,
-    username: String,
+    query: String,
+    asked: Option<String>,
+    query_at: Option<Instant>,
+    people: Vec<Person>,
+    requests: Vec<Incoming>,
     busy: bool,
     tx: mpsc::Sender<Command>,
     events: mpsc::Receiver<Event>,
@@ -149,6 +192,7 @@ impl Panel {
                     user: sample.then(|| User {
                         id: own.clone(),
                         handle: "Player".into(),
+                        visible: true,
                     }),
                     friends: if sample {
                         vec![
@@ -157,18 +201,24 @@ impl Panel {
                                 handle: "Jamie".into(),
                                 state: "accepted".into(),
                                 requester: own.clone(),
+                                input: "view".into(),
+                                connect: "ask".into(),
                             },
                             Friend {
                                 id: "00000000-0000-4000-8000-000000000003".into(),
                                 handle: "Morgan".into(),
                                 state: "pending".into(),
                                 requester: "00000000-0000-4000-8000-000000000003".into(),
+                                input: "view".into(),
+                                connect: "ask".into(),
                             },
                             Friend {
                                 id: "00000000-0000-4000-8000-000000000004".into(),
                                 handle: "Riley".into(),
                                 state: "pending".into(),
                                 requester: own.clone(),
+                                input: "view".into(),
+                                connect: "ask".into(),
                             },
                         ]
                     } else {
@@ -177,7 +227,11 @@ impl Panel {
                     blocked: vec![],
                     waiting: None,
                     note: String::new(),
-                    username: String::new(),
+                    query: String::new(),
+                    asked: None,
+                    query_at: None,
+                    people: vec![],
+                    requests: vec![],
                     busy: false,
                     tx,
                     events: rx,
@@ -198,7 +252,11 @@ impl Panel {
             blocked: vec![],
             waiting: None,
             note: String::new(),
-            username: String::new(),
+            query: String::new(),
+            asked: None,
+            query_at: None,
+            people: vec![],
+            requests: vec![],
             busy: false,
             tx,
             events,
@@ -285,6 +343,9 @@ impl Panel {
                     self.signed_out = true;
                     self.user = None;
                     self.friends.clear();
+                    self.requests.clear();
+                    self.people.clear();
+                    self.asked = None;
                     self.blocked.clear();
                     self.waiting = None;
                     self.note = note;
@@ -304,8 +365,11 @@ impl Panel {
                     self.blocked = blocked;
                     self.waiting = None;
                     self.note = note;
-                    self.username.clear();
+                    self.asked = None;
                 }
+                Event::Directory(Ok(people)) => self.people = people,
+                Event::Directory(Err(note)) => { self.people.clear(); self.note = note; }
+                Event::Live { friends, requests } => { self.friends = friends; self.requests = requests; }
                 Event::Message(note) => self.note = note,
                 Event::Busy(busy) => self.busy = busy,
                 Event::Restored(computer) => self.restored_computer = Some(computer),
@@ -433,6 +497,66 @@ impl Panel {
             }
         });
     }
+    fn requests_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        let own = self.user.as_ref().map(|u| u.id.clone()).unwrap_or_default();
+        let waiting: Vec<Incoming> = self.requests.iter().filter(|r| r.owner == own && r.state == "pending").cloned().collect();
+        for request in waiting {
+            ui.horizontal(|ui| {
+                let computer = request.computer_name.clone().unwrap_or_else(|| "your computer".into());
+                ui.add(egui::Label::new(format!("@{} wants to use {computer}", request.guest_handle)).truncate());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add_enabled(!self.busy, egui::Button::new("Deny")).clicked() {
+                        self.send(Command::Answer(Answer::DenyConnection, request.id.clone()));
+                    }
+                    if ui.add_enabled(!self.busy, egui::Button::new("Allow")).clicked() {
+                        self.send(Command::Answer(Answer::AllowConnection, request.id.clone()));
+                    }
+                });
+            });
+        }
+    }
+    fn people_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        egui::CollapsingHeader::new("Find people").default_open(self.friends.is_empty()).show(ui, |ui| {
+            let width = ui.available_width().max(80.);
+            let edit = ui.add_sized(
+                [width, crate::design::CONTROL],
+                egui::TextEdit::singleline(&mut self.query).hint_text("Search by username").margin(egui::vec2(10., 7.)),
+            );
+            if edit.changed() {
+                self.query_at = Some(Instant::now());
+            }
+            let wanted = self.query.trim().to_string();
+            if self.asked.as_deref() != Some(&wanted) {
+                if self.query_at.is_none_or(|t| t.elapsed() >= Duration::from_millis(300)) {
+                    self.asked = Some(wanted.clone());
+                    self.query_at = None;
+                    let _ = self.tx.try_send(Command::Search(wanted));
+                } else {
+                    ui.ctx().request_repaint_after(Duration::from_millis(300));
+                }
+            }
+            if self.people.is_empty() {
+                ui.weak("No one found");
+            }
+            for person in self.people.clone() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(format!("@{}", person.handle)).truncate());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match person.relation.as_str() {
+                        "none" => {
+                            if ui.add_enabled(!self.busy, egui::Button::new("Add")).clicked() {
+                                self.send(Command::Action(Action::Invite(person.handle.clone())));
+                            }
+                        }
+                        "friend" => { ui.label(egui::RichText::new("Friend").size(12.).color(crate::design::MUTED)); }
+                        "requested" => { ui.label(egui::RichText::new("Request sent").size(12.).color(crate::design::MUTED)); }
+                        _ => { ui.label(egui::RichText::new("Sent you a request").size(12.).color(crate::design::MUTED)); }
+                    });
+                });
+            }
+        });
+    }
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
         use eframe::egui;
         crate::design::page_header(ui, "Friends", |ui| {
@@ -491,24 +615,13 @@ impl Panel {
                 }
             });
             ui.add_space(8.);
-            ui.horizontal(|ui| {
-                let width = (ui.available_width() - 80.).max(80.);
-                ui.add_sized(
-                    [width, crate::design::CONTROL],
-                    egui::TextEdit::singleline(&mut self.username)
-                        .hint_text("Add by username")
-                        .margin(egui::vec2(10., 7.)),
-                );
-                if ui
-                    .add_enabled(
-                        !self.busy && !self.username.trim().is_empty(),
-                        egui::Button::new("Add").min_size(egui::vec2(72., crate::design::CONTROL)),
-                    )
-                    .clicked()
-                {
-                    self.send(Command::Action(Action::Invite(self.username.clone())));
-                }
-            });
+            let mut visible = self.user.as_ref().is_some_and(|u| u.visible);
+            if ui.add_enabled(!self.busy, egui::Checkbox::new(&mut visible, "Show me in search")).changed() {
+                self.send(Command::SetVisible(visible));
+            }
+            ui.add_space(4.);
+            self.requests_ui(ui);
+            self.people_ui(ui);
             ui.add_space(8.);
             if self.friends.is_empty() {
                 ui.weak("No friends yet");
@@ -559,6 +672,24 @@ impl Panel {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     ui.menu_button("…", |ui| {
+                                        if friend.state == "accepted" {
+                                            ui.label("Keyboard and mouse");
+                                            for (value, label) in [("full", "Allow"), ("view", "View only")] {
+                                                if ui.radio(friend.input == value, label).clicked() {
+                                                    self.send(Command::Action(Action::Setting { id: friend.id.clone(), input: Some(value), connect: None }));
+                                                    ui.close();
+                                                }
+                                            }
+                                            ui.separator();
+                                            ui.label("Connecting");
+                                            for (value, label) in [("always", "Any time"), ("ask", "Ask me first")] {
+                                                if ui.radio(friend.connect == value, label).clicked() {
+                                                    self.send(Command::Action(Action::Setting { id: friend.id.clone(), input: None, connect: Some(value) }));
+                                                    ui.close();
+                                                }
+                                            }
+                                            ui.separator();
+                                        }
                                         if ui.button("Block").clicked() {
                                             self.send(Command::Action(Action::Block(
                                                 friend.id.clone(),
@@ -581,7 +712,7 @@ impl Panel {
                                     });
                                     if friend.state == "accepted" {
                                         ui.label(
-                                            egui::RichText::new("Friend")
+                                            egui::RichText::new(friend_summary(&friend.input, &friend.connect))
                                                 .size(12.)
                                                 .color(crate::design::MUTED),
                                         );
@@ -708,6 +839,9 @@ impl Api {
                 "rate_limited" => "Too many attempts. Please wait and try again.",
                 "device_code_expired_or_used" => "Sign-in expired. Please start again.",
                 "incoming_request_not_found" => "This friend request is no longer available.",
+                "input_not_allowed" => "This friend may not use the keyboard or mouse.",
+                "request_not_pending" => "This request was already answered or has expired.",
+                "request_not_found" => "This request is no longer available.",
                 _ => "The account request failed. Please try again.",
             };
             return Err((status, message.into()));
@@ -787,6 +921,38 @@ impl Api {
         }
         Ok(computers)
     }
+    async fn live(&self) -> Result<(Vec<Friend>, Vec<Incoming>), (StatusCode, String)> {
+        let friends = serde_json::from_value(self.call(Method::GET, "/v1/friends", None).await?)
+            .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid friend list".into()))?;
+        let requests = serde_json::from_value(self.call(Method::GET, "/v1/requests", None).await?)
+            .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid request list".into()))?;
+        Ok((friends, requests))
+    }
+    async fn search(&self, query: &str) -> Result<Vec<Person>, (StatusCode, String)> {
+        let name = query.trim().trim_start_matches('@').to_ascii_lowercase();
+        if !name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') || name.len() > 30 {
+            return Ok(vec![]);
+        }
+        let path = if name.is_empty() { "/v1/directory".to_string() } else { format!("/v1/directory?q={name}") };
+        serde_json::from_value(self.call(Method::GET, &path, None).await?)
+            .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid search response".into()))
+    }
+    /// Answer a friend request or a connection request. Ids come from the account service or a signed link.
+    async fn answer(&self, answer: Answer, id: &str) -> Result<(), (StatusCode, String)> {
+        let id = path_id(id).map_err(|note| (StatusCode::BAD_REQUEST, note))?;
+        match answer {
+            Answer::AcceptFriend => { self.call(Method::POST, &format!("/v1/friends/{id}/accept"), None).await?; }
+            Answer::DeclineFriend => { self.call(Method::DELETE, &format!("/v1/friends/{id}"), None).await?; }
+            Answer::DenyConnection => { self.call(Method::POST, &format!("/v1/requests/{id}/revoke"), None).await?; }
+            Answer::AllowConnection => {
+                let row = self.call(Method::GET, &format!("/v1/requests/{id}"), None).await?;
+                let permissions: Vec<String> = row["requested"].as_str().and_then(|r| serde_json::from_str(r).ok())
+                    .ok_or((StatusCode::BAD_GATEWAY, "Invalid request response".to_string()))?;
+                self.call(Method::POST, &format!("/v1/requests/{id}/approve"), Some(json!({"permissions": permissions}))).await?;
+            }
+        }
+        Ok(())
+    }
     async fn snapshot(&self) -> Result<(User, Vec<Friend>, Vec<User>), (StatusCode, String)> {
         let user = serde_json::from_value(self.call(Method::GET, "/v1/me", None).await?)
             .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid account profile".into()))?;
@@ -834,7 +1000,14 @@ fn action_request(action: &Action) -> Result<(Method, String), String> {
         Action::Remove(id) => (Method::DELETE, format!("/v1/friends/{}", path_id(id)?)),
         Action::Block(id) => (Method::PUT, format!("/v1/blocks/{}", path_id(id)?)),
         Action::Unblock(id) => (Method::DELETE, format!("/v1/blocks/{}", path_id(id)?)),
+        Action::Setting { id, .. } => (Method::PUT, format!("/v1/friends/{}/settings", path_id(id)?)),
     })
+}
+fn action_body(action: &Action) -> Option<Value> {
+    match action {
+        Action::Setting { input, connect, .. } => Some(json!({"input": input, "connect": connect})),
+        _ => None,
+    }
 }
 fn owned_key(owner: &str, id: &str) -> Result<String,String> {
     path_id(owner)?; path_id(id)?;
@@ -853,8 +1026,54 @@ async fn synchronize_owned(api: &Api, owner: &str, enroll: bool, events: &mpsc::
     }
     true
 }
+#[derive(Default)]
+struct Seen { friends: std::collections::HashSet<String>, requests: std::collections::HashSet<String>, primed: bool }
+/// Alerts for requests this account has not been told about yet. Friend requests that were already
+/// waiting when the app started are not announced again, because they carry no time.
+fn new_alerts(me: &str, friends: &[Friend], requests: &[Incoming], seen: &mut Seen) -> Vec<crate::alerts::Alert> {
+    let mut out = vec![];
+    for f in friends.iter().filter(|f| f.state == "pending" && f.requester != me) {
+        if seen.friends.insert(f.id.clone()) && seen.primed {
+            out.push(crate::alerts::Alert {
+                title: "Friend request".into(),
+                body: format!("@{} wants to be your friend", f.handle),
+                id: f.id.clone(),
+                yes: Answer::AcceptFriend,
+                no: Answer::DeclineFriend,
+            });
+        }
+    }
+    seen.primed = true;
+    for r in requests.iter().filter(|r| r.owner == me && r.state == "pending") {
+        if seen.requests.insert(r.id.clone()) {
+            out.push(crate::alerts::Alert {
+                title: "Connection request".into(),
+                body: format!("@{} wants to use {}", r.guest_handle, r.computer_name.as_deref().unwrap_or("your computer")),
+                id: r.id.clone(),
+                yes: Answer::AllowConnection,
+                no: Answer::DenyConnection,
+            });
+        }
+    }
+    out
+}
+/// Runs when a toast button starts this program with a signed link. It answers and exits.
+pub fn answer_link(uri: &str) -> Result<String, String> {
+    let key = crate::alerts::key().ok_or("Secure storage is unavailable")?;
+    let (answer, id) = crate::alerts::verify(&key, uri).ok_or("This link is not valid")?;
+    let token = vault::load(CREDENTIAL)?.ok_or("Sign in to Secpar first")?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| "Could not start networking")?;
+    runtime.block_on(async {
+        let client = Client::builder().https_only(true).redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(15)).build()
+            .map_err(|_| "Could not start secure account networking".to_string())?;
+        let api = Api { client, token: Some(token), base: ORIGIN.into() };
+        api.answer(answer, &id).await.map_err(|(_, note)| note)?;
+        Ok(match answer { Answer::AllowConnection => "Allowed", Answer::DenyConnection => "Denied", Answer::AcceptFriend => "Friend added", Answer::DeclineFriend => "Declined" }.into())
+    })
+}
 pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiver<Event>) {
     let (tx, mut rx) = mpsc::channel(16);
+    let tx_alerts = tx.clone();
     let (events, output) = mpsc::channel(32);
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -881,6 +1100,8 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut signed_owner: Option<String> = None;
             let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
             let mut next_owned = Instant::now();
+            let mut next_alerts = Instant::now();
+            let mut seen = Seen::default();
             if api.token.is_some() {
                 match api.snapshot().await {
                     Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;}
@@ -894,6 +1115,10 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut timer=tokio::time::interval(Duration::from_secs(1));
             loop {
                 let command=tokio::select! { command=rx.recv()=>{let Some(command)=command else {break};Some(command)}, _=timer.tick()=>None };
+                if let Some(Command::Search(query))=&command {
+                    if api.token.is_some() { let _=events.send(Event::Directory(api.search(query).await.map_err(|(_,note)|note))).await; ctx.request_repaint(); }
+                    continue;
+                }
                 if let Some(command)=command {
                     let _=events.send(Event::Busy(true)).await;
                     let skip_refresh=matches!(&command,Command::Remember(_)|Command::ForgetComputer|Command::HostRefresh|Command::LinkHost|Command::UnlinkHost|Command::ConnectOwned(_)|Command::RememberOwned{..});
@@ -990,10 +1215,16 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                             }else{Err((StatusCode::UNAUTHORIZED,"Sign in to connect to your computers".into()))}
                         }
                         Command::Refresh=>Ok(String::new()),
+                        Command::Search(_)=>Ok(String::new()),
+                        Command::SetVisible(visible)=>api.call(Method::PUT,"/v1/me/visibility",Some(json!({"visible":visible}))).await.map(|_| String::new()),
+                        Command::Answer(answer,id)=>api.answer(answer,&id).await.map(|_| match answer {
+                            Answer::AllowConnection=>"Request allowed".into(),Answer::DenyConnection=>"Request denied".into(),
+                            Answer::AcceptFriend=>"Friend added".into(),Answer::DeclineFriend=>String::new(),
+                        }),
                         Command::Action(action)=>{
                             match action_request(&action) {
                                 Err(note)=>Err((StatusCode::BAD_REQUEST,note)),
-                                Ok((method,path))=>api.call(method,&path,None).await.map(|_| if matches!(action,Action::Invite(_)){"Friend request sent".into()}else{String::new()})
+                                Ok((method,path))=>api.call(method,&path,action_body(&action)).await.map(|_| if matches!(action,Action::Invite(_)){"Friend request sent".into()}else{String::new()})
                             }
                         }
                     };
@@ -1035,6 +1266,19 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     if !synchronize_owned(&api,owner,suppressed_owner.as_deref()!=Some(owner),&events).await { api.token=None; signed_owner=None; pending_pair=None;let _=vault::forget(CREDENTIAL); }
                     ctx.request_repaint();
                 }
+                if let Some(me)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_alerts) {
+                    next_alerts=Instant::now()+Duration::from_secs(10);
+                    match api.live().await {
+                        Ok((friends,requests))=>{
+                            for alert in new_alerts(&me,&friends,&requests,&mut seen) { crate::alerts::show(alert,tx_alerts.clone()); }
+                            let _=events.send(Event::Live{friends,requests}).await;
+                        }
+                        Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;pending_pair=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}
+                        Err(_)=>{}
+                    }
+                    ctx.request_repaint();
+                }
+                if api.token.is_none() { seen=Seen::default(); }
                 if pending_pair.as_ref().is_some_and(|p|Instant::now()>=p.next) {
                     let p=pending_pair.as_mut().unwrap();
                     if Instant::now()>=p.expires {
@@ -1124,6 +1368,92 @@ mod tests {
         assert!(line(Action::Invite(id.into())).is_err());
         assert!(line(Action::Invite("../me".into())).is_err());
         assert!(line(Action::Remove("../me".into())).is_err());
+    }
+    #[test]
+    fn friend_settings_use_a_fixed_path_and_body() {
+        let id = "d0d12c4d-13f1-4fbc-b113-a89d901ac34b";
+        let action = Action::Setting { id: id.into(), input: Some("full"), connect: None };
+        let (method, path) = action_request(&action).unwrap();
+        assert_eq!((method, path.as_str()), (Method::PUT, format!("/v1/friends/{id}/settings").as_str()));
+        assert_eq!(action_body(&action), Some(json!({"input": "full", "connect": null})));
+        assert!(action_request(&Action::Setting { id: "../me".into(), input: None, connect: Some("ask") }).is_err());
+        assert_eq!(action_body(&Action::Block(id.into())), None);
+    }
+    #[test]
+    fn what_a_friend_may_do_is_shown_in_short_words() {
+        assert_eq!(friend_summary("view", "ask"), "Ask first · View only");
+        assert_eq!(friend_summary("full", "always"), "Any time · Keyboard and mouse");
+    }
+    #[test]
+    fn old_servers_without_settings_read_as_view_only_and_ask() {
+        let f: Friend = serde_json::from_str(r#"{"id":"a","handle":"b","state":"accepted","requester":"a"}"#).unwrap();
+        assert_eq!((f.input.as_str(), f.connect.as_str()), ("view", "ask"));
+        let u: User = serde_json::from_str(r#"{"id":"a","handle":"b"}"#).unwrap();
+        assert!(!u.visible);
+    }
+    fn friend(id: &str, state: &str, requester: &str) -> Friend {
+        Friend { id: id.into(), handle: id.into(), state: state.into(), requester: requester.into(), input: "view".into(), connect: "ask".into() }
+    }
+    fn incoming(id: &str, owner: &str, state: &str) -> Incoming {
+        Incoming { id: id.into(), owner: owner.into(), guest_handle: "bob".into(), computer_name: Some("Studio".into()), requested: "[\"view\"]".into(), state: state.into() }
+    }
+    #[test]
+    fn alerts_fire_once_and_skip_requests_that_were_waiting_at_start() {
+        let mut seen = Seen::default();
+        let waiting = [friend("old", "pending", "old")];
+        assert!(new_alerts("me", &waiting, &[], &mut seen).is_empty());
+        let both = [friend("old", "pending", "old"), friend("new", "pending", "new"), friend("mine", "pending", "me"), friend("pal", "accepted", "pal")];
+        let got = new_alerts("me", &both, &[incoming("r1", "me", "pending"), incoming("r2", "me", "approved"), incoming("r3", "other", "pending")], &mut seen);
+        let titles: Vec<_> = got.iter().map(|a| (a.title.as_str(), a.id.as_str(), a.yes)).collect();
+        assert_eq!(titles, vec![("Friend request", "new", Answer::AcceptFriend), ("Connection request", "r1", Answer::AllowConnection)]);
+        assert_eq!(got[1].body, "@bob wants to use Studio");
+        assert!(new_alerts("me", &both, &[incoming("r1", "me", "pending")], &mut seen).is_empty());
+    }
+    #[test]
+    fn a_connection_request_waiting_at_start_is_announced() {
+        let mut seen = Seen::default();
+        let got = new_alerts("me", &[], &[incoming("r1", "me", "pending")], &mut seen);
+        assert_eq!(got.len(), 1);
+    }
+    fn api_for(base: String) -> Api {
+        Api { base, client: Client::builder().timeout(Duration::from_secs(5)).build().unwrap(), token: Some("d".repeat(64)) }
+    }
+    #[test]
+    fn search_asks_the_directory_with_a_clean_lower_case_name() {
+        let (base, server) = server(vec![
+            ("GET /v1/directory?q=bob_1 ", r#"[{"handle":"Bob_1","name":"x","cursor":"bob_1","relation":"none"}]"#.into()),
+            ("GET /v1/directory ", "[]".into()),
+        ]);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let api = api_for(base);
+            let found = api.search(" @Bob_1 ").await.unwrap();
+            assert_eq!((found[0].handle.as_str(), found[0].relation.as_str()), ("Bob_1", "none"));
+            // Text that is not a username never reaches the URL.
+            assert!(api.search("a/../b").await.unwrap().is_empty());
+            assert!(api.search("a b").await.unwrap().is_empty());
+            assert!(api.search(&"x".repeat(31)).await.unwrap().is_empty());
+            assert!(api.search("").await.unwrap().is_empty());
+        });
+        server.join().unwrap();
+    }
+    #[test]
+    fn answers_call_the_request_routes_in_order() {
+        let id = "d0d12c4d-13f1-4fbc-b113-a89d901ac34b";
+        let (base, server) = server(vec![
+            (&*Box::leak(format!("GET /v1/requests/{id} ").into_boxed_str()), format!(r#"{{"id":"{id}","requested":"[\"view\",\"audio\"]"}}"#)),
+            (&*Box::leak(format!("POST /v1/requests/{id}/approve ").into_boxed_str()), r#"{"state":"approved"}"#.into()),
+            (&*Box::leak(format!("POST /v1/requests/{id}/revoke ").into_boxed_str()), r#"{"state":"revoked"}"#.into()),
+            (&*Box::leak(format!("POST /v1/friends/{id}/accept ").into_boxed_str()), r#"{"state":"accepted"}"#.into()),
+            (&*Box::leak(format!("DELETE /v1/friends/{id} ").into_boxed_str()), r#"{"removed":true}"#.into()),
+        ]);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let api = api_for(base);
+            for a in [Answer::AllowConnection, Answer::DenyConnection, Answer::AcceptFriend, Answer::DeclineFriend] {
+                api.answer(a, id).await.unwrap();
+            }
+            assert!(api.answer(Answer::AllowConnection, "../../me").await.is_err());
+        });
+        server.join().unwrap();
     }
     #[test]
     fn your_own_name_is_shown_with_an_at_sign() {

@@ -289,8 +289,14 @@ class MainActivity : ComponentActivity() {
                                 },
                                 cancelConnect = account::cancelConnection,
                                 dismissError = { browserError = null; account.dismissError() },
-                                friend = account::friendAction, note = account::showNote)
+                                friend = account::friendAction, note = account::showNote,
+                                search = account::search, setVisible = account::setVisible,
+                                friendSetting = account::friendSetting, answer = account::answerRequest,
+                                setAlerts = com.pcremote.account.AccountRuntime.get(this@MainActivity)::setAlerts)
                         }
+                        val alertsOn by com.pcremote.account.AccountRuntime.get(this@MainActivity).alerts.collectAsState()
+                        val signedIn = accountState.user != null
+                        LaunchedEffect(alertsOn, signedIn) { com.pcremote.account.AlertService.sync(this@MainActivity, alertsOn && signedIn) }
                         LaunchedEffect(pairState) {
                             if (pairState is com.pcremote.onboarding.PairingState.Done) { pairing.reset(); home.stop(); home.start() }
                         }
@@ -315,7 +321,7 @@ class MainActivity : ComponentActivity() {
                             connection = { card -> home.connection(card.id) },
                             updates = { startActivity(Intent(this@MainActivity, com.pcremote.update.UpdatesActivity::class.java)) },
                         ), shown, accountActions, updateAvailable = update.release != null,
-                            friends = { com.pcremote.account.FriendsPage(shown, accountActions) },
+                            friends = { com.pcremote.account.FriendsPage(shown, accountActions, alertsOn = alertsOn) },
                             settings = { com.pcremote.settings.SettingsPage(settings,
                                 onThemeChanged = { themeTick++; if (settings.theme == com.pcremote.settings.ThemeChoice.LIGHT) recreate() }) })
                         PairingOverlay(pairState,

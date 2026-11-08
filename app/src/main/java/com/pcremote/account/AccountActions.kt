@@ -12,4 +12,10 @@ class AccountActions(
     val dismissError: () -> Unit = {},
     val friend: (FriendAction, String) -> Unit = { _, _ -> },
     val note: (String) -> Unit = {},
+    val search: (String) -> Unit = {},
+    val setVisible: (Boolean) -> Unit = {},
+    val friendSetting: (String, String?, String?) -> Unit = { _, _, _ -> },
+    val answer: (Answer, String) -> Unit = { _, _ -> },
+    /** Turn request notifications on or off. */
+    val setAlerts: (Boolean) -> Unit = {},
 )

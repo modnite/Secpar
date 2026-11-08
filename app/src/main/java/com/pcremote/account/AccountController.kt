@@ -5,6 +5,7 @@ import com.pcremote.agent.PairedPc
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -22,6 +23,10 @@ data class AccountUi(
     val note: String? = null,
     /** A friend change is in flight. */
     val working: Boolean = false,
+    /** Registered users who chose to appear in search, for the current search text. */
+    val people: List<DirectoryEntry> = emptyList(),
+    /** Connection requests for this account's computers and for this account's own attempts. */
+    val requests: List<ConnectionRequest> = emptyList(),
 )
 
 /** Wording shared with the desktop client. */
@@ -168,6 +173,7 @@ class AccountController(
                 val computers = service.computers()
                 val friends = runCatching { service.friends() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 val blocked = runCatching { service.blocks() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                val requests = runCatching { service.requests() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 if (epoch != generation) return@launch
                 val removed = withContext(io) {
                     store.owned(saved).filter { access -> computers.none {
@@ -176,7 +182,8 @@ class AccountController(
                 }
                 if (epoch != generation) return@launch
                 mutable.value = state.value.copy(computers = computers, error = null,
-                    friends = friends ?: state.value.friends, blocked = blocked ?: state.value.blocked)
+                    friends = friends ?: state.value.friends, blocked = blocked ?: state.value.blocked,
+                    requests = requests ?: state.value.requests)
                 if (removed) changes.value++
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
@@ -267,6 +274,110 @@ class AccountController(
                 if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
                 else mutable.value = state.value.copy(working = false, error = message(e))
             }
+        }
+    }
+
+    /** The directory of users who chose to appear. An empty [query] lists the first names. */
+    fun search(query: String) {
+        val service = api ?: return
+        if (session == null) return
+        val epoch = generation
+        scope.launch {
+            try {
+                val people = service.directory(query)
+                if (epoch == generation) mutable.value = state.value.copy(people = people)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (epoch != generation) return@launch
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
+                else mutable.value = state.value.copy(people = emptyList(), error = message(e))
+            }
+        }
+    }
+
+    fun setVisible(visible: Boolean) {
+        val service = api ?: return
+        val user = state.value.user ?: return
+        if (session == null) return
+        val epoch = generation
+        mutable.value = state.value.copy(user = user.copy(visible = visible), error = null)
+        scope.launch {
+            try { service.setVisible(visible) }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (epoch != generation) return@launch
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
+                else mutable.value = state.value.copy(user = state.value.user?.copy(visible = !visible), error = message(e))
+            }
+        }
+    }
+
+    /** Keyboard and mouse ("view" or "full") and connect policy ("ask" or "always") for one friend. */
+    fun friendSetting(id: String, input: String?, connect: String?) {
+        val service = api ?: return
+        if (session == null || state.value.working) return
+        val epoch = generation
+        mutable.value = state.value.copy(working = true, error = null, note = null)
+        scope.launch {
+            try {
+                service.friendSetting(id, input, connect)
+                val friends = service.friends()
+                if (epoch == generation) mutable.value = state.value.copy(friends = friends, working = false)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (epoch != generation) return@launch
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
+                else mutable.value = state.value.copy(working = false, error = message(e))
+            }
+        }
+    }
+
+    /** Allow or deny a connection request, or accept or decline a friend. Refreshes the lists afterwards. */
+    fun answerRequest(answer: Answer, id: String) {
+        if (session == null || state.value.working) return
+        mutable.value = state.value.copy(working = true, error = null, note = null)
+        scope.launch {
+            val ok = answerNow(answer, id)
+            mutable.value = state.value.copy(working = false, note = if (ok) null else state.value.note)
+        }
+    }
+
+    /** Waits for the saved login to load, answers, then reloads the lists. False when it failed. */
+    suspend fun answerNow(answer: Answer, id: String): Boolean {
+        state.first { it.ready }
+        val service = api ?: return false
+        val epoch = generation
+        return try {
+            service.answer(answer, id)
+            val friends = runCatching { service.friends() }.getOrNull()
+            val requests = runCatching { service.requests() }.getOrNull()
+            if (epoch == generation) mutable.value = state.value.copy(friends = friends ?: state.value.friends,
+                requests = requests ?: state.value.requests)
+            true
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (epoch == generation) {
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
+                else mutable.value = state.value.copy(error = message(e))
+            }
+            false
+        }
+    }
+
+    /** Friends and connection requests as the account service has them now, or null when signed out or offline. */
+    suspend fun poll(): Pair<List<Friend>, List<ConnectionRequest>>? {
+        state.first { it.ready }
+        val service = api ?: return null
+        val epoch = generation
+        return try {
+            val friends = service.friends()
+            val requests = service.requests()
+            if (epoch == generation) mutable.value = state.value.copy(friends = friends, requests = requests)
+            friends to requests
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) {
+            if (epoch == generation && e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
+            null
         }
     }
 

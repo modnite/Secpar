@@ -1,4 +1,6 @@
 mod account;
+mod alerts;
+pub use account::answer_link;
 mod awake;
 use std::time::Instant;
 mod client_settings;

@@ -44,10 +44,19 @@ fun SignInPanel(approval: DeviceSignIn, acts: AccountActions, modifier: Modifier
 
 /** The Friends tab. Same strings and calls as the desktop client. */
 @Composable
-fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Modifier) {
+fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Modifier, alertsOn: Boolean = false) {
     val c = LocalMidnight.current
     val ctx = LocalContext.current
-    var username by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf("") }
+    var findOpen by remember { mutableStateOf(false) }
+    val permission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { granted -> acts.setAlerts(granted) }
+    LaunchedEffect(query, findOpen, state.user?.id) {
+        if (findOpen && state.user != null) {
+            kotlinx.coroutines.delay(300)
+            acts.search(query)
+        }
+    }
     val user = state.user
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -76,10 +85,40 @@ fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Mod
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             GhostButton("Refresh", acts.refresh, compact = true, enabled = !state.working)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            FlatField(username, { username = it }, FriendsModel.USERNAME_HINT, Modifier.weight(1f))
-            PrimaryButton(FriendsModel.ADD, { acts.friend(FriendAction.INVITE, username); username = "" },
-                enabled = FriendsModel.canAdd(username, state.working), modifier = Modifier.width(72.dp), compact = true)
+        FlatCheckbox(user.visible, FriendsModel.SHOW_ME, { acts.setVisible(it) })
+        FlatCheckbox(alertsOn, FriendsModel.NOTIFY, { on ->
+            if (!on) acts.setAlerts(false)
+            else if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED) permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            else acts.setAlerts(true)
+        })
+        FriendsModel.waiting(state.requests, user.id).forEach { request ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(FriendsModel.requestText(request), color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 2,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                GhostButton(FriendsModel.DENY, { acts.answer(Answer.DENY_CONNECTION, request.id) }, compact = true, enabled = !state.working)
+                PrimaryButton(FriendsModel.ALLOW, { acts.answer(Answer.ALLOW_CONNECTION, request.id) }, compact = true, enabled = !state.working)
+            }
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { findOpen = !findOpen }, verticalAlignment = Alignment.CenterVertically) {
+            Icon(painterResource(if (findOpen) R.drawable.lucide_chevron_down else R.drawable.lucide_chevron_right), null, tint = c.textDim,
+                modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(FriendsModel.FIND_PEOPLE, color = c.text, style = MaterialTheme.typography.titleSmall)
+        }
+        if (findOpen) {
+            FlatField(query, { query = it }, FriendsModel.SEARCH_HINT, Modifier.fillMaxWidth())
+            if (state.people.isEmpty()) Text(FriendsModel.NO_ONE, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+            state.people.forEach { person ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("@${person.handle}", color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    val label = FriendsModel.personLabel(person)
+                    if (label == null) PrimaryButton(FriendsModel.ADD, { acts.friend(FriendAction.INVITE, person.handle) }, compact = true, enabled = !state.working)
+                    else Text(label, color = c.textDim, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
         if (state.friends.isEmpty()) Text(FriendsModel.EMPTY, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
         state.friends.forEachIndexed { index, friend ->
@@ -103,9 +142,18 @@ private fun FriendRow(friend: Friend, ownId: String, working: Boolean, acts: Acc
             modifier = Modifier.weight(1f))
         when (label) {
             FriendLabel.ACCEPT -> PrimaryButton(FriendsModel.ACCEPT, { acts.friend(FriendAction.ACCEPT, friend.id) }, compact = true, enabled = !working)
+            FriendLabel.FRIEND -> Text(FriendsModel.summary(friend), color = c.textDim, style = MaterialTheme.typography.bodySmall)
             else -> Text(FriendsModel.labelText(label), color = c.textDim, style = MaterialTheme.typography.bodySmall)
         }
-        AnchoredMenu(friend.handle, listOf(
+        val settings = if (friend.accepted) listOf(
+            MenuItem(R.drawable.lucide_keyboard, if (friend.input == "full") "View only" else "Allow keyboard and mouse") {
+                acts.friendSetting(friend.id, if (friend.input == "full") "view" else "full", null)
+            },
+            MenuItem(R.drawable.lucide_circle_check, if (friend.connect == "always") "Ask me first" else "Connect any time") {
+                acts.friendSetting(friend.id, null, if (friend.connect == "always") "ask" else "always")
+            },
+        ) else emptyList()
+        AnchoredMenu(friend.handle, settings + listOf(
             MenuItem(R.drawable.lucide_ban, FriendsModel.BLOCK) { acts.friend(FriendAction.BLOCK, friend.id) },
             MenuItem(R.drawable.lucide_user_minus, FriendsModel.removeText(friend)) { acts.friend(FriendAction.REMOVE, friend.id) },
         ))

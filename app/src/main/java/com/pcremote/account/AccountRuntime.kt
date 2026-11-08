@@ -26,6 +26,12 @@ class AccountRuntime private constructor(ctx: Context) {
         val paired = agentPair(scope, uri, Build.MODEL, pin, preferLan = true).getOrThrow()
         PairedPc(paired.pc.id, paired.pc.name, uri.hosts, uri.port, uri.fingerprint, paired.token, paired.pc.macs, relay = paired.relay)
     })
+    /** Request notifications are off until the user turns them on. */
+    val alerts = kotlinx.coroutines.flow.MutableStateFlow(prefs.getBoolean("alerts", false))
+    fun setAlerts(on: Boolean) {
+        prefs.edit().putBoolean("alerts", on).apply()
+        alerts.value = on
+    }
     val access = OwnedPcAccess(store) { controller.state.value.user?.id }
 
     companion object {

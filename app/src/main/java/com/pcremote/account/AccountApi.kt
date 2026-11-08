@@ -17,10 +17,11 @@ import java.util.concurrent.TimeUnit
 private const val ORIGIN = "https://accounts.secpar.win"
 private const val MAX_BODY = 256 * 1024
 private val HEX64 = Regex("[a-f0-9]{64}")
+private val DIRECTORY_QUERY = Regex("q=[a-z0-9_]{1,30}")
 private val UUID = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
 
 enum class AccountError { NETWORK, INVALID_RESPONSE, INVALID_ARGUMENT, SIGN_IN_REQUIRED, EXPIRED, PENDING, SLOW_DOWN, UNAVAILABLE, RATE_LIMITED, REQUEST_FAILED,
-    FRIEND_UNAVAILABLE, REQUEST_GONE, BAD_NAME }
+    FRIEND_UNAVAILABLE, REQUEST_GONE, BAD_NAME, INPUT_NOT_ALLOWED, REQUEST_ANSWERED }
 class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.NETWORK -> "Could not reach Secpar. Check your connection and try again."
     AccountError.INVALID_RESPONSE -> "Unexpected account response."
@@ -33,6 +34,8 @@ class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.FRIEND_UNAVAILABLE -> "No one with that username can be added."
     AccountError.REQUEST_GONE -> "This friend request is no longer available."
     AccountError.BAD_NAME -> "Enter a username of 3 to 30 letters, numbers or underscores."
+    AccountError.INPUT_NOT_ALLOWED -> "This friend may not use the keyboard or mouse."
+    AccountError.REQUEST_ANSWERED -> "This request was already answered or has expired."
     AccountError.UNAVAILABLE -> "Computer pairing is no longer available."
     AccountError.REQUEST_FAILED -> "The account request failed. Please try again."
 })
@@ -52,7 +55,8 @@ class OkHttpAccountTransport : AccountTransport {
         .writeTimeout(12, TimeUnit.SECONDS).callTimeout(20, TimeUnit.SECONDS).build()
     override fun execute(request: AccountRequest): AccountResponse {
         val u = URI(request.url)
-        if (u.scheme != "https" || u.rawAuthority != "accounts.secpar.win" || u.rawQuery != null ||
+        val queryOk = u.rawQuery == null || (u.rawPath == "/v1/directory" && DIRECTORY_QUERY.matches(u.rawQuery))
+        if (u.scheme != "https" || u.rawAuthority != "accounts.secpar.win" || !queryOk ||
             u.rawFragment != null || !u.rawPath.startsWith("/")) throw AccountException(AccountError.INVALID_ARGUMENT)
         val req = Request.Builder().url(request.url).header("Accept", "application/json")
             .apply { request.bearer?.let { header("Authorization", "Bearer $it") } }
@@ -76,11 +80,19 @@ class OkHttpAccountTransport : AccountTransport {
     }
 }
 
-data class AccountUser(val id: String, val handle: String)
-data class Friend(val id: String, val handle: String, val state: String, val requester: String) {
+data class AccountUser(val id: String, val handle: String, val visible: Boolean = false)
+/** [input] is "view" or "full" and [connect] is "ask" or "always": what this friend may do on the computers you host. */
+data class Friend(val id: String, val handle: String, val state: String, val requester: String,
+    val input: String = "view", val connect: String = "ask") {
     val accepted get() = state == "accepted"
     val pending get() = state == "pending"
 }
+/** One registered user who chose to appear in search. [relation] is none, requested, incoming or friend. */
+data class DirectoryEntry(val handle: String, val cursor: String, val relation: String)
+/** A connection request waiting for this account's answer. */
+data class ConnectionRequest(val id: String, val owner: String, val guestHandle: String, val computerName: String?,
+    val requested: List<String>, val state: String)
+enum class Answer { ALLOW_CONNECTION, DENY_CONNECTION, ACCEPT_FRIEND, DECLINE_FRIEND }
 data class OwnedComputer(val id: String, val name: String, val platform: String, val certificateFp: String?, val linked: Boolean, val online: Boolean)
 class DeviceSignIn(val deviceCode: String, val userCode: String, val verificationUriComplete: String, val expiresIn: Long, val interval: Long) {
     override fun toString() = "DeviceSignIn(redacted)"
@@ -114,6 +126,12 @@ interface AccountService {
     suspend fun blocks(): List<AccountUser> = emptyList()
     /** One change to the friend or block lists. */
     suspend fun friendAction(action: FriendAction, id: String) {}
+    suspend fun directory(query: String): List<DirectoryEntry> = emptyList()
+    suspend fun setVisible(visible: Boolean) {}
+    /** Null leaves that setting as it is. */
+    suspend fun friendSetting(id: String, input: String?, connect: String?) {}
+    suspend fun requests(): List<ConnectionRequest> = emptyList()
+    suspend fun answer(answer: Answer, id: String) {}
 }
 
 /** The calls the Friends page makes. Paths and verbs match the desktop client. */
@@ -161,7 +179,8 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
 
     override suspend fun me(): AccountUser {
         val o = call("GET", "/v1/me").objectValue()
-        return AccountUser(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) })
+        val visible = (o["visible"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false
+        return AccountUser(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) }, visible)
     }
 
     override suspend fun computers(): List<OwnedComputer> {
@@ -186,7 +205,62 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
             val o = row.objectValue()
             val state = o.text("state").also { valid(it == "accepted" || it == "pending") }
             Friend(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) },
-                state, o.text("requester").also { valid(UUID.matches(it)) })
+                state, o.text("requester").also { valid(UUID.matches(it)) },
+                o.optionalChoice("input", "view", "full"), o.optionalChoice("connect", "ask", "always"))
+        }
+    }
+
+    override suspend fun directory(query: String): List<DirectoryEntry> {
+        val name = query.trim().removePrefix("@").lowercase()
+        if (name.length > 30 || !name.all { it in 'a'..'z' || it in '0'..'9' || it == '_' }) return emptyList()
+        val rows = call("GET", if (name.isEmpty()) "/v1/directory" else "/v1/directory?q=$name") as? JsonArray ?: invalid()
+        valid(rows.size <= 20)
+        return rows.map { row ->
+            val o = row.objectValue()
+            DirectoryEntry(o.text("handle").also { valid(safeText(it, 80)) }, o.text("cursor").also { valid(safeText(it, 80)) },
+                o.text("relation").also { valid(it in setOf("none", "requested", "incoming", "friend")) })
+        }
+    }
+
+    override suspend fun setVisible(visible: Boolean) {
+        call("PUT", "/v1/me/visibility", buildJsonObject { put("visible", visible) })
+    }
+
+    override suspend fun friendSetting(id: String, input: String?, connect: String?) {
+        pathId(id)
+        argument(input == null || input == "view" || input == "full")
+        argument(connect == null || connect == "ask" || connect == "always")
+        argument(input != null || connect != null)
+        call("PUT", "/v1/friends/$id/settings", buildJsonObject {
+            input?.let { put("input", it) }
+            connect?.let { put("connect", it) }
+        })
+    }
+
+    override suspend fun requests(): List<ConnectionRequest> {
+        val rows = call("GET", "/v1/requests") as? JsonArray ?: invalid()
+        valid(rows.size <= 1024)
+        return rows.map { row ->
+            val o = row.objectValue()
+            val requested = Json.parseToJsonElement(o.text("requested")) as? JsonArray ?: invalid()
+            val name = (o["computer_name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            ConnectionRequest(o.text("id").also { valid(UUID.matches(it)) }, o.text("owner").also { valid(UUID.matches(it)) },
+                o.text("guest_handle").also { valid(safeText(it, 80)) }, name?.takeIf { safeText(it, 320) },
+                requested.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content ?: invalid() }, o.text("state"))
+        }
+    }
+
+    override suspend fun answer(answer: Answer, id: String) {
+        pathId(id)
+        when (answer) {
+            Answer.ACCEPT_FRIEND -> call("POST", "/v1/friends/$id/accept", obj())
+            Answer.DECLINE_FRIEND -> call("DELETE", "/v1/friends/$id")
+            Answer.DENY_CONNECTION -> call("POST", "/v1/requests/$id/revoke", obj())
+            Answer.ALLOW_CONNECTION -> {
+                val row = call("GET", "/v1/requests/$id").objectValue()
+                val requested = Json.parseToJsonElement(row.text("requested")) as? JsonArray ?: invalid()
+                call("POST", "/v1/requests/$id/approve", buildJsonObject { put("permissions", requested) })
+            }
         }
     }
 
@@ -248,6 +322,8 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
                     code == "slow_down" -> AccountError.SLOW_DOWN
                     response.status == 401 || code == "session_expired" || code == "sign_in_required" -> AccountError.SIGN_IN_REQUIRED
                     code == "account_unavailable" -> AccountError.FRIEND_UNAVAILABLE
+                    code == "input_not_allowed" -> AccountError.INPUT_NOT_ALLOWED
+                    code == "request_not_pending" || code == "request_not_found" -> AccountError.REQUEST_ANSWERED
                     code == "incoming_request_not_found" -> AccountError.REQUEST_GONE
                     code == "device_code_expired_or_used" -> AccountError.EXPIRED
                     code == "pairing_request_unavailable" || code == "pairing_result_unavailable" || code == "computer_not_found" -> AccountError.UNAVAILABLE
@@ -272,6 +348,11 @@ private fun inputName(value: String, max: Int) = argument(safeText(value, max))
 private fun JsonElement.objectValue() = this as? JsonObject ?: invalid()
 private fun JsonObject.text(key: String) = (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: invalid()
 private fun JsonObject.positive(key: String) = (get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it > 0 } ?: invalid()
+private fun JsonObject.optionalChoice(key: String, default: String, other: String): String {
+    val value = (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return default
+    valid(value == default || value == other)
+    return value
+}
 private fun JsonObject.bit(key: String): Boolean {
     val value = (get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull ?: invalid()
     valid(value == 0 || value == 1)

@@ -9,6 +9,11 @@ fn main() -> eframe::Result {
         Some("--server") => return Ok(pc_remote_host::server::run()),
         _ => {}
     }
+    // A notification button starts this program with a signed link. It answers and exits.
+    if let Some(link) = std::env::args().nth(1).filter(|a| a.starts_with("secpar-alert:")) {
+        let _ = secpar_desktop::answer_link(&link);
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("--send") {
         if let Some(path) = std::env::args().nth(2) {
             if let Err(error) = secpar_desktop::offer_file(path) {
