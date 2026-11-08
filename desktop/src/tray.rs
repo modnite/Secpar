@@ -28,8 +28,9 @@ impl Tray {
                 .ok()?;
         let menu = Menu::new();
         let open = MenuItem::new("Open Secpar", true, None);
+        let restart = MenuItem::new("Restart Secpar", true, None);
         let quit = MenuItem::new("Quit Secpar", true, None);
-        menu.append_items(&[&open, &PredefinedMenuItem::separator(), &quit])
+        menu.append_items(&[&open, &restart, &PredefinedMenuItem::separator(), &quit])
             .ok()?;
         let tray = TrayIconBuilder::new()
             .with_tooltip("Secpar")
@@ -43,11 +44,19 @@ impl Tray {
         let open_id = open.id().clone();
         let menu_opener = opener.clone();
         let quit_id = quit.id().clone();
+        let restart_id = restart.id().clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            if event.id == quit_id {
-                should_quit.store(true, Ordering::Relaxed);
-                menu_opener.open();
-                ctx_menu.send_viewport_cmd(ViewportCommand::Close);
+            if event.id == quit_id || event.id == restart_id {
+                let restart = event.id == restart_id;
+                let (should_quit, opener, ctx) =
+                    (should_quit.clone(), menu_opener.clone(), ctx_menu.clone());
+                // Quitting ends the hosting service too; restarting brings both back.
+                std::thread::spawn(move || {
+                    end_hosting(restart);
+                    should_quit.store(true, Ordering::Relaxed);
+                    opener.open();
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                });
             } else if event.id == open_id {
                 menu_opener.open();
             }
@@ -82,4 +91,22 @@ impl Tray {
             false
         }
     }
+}
+
+/// Asks the hosting service to stop (and start again for a restart, with a fresh window).
+fn end_hosting(restart: bool) {
+    #[cfg(windows)]
+    {
+        let cmd = if restart { "service_restart" } else { "service_stop" };
+        if let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            let _ = rt.block_on(crate::local_host::call(cmd, serde_json::Value::Null));
+        }
+        if restart {
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(exe).arg("--restarted").spawn();
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = restart;
 }

@@ -4,7 +4,21 @@ use windows_sys::Win32::{
 };
 pub struct Instance(HANDLE);
 impl Instance {
+    /// A restarted copy waits for the old window to finish closing.
     pub fn acquire() -> Option<Self> {
+        let patient = std::env::args().any(|a| a == "--restarted");
+        for _ in 0..if patient { 50 } else { 1 } {
+            if let Some(i) = Self::try_acquire() {
+                return Some(i);
+            }
+            if !patient {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        None
+    }
+    fn try_acquire() -> Option<Self> {
         let name: Vec<u16> = "Local\\SecparDesktop".encode_utf16().chain([0]).collect();
         // SAFETY: valid null-terminated name, default security, no initial ownership.
         unsafe {
@@ -14,7 +28,7 @@ impl Instance {
             }
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 CloseHandle(mutex);
-                if !std::env::args().any(|a| a == "--hidden") {
+                if !std::env::args().any(|a| a == "--hidden" || a == "--restarted") {
                     let title: Vec<u16> = "Secpar"
                         .encode_utf16()
                         .chain([0])

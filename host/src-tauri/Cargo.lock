@@ -3607,7 +3607,6 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "vigem-client",
- "window-vibrancy",
  "windows",
  "wiremock",
 ]

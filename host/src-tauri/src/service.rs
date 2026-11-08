@@ -62,6 +62,40 @@ pub fn run() {
     }
 }
 
+/// Stops the service (and with it the server) a second from now, then starts it again if `restart`.
+/// The helper is not in the server's job, so it outlives the service it is stopping.
+pub fn stop_later(restart: bool) {
+    use std::os::windows::process::CommandExt;
+    let script = if restart {
+        "ping -n 2 127.0.0.1 >nul & net stop Secpar & net start Secpar"
+    } else {
+        "ping -n 2 127.0.0.1 >nul & net stop Secpar"
+    };
+    let _ = std::process::Command::new("cmd.exe").args(["/c", script]).creation_flags(0x0800_0000).spawn();
+}
+
+/// Starts the service when it is stopped (the installer lets signed-in users start and stop it).
+pub fn ensure_running() -> bool {
+    use windows::core::PCWSTR;
+    // SAFETY: handles are opened, used and closed in this call.
+    unsafe {
+        let Ok(scm) = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT) else { return false };
+        let svc = OpenServiceW(scm, NAME, SERVICE_START | SERVICE_QUERY_STATUS);
+        let ok = match &svc {
+            Ok(s) => {
+                let mut st = SERVICE_STATUS::default();
+                (QueryServiceStatus(*s, &mut st).is_ok() && st.dwCurrentState != SERVICE_STOPPED) || StartServiceW(*s, None).is_ok()
+            }
+            Err(_) => false,
+        };
+        if let Ok(s) = svc {
+            let _ = CloseServiceHandle(s);
+        }
+        let _ = CloseServiceHandle(scm);
+        ok
+    }
+}
+
 fn supervise() {
     use crate::win::session;
     // reqwest is built without a rustls provider: without this the update check panics (and aborts)

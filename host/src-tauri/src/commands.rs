@@ -241,6 +241,16 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
             to_value(offer_to(&app, device.as_deref(), std::path::Path::new(&path))?)
         }
         "get_net" => to_value(NetView { status: app.net.lock().unwrap().clone(), lan: rank_ips(crate::win::sys::adapters().0) }),
+        // The window's Quit and Restart: the service ends this server with it. Done by a helper that
+        // outlives it, a second later so this reply gets out first.
+        "service_stop" => {
+            crate::service::stop_later(false);
+            Ok(Value::Null)
+        }
+        "service_restart" => {
+            crate::service::stop_later(true);
+            Ok(Value::Null)
+        }
         "check_update" => to_value(check_update().await?),
         _ => Err(format!("unknown command {cmd}")),
     }

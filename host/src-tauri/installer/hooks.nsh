@@ -48,11 +48,14 @@ FunctionEnd
     ; Reuse the previous Secpar Host location; its data/service identity is retained.
     ReadRegStr $0 HKLM "Software\modnite\Secpar Host" ""
     ${If} $0 != ""
+    ${AndIf} ${FileExists} "$0\secpar-desktop.exe"
+      StrCpy $INSTDIR $0
+      SetOutPath $INSTDIR
+    ${ElseIf} $0 != ""
     ${AndIf} ${FileExists} "$0\secpar-host.exe"
       StrCpy $INSTDIR $0
       SetOutPath $INSTDIR
     ${EndIf}
-    nsExec::Exec 'taskkill.exe /F /IM secpar-desktop.exe'
   !endif
   nsExec::Exec 'sc.exe stop "${PCR_SVC}"'
   ; up to ~10 s for the service to reach STOPPED (skipped when it isn't installed yet)
@@ -67,6 +70,8 @@ FunctionEnd
       Goto pcr_wait_stop
     ${EndIf}
   pcr_stopped:
+  ; one program now: the window, the service and its server are all secpar-desktop.exe
+  nsExec::Exec 'taskkill.exe /F /IM secpar-desktop.exe'
   nsExec::Exec 'taskkill.exe /F /IM secpar-host.exe'
   ; 2.x: the elevated start task and the per-user autostart are replaced by the service
   nsExec::Exec 'schtasks.exe /Delete /TN "Secpar" /F'
@@ -85,32 +90,36 @@ FunctionEnd
 
   ; Phones reach the agent on TCP 48999 (TLS, token-authenticated) and stream over UDP (48998 when free).
   nsExec::Exec 'netsh advfirewall firewall delete rule name="${PCR_FW_RULE}"'
-  nsExec::Exec 'netsh advfirewall firewall add rule name="${PCR_FW_RULE}" dir=in action=allow protocol=TCP localport=48999 program="$INSTDIR\secpar-host.exe" profile=any'
-  nsExec::Exec 'netsh advfirewall firewall add rule name="${PCR_FW_RULE}" dir=in action=allow protocol=UDP program="$INSTDIR\secpar-host.exe" profile=any'
+  nsExec::Exec 'netsh advfirewall firewall add rule name="${PCR_FW_RULE}" dir=in action=allow protocol=TCP localport=48999 program="$INSTDIR\secpar-desktop.exe" profile=any'
+  nsExec::Exec 'netsh advfirewall firewall add rule name="${PCR_FW_RULE}" dir=in action=allow protocol=UDP program="$INSTDIR\secpar-desktop.exe" profile=any'
 
   ; The service: starts at boot (before sign-in), restarts after a crash.
   DetailPrint "Registering the Secpar service…"
   nsExec::Exec 'sc.exe query "${PCR_SVC}"'
   Pop $0
   ${If} $0 == 0
-    nsExec::Exec 'sc.exe config "${PCR_SVC}" binPath= "\"$INSTDIR\secpar-host.exe\" --service" start= auto obj= LocalSystem'
+    nsExec::Exec 'sc.exe config "${PCR_SVC}" binPath= "\"$INSTDIR\secpar-desktop.exe\" --service" start= auto obj= LocalSystem'
   ${Else}
-    nsExec::Exec 'sc.exe create "${PCR_SVC}" binPath= "\"$INSTDIR\secpar-host.exe\" --service" start= auto obj= LocalSystem DisplayName= "Secpar"'
+    nsExec::Exec 'sc.exe create "${PCR_SVC}" binPath= "\"$INSTDIR\secpar-desktop.exe\" --service" start= auto obj= LocalSystem DisplayName= "Secpar"'
   ${EndIf}
   nsExec::Exec 'sc.exe description "${PCR_SVC}" "Lets your paired devices see and control this computer, including the sign-in screen."'
+  ; Signed-in users may start and stop it, so the tray can Quit and Restart Secpar as one program.
+  nsExec::Exec 'sc.exe sdset "${PCR_SVC}" "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;LCRPWP;;;IU)(A;;CCLCSWLOCRRC;;;SU)"'
   nsExec::Exec 'sc.exe failure "${PCR_SVC}" reset= 86400 actions= restart/5000/restart/5000/restart/30000'
 
   ; Only Secpar is started. No PC Remote, Sunshine, power or adapter settings are changed.
+  ; the superseded second executable
+  Delete "$INSTDIR\secpar-host.exe"
   nsExec::Exec 'sc.exe start "${PCR_SVC}"'
   Call SecparRepairShortcuts
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  nsExec::Exec 'sc.exe stop "${PCR_SVC}"'
+  Sleep 2000
   !if "${PRODUCTNAME}" == "Secpar"
     nsExec::Exec 'taskkill.exe /F /IM secpar-desktop.exe'
   !endif
-  nsExec::Exec 'sc.exe stop "${PCR_SVC}"'
-  Sleep 2000
   nsExec::Exec 'sc.exe delete "${PCR_SVC}"'
   nsExec::Exec 'taskkill.exe /F /IM secpar-host.exe'
   nsExec::Exec 'netsh advfirewall firewall delete rule name="${PCR_FW_RULE}"'

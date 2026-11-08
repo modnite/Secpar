@@ -25,10 +25,12 @@ try {
     & cargo build --release --locked --manifest-path (Join-Path $repo 'desktop/Cargo.toml')
     if ($LASTEXITCODE) { throw 'Desktop release build failed' }
     $desktop = Join-Path $DesktopTarget 'release/secpar-desktop.exe'
-    New-Item -ItemType Directory -Path (Join-Path $repo 'host/src-tauri/unified') -Force | Out-Null
-    Copy-Item -LiteralPath $desktop -Destination (Join-Path $repo 'host/src-tauri/unified/secpar-desktop.exe')
+    # One program: the installer wraps the desktop executable, which also runs the Windows service.
+    New-Item -ItemType Directory -Path (Join-Path $HostTarget 'release') -Force | Out-Null
+    Copy-Item -LiteralPath $desktop -Destination (Join-Path $HostTarget 'release/secpar-desktop.exe') -Force
+    New-Item -ItemType Directory -Path (Join-Path $repo 'host/dist') -Force | Out-Null
     $env:CARGO_TARGET_DIR = $HostTarget
-    & npm --prefix (Join-Path $repo 'host') run tauri build -- --config src-tauri/tauri.unified.conf.json --bundles nsis
+    & npm --prefix (Join-Path $repo 'host') run tauri bundle -- --config src-tauri/tauri.unified.conf.json --bundles nsis
     if ($LASTEXITCODE) { throw 'Unified release installer build failed' }
     $installer = Join-Path $HostTarget "release/bundle/nsis/Secpar_${version}_x64-setup.exe"
     if (!(Test-Path -LiteralPath $installer)) { throw 'Release installer is missing' }
