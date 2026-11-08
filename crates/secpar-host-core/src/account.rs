@@ -339,6 +339,39 @@ mod tests {
         server.verify().await;
     }
     #[tokio::test]
+    async fn guest_admission_reads_the_friend_list_and_lease_with_the_machine_credential_only() {
+        use crate::guest_policy::{Admission, Denied};
+        use std::collections::BTreeSet;
+        let server = MockServer::start().await; let account = account(&server, Arc::default());
+        account.inner.lock().await.registration = Some(registration());
+        let id = "00000000-0000-4000-8000-000000000009";
+        let bearer = format!("Bearer {}", registration().credential);
+        Mock::given(method("GET")).and(path("/v1/host/friends")).and(header("authorization", bearer.clone()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id":"bob","handle":"bob","input":"view","connect":"ask"},
+                {"id":"cat","handle":"cat","input":"full","connect":"always"}]))).mount(&server).await;
+        let lease = |guest: &str, approved: &[&str], active: bool| ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"id":id,"guest":guest,"approved":approved,"state":"claimed","expires":1,"active":active,"input":"full","connect":"always"}));
+        Mock::given(method("GET")).and(path(format!("/v1/host/requests/{id}"))).and(header("authorization", bearer))
+            .respond_with(lease("cat", &["view","keyboard"], true)).up_to_n_times(1).mount(&server).await;
+        let signed: BTreeSet<String> = ["view","keyboard"].map(String::from).into();
+        let got = account.admit_guest(id, "cat", &signed).await.unwrap();
+        assert!(matches!(&got, Admission::Allow(g) if g.keyboard() && g.view()));
+        // Same signed grant, but the Worker now reports a view only friend: the host drops input.
+        server.reset().await;
+        Mock::given(method("GET")).and(path("/v1/host/friends")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"cat","handle":"cat","input":"view","connect":"ask"}]))).mount(&server).await;
+        Mock::given(method("GET")).and(path(format!("/v1/host/requests/{id}"))).respond_with(lease("cat", &["view","keyboard"], true)).mount(&server).await;
+        let got = account.admit_guest(id, "cat", &signed).await.unwrap();
+        assert!(matches!(&got, Admission::AskOwner(g) if !g.keyboard() && g.view()));
+        // A lease that is no longer active is refused with a plain message.
+        server.reset().await;
+        Mock::given(method("GET")).and(path("/v1/host/friends")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"cat","handle":"cat"}]))).mount(&server).await;
+        Mock::given(method("GET")).and(path(format!("/v1/host/requests/{id}"))).respond_with(lease("cat", &["view","keyboard"], false)).mount(&server).await;
+        assert_eq!(account.admit_guest(id, "cat", &signed).await.unwrap_err(), Denied::LeaseInactive.message());
+        // A request id that is not a UUID never becomes a path.
+        assert!(account.lease("../../host/link").await.is_err());
+    }
+    #[tokio::test]
     async fn hostile_job_identifiers_never_reach_the_pairing_callback() {
         let server = MockServer::start().await; let account = account(&server, Arc::default());
         account.inner.lock().await.registration = Some(registration());
