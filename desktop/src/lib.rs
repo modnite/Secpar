@@ -1,5 +1,6 @@
 mod account;
 mod awake;
+use std::time::Instant;
 mod client_settings;
 mod video;
 mod picture;
@@ -158,6 +159,8 @@ struct App {
     awake: Option<awake::KeepAwake>,
     awake_tried: bool,
     menu_button_hidden: bool,
+    /// A live resize was asked for and the host has not answered with a new size yet.
+    resize_wait: Option<(Instant, (u32, u32))>,
     stream_menu_bounds: Option<egui::Rect>,
     stream_menu_button_bounds: Option<egui::Rect>,
     brand_scale: f32,
@@ -247,6 +250,7 @@ impl App {
             awake: None,
             awake_tried: false,
             menu_button_hidden: false,
+            resize_wait: None,
             stream_menu_bounds: None,
             stream_menu_button_bounds: None,
             brand_scale,
@@ -276,6 +280,7 @@ impl App {
                 if let Some(handle)=&app.gpu {gpu::submit(handle,picture::Picture::bars(1280,720));app.gpu_live=true;}
             }
             app.stream_menu_open=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("menu"));
+            app.show_stream_stats=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("stats"));
         }
         app
     }
@@ -511,7 +516,7 @@ impl App {
                 Event::AudioUnavailable(error)=>self.notice=Some(format!("Host audio: {error}")),
                 Event::ClipboardUnavailable(error)=>{self.clipboard=None;self.notice=Some(error);},
                 Event::Clipboard(text)=>{if let Some(bridge)=&self.clipboard {bridge.set(text);}},
-                Event::StreamInfo{width,height,fps}=>{self.dimensions=[width as usize,height as usize];self.stream_fps=fps;},
+                Event::StreamInfo{width,height,fps}=>{self.dimensions=[width as usize,height as usize];self.stream_fps=fps;self.resize_wait=None;},
                 Event::Stats{rtt_ms,mbps,received_fps}=>self.stream_stats=Some((rtt_ms,mbps,received_fps)),
                 Event::Displays(v) => {
                     self.display = v["current"].as_str().unwrap_or("").into();

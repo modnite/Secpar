@@ -126,3 +126,15 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(20));
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    /// Run by hand: holds the request for 20 s so `powercfg /requests` can list it.
+    #[test]
+    #[ignore = "inspect with powercfg /requests"]
+    fn holds_a_display_request() {
+        let held = super::KeepAwake::new();
+        assert!(held.is_some());
+        std::thread::sleep(std::time::Duration::from_secs(20));
+    }
+}

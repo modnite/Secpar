@@ -434,3 +434,45 @@ fn packetization_throughput_diagnostic() {
         eprintln!("host packetize bytes={size} mean_ms={:.3}",start.elapsed().as_secs_f64()*1000.0/60.0);
     }
 }
+
+/// `stream.size` mid-stream: the video thread reopens the encoder at the new size and announces it
+/// with a fresh `stream.ready`, without the session ending.
+#[test]
+fn resize_mid_stream_announces_the_new_size() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<(u32, u32)>::new()));
+    let log = seen.clone();
+    let notify: Notify = Arc::new(move |m| {
+        if let ServerMsg::StreamReady { w, h, .. } = m {
+            log.lock().unwrap().push((w, h));
+        }
+    });
+    let p = Params { w: 1280, h: 720, fps: 60, codecs: vec!["h264".into()], max_kbps: 10000, audio: false, cands: vec![], public: None, display: String::new() };
+    let (ready, session) = match StreamSession::start(p, IpAddr::from([127, 0, 0, 1]), notify, Box::new(|_| {})) {
+        Ok(r) => r,
+        Err(e) => return eprintln!("no stream on this PC: {e:?}"),
+    };
+    let ServerMsg::StreamReady { w, h, .. } = ready else { panic!("{ready:?}") };
+    session.resize(640, 360);
+    let start = Instant::now();
+    let got = loop {
+        let now = seen.lock().unwrap().iter().copied().find(|&(sw, sh)| (sw, sh) != (w, h) && sw <= 640 && sh <= 360);
+        if now.is_some() || start.elapsed() > Duration::from_secs(8) {
+            break now;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(got.is_some(), "no stream.ready at the new size (started at {w}x{h}, saw {:?})", seen.lock().unwrap());
+    assert!(session.alive(), "the session keeps running");
+    // and back to the display's native size
+    session.resize(0, 0);
+    let start = Instant::now();
+    let native = loop {
+        let now = seen.lock().unwrap().iter().skip(1).any(|&(sw, _)| sw > 640);
+        if now || start.elapsed() > Duration::from_secs(8) {
+            break now;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(native, "no stream.ready back at native size, saw {:?}", seen.lock().unwrap());
+    assert!(session.alive());
+}

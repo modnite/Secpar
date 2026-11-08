@@ -39,17 +39,30 @@ impl App {
             }));
         // hidden (Ctrl+Alt+S): no button, and nothing on screen counts as hovering it
         self.stream_menu_button_bounds=Some(button.map_or(Rect::NOTHING,|b|b.response.rect));
-        if self.show_stream_stats && self.texture.is_some() {
-            egui::Area::new(egui::Id::new("stream-stats")).order(egui::Order::Tooltip).interactable(false)
-                .anchor(egui::Align2::RIGHT_TOP,egui::vec2(-12.,12.)).show(ctx,|ui|{
-                    egui::Frame::new().fill(Color32::from_rgba_unmultiplied(15,17,19,200)).corner_radius(4).inner_margin(9).show(ui,|ui|{
-                        ui.set_max_width((ctx.content_rect().width()-90.).clamp(140.,430.));
-                        ui.small(format!("{} × {} · {} fps · {}",self.dimensions[0],self.dimensions[1],self.stream_fps,self.status));
-                        if let Some((rtt,mbps,fps))=self.stream_stats {
-                            let latency=rtt.map(|n|format!("RTT {n} ms · ")).unwrap_or_default();
-                            ui.small(format!("{latency}{mbps:.1} Mbps · {fps:.1} received fps"));
-                        }
-                        if let Some(decoder)=&self.client.active_decoder {ui.small(decoder);}
+        // A strip across the top, like Parsec's: stream stats, or the resize notice for an old host.
+        let waiting=self.resize_wait.filter(|(at,_)|at.elapsed()>std::time::Duration::from_millis(2500));
+        if waiting.is_some() && self.resize_wait.is_some_and(|(at,_)|at.elapsed()>std::time::Duration::from_secs(8)) {self.resize_wait=None;}
+        let strip=self.texture.is_some() && (self.show_stream_stats || waiting.is_some());
+        if strip {
+            let left=if self.menu_button_hidden {12.} else {60.};
+            egui::Area::new(egui::Id::new("stream-stats")).order(egui::Order::Middle).interactable(false)
+                .fixed_pos(egui::pos2(0.,0.)).show(ctx,|ui|{
+                    let width=ctx.content_rect().width();
+                    egui::Frame::new().fill(Color32::from_rgba_unmultiplied(15,17,19,215)).inner_margin(egui::Margin{left:left as i8,right:12,top:6,bottom:6}).show(ui,|ui|{
+                        ui.set_min_width(width-left-12.);ui.set_max_width(width-left-12.);
+                        let text=if waiting.is_some() {
+                            "This computer's Secpar can't resize a live stream yet. Update it there, then pick the resolution again.".to_string()
+                        } else {
+                            let mut parts=vec![format!("{} × {}",self.dimensions[0],self.dimensions[1]),format!("{} fps",self.stream_fps),self.status.clone()];
+                            if let Some((rtt,mbps,fps))=self.stream_stats {
+                                if let Some(n)=rtt {parts.push(format!("RTT {n} ms"));}
+                                parts.push(format!("{mbps:.1} Mbps"));
+                                parts.push(format!("{fps:.1} received fps"));
+                            }
+                            if let Some(decoder)=&self.client.active_decoder {parts.push(decoder.clone());}
+                            parts.join("   ·   ")
+                        };
+                        ui.add(egui::Label::new(egui::RichText::new(text).size(13.).color(TEXT)).truncate());
                     });
                 });
         }
@@ -58,7 +71,7 @@ impl App {
             return;
         }
         let panel=egui::Area::new(egui::Id::new("stream-menu-panel")).order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(60.,12.)).show(ctx,|ui|{
+            .fixed_pos(egui::pos2(60.,if strip {34.}else{12.})).show(ctx,|ui|{
                 egui::Frame::new().fill(Color32::from_rgba_unmultiplied(25,27,29,246)).corner_radius(5).inner_margin(6).show(ui,|ui|{
                     ui.set_width(250.);ui.spacing_mut().item_spacing.y=0.;
                     if self.menu_page==0 {
@@ -94,7 +107,7 @@ impl App {
                             for (w,h) in RESOLUTIONS {
                                 let current=self.options.width==w && self.options.height==h;
                                 if row(ui,Icon::Display,&resolution_label(w,h),"",false,current,false).clicked(){
-                                    if !current {self.options.width=w;self.options.height=h;self.send(Command::Size(w,h));}
+                                    if !current {self.options.width=w;self.options.height=h;self.send(Command::Size(w,h));self.resize_wait=Some((std::time::Instant::now(),(w,h)));}
                                     self.menu_page=0;
                                 }
                             }
