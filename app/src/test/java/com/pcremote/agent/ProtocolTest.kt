@@ -41,6 +41,11 @@ class ProtocolTest {
         assertEquals("""{"t":"stream.display","id":"b"}""", Wire.encode(Msg.StreamDisplay("b")))
     }
 
+    @Test fun `size message`() {
+        assertEquals("""{"t":"stream.size","w":1280,"h":720}""", Wire.encode(Msg.StreamSize(1280, 720)))
+        assertEquals("""{"t":"stream.size","w":0,"h":0}""", Wire.encode(Msg.StreamSize(0, 0)))
+    }
+
     @Test fun `unknown fields are ignored`() {
         assertEquals(Msg.MouseMove(1, 2), Wire.decode("""{"t":"mouse.move","dx":1,"dy":2,"extra":1}"""))
     }

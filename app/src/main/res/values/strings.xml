@@ -166,7 +166,6 @@
     <string name="pcr_more">More</string>
     <string name="pcr_saved">Saved</string>
     <string name="pcr_forget">Forget</string>
-    <string name="pcr_open_screen">Open screen</string>
     <string name="pcr_status_locked">Locked</string>
     <string name="pcr_hint_screen">See and control it</string>
     <string name="pcr_hint_remote">Touchpad and keyboard</string>

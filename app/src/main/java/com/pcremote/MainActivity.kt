@@ -140,6 +140,9 @@ class MainActivity : ComponentActivity() {
 
     var desktopCapture: com.pcremote.stream2.DesktopCapture? = null
     private var captureShortcutKey: Int? = null
+    /** Set by the stream screen: Ctrl+Alt+Q / Ctrl+Alt+S from a hardware keyboard. */
+    var streamChords: ((com.pcremote.stream2.StreamChord) -> Unit)? = null
+    private var chordKey: Int? = null
     var desktopMotion: ((android.view.MotionEvent) -> Boolean)? = null
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
         (desktopCapture?.let { it.forwarding && !it.freePointer } == true && desktopMotion?.invoke(event) == true) || super.dispatchGenericMotionEvent(event)
@@ -328,6 +331,18 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val chords = streamChords
+        if (event.keyCode == chordKey) {
+            if (event.action == android.view.KeyEvent.ACTION_UP) chordKey = null
+            return true
+        }
+        if (chords != null && event.isFromSource(android.view.InputDevice.SOURCE_KEYBOARD) && event.device?.isVirtual == false) {
+            val chord = com.pcremote.stream2.StreamChords.match(event.keyCode, event.isCtrlPressed, event.isAltPressed)
+            if (chord != null) {
+                if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) { chordKey = event.keyCode; chords(chord) }
+                return true
+            }
+        }
         if (event.keyCode == captureShortcutKey) {
             if (event.action == android.view.KeyEvent.ACTION_UP) captureShortcutKey = null
             return true

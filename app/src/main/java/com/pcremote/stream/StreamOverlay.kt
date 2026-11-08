@@ -37,6 +37,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pcremote.R
+import com.pcremote.stream2.RESIZE_UNSUPPORTED
+import com.pcremote.stream2.STREAM_SIZES
+import com.pcremote.stream2.sizeLabel
 import com.pcremote.ui.components.GhostButton
 import com.pcremote.ui.components.PrimaryButton
 import com.pcremote.ui.components.StatusDot
@@ -73,13 +76,16 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
             Connecting(state.pcName, state.connecting.orEmpty(), a::disconnect)
         }
         if (!state.connected) return@BoxWithConstraints
-        Box(Modifier.align(Alignment.TopStart).zIndex(2f).padding(12.dp).size(44.dp)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).background(Color(0xff191b1d).copy(alpha = 0.7f))
+        LaunchedEffect(state.buttonHidden) { if (state.buttonHidden) panel = false }
+        if (!state.buttonHidden) Box(Modifier.align(Alignment.TopStart).zIndex(2f).padding(12.dp).size(44.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).background(Color(0xff191b1d).copy(alpha = 135f / 255f))
             .semantics { contentDescription = "Stream menu" }
             .clickable { panel = !panel }, contentAlignment = Alignment.Center) {
             Image(painterResource(R.drawable.secpar_mark), null, Modifier.size(26.dp))
         }
-        if (state.showPerf) StatsPill(state, Modifier.align(Alignment.TopEnd).padding(start = 68.dp, end = 12.dp, top = 12.dp))
+        val strip = state.showPerf || state.resizeNotice
+        if (strip) StatsStrip(if (state.resizeNotice) RESIZE_UNSUPPORTED else state.perfText.ifEmpty { "Waiting for stream stats" },
+            if (state.buttonHidden) 12.dp else 60.dp, Modifier.align(Alignment.TopStart))
         if (state.offerLowerQuality) LowerQualityChip(a, Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
         AnimatedVisibility(state.keyboardOpen, Modifier.align(Alignment.TopCenter).padding(top = 56.dp),
             enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut()) {
@@ -90,21 +96,20 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
             Box(Modifier.fillMaxSize().background(Color.Transparent)
                 .clickable(remember { MutableInteractionSource() }, null) { panel = false })
         }
-        AnimatedVisibility(panel, Modifier.align(Alignment.TopStart).padding(start = if (maxWidth >= 320.dp) 68.dp else 12.dp, top = if (maxWidth >= 320.dp) 12.dp else 64.dp, end = 12.dp, bottom = 12.dp),
+        AnimatedVisibility(panel, Modifier.align(Alignment.TopStart).padding(start = if (maxWidth >= 320.dp) 68.dp else 12.dp, top = if (maxWidth >= 320.dp) (if (strip) 32.dp else 12.dp) else 64.dp, end = 12.dp, bottom = 12.dp),
             enter = fadeIn(), exit = fadeOut()) {
-            EdgePanel(state, a, Modifier.heightIn(max = (maxHeight - if (maxWidth >= 320.dp) 24.dp else 76.dp).coerceAtLeast(120.dp))) { panel = false }
+            EdgePanel(state, a, Modifier.heightIn(max = (maxHeight - if (maxWidth >= 320.dp) (if (strip) 44.dp else 24.dp) else 76.dp).coerceAtLeast(120.dp))) { panel = false }
         }
 
     }
 }
 
 @Composable
-private fun StatsPill(state: ToolbarState, modifier: Modifier) {
-    Text(state.perfText.ifEmpty { "Waiting for stream stats" }, color = Color(0xffe9ebed),
-        fontSize = 11.sp, lineHeight = 15.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-        modifier = modifier.widthIn(max = 400.dp)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
-            .background(Color(0xff101214).copy(alpha = 0.88f)).clickable { state.showPerf = false }.padding(9.dp))
+private fun StatsStrip(text: String, start: androidx.compose.ui.unit.Dp, modifier: Modifier) {
+    Box(modifier.fillMaxWidth().height(26.dp).background(Color(15, 17, 19, 215)).padding(start = start, end = 12.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(text, color = Color(0xffe9ebed), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 @Composable
@@ -135,6 +140,7 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                 state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad); close()
             }
             if (state.canPip) StreamMenuRow(R.drawable.lucide_picture_in_picture_2, "Picture in picture") { close(); a.pictureInPicture() }
+            StreamMenuRow(R.drawable.lucide_monitor, "Resolution", value = sizeLabel(state.sizeW, state.sizeH), arrow = true) { page = 4 }
             if (state.displays.size > 1) StreamMenuRow(R.drawable.lucide_monitor, "Switch display", arrow = true) { page = 3 }
             StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, "Stream stats", checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
             StreamMenuRow(R.drawable.lucide_command, "More keys", arrow = true) { page = 1 }
@@ -155,7 +161,7 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                 maxLines = 1,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
         } else {
-            StreamMenuRow(R.drawable.lucide_arrow_left, when(page) { 1 -> "Keys"; 2 -> "Media keys"; else -> "Displays" }) { page = if (page == 2) 1 else 0 }
+            StreamMenuRow(R.drawable.lucide_arrow_left, when(page) { 1 -> "Keys"; 2 -> "Media keys"; 4 -> "Resolution"; else -> "Displays" }) { page = if (page == 2) 1 else 0 }
             androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
             when (page) {
                 1 -> {
@@ -180,6 +186,10 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                         StreamMenuRow(icon, label) { a.shortcut(shortcut) }
                     }
                 }
+                4 -> STREAM_SIZES.forEach { (w, h) -> StreamMenuRow(R.drawable.lucide_monitor, sizeLabel(w, h), checked = w == state.sizeW && h == state.sizeH) {
+                    if (w != state.sizeW || h != state.sizeH) { state.sizeW = w; state.sizeH = h; a.selectSize(w, h) }
+                    page = 0
+                } }
                 3 -> state.displays.forEach { display -> StreamMenuRow(R.drawable.lucide_monitor, display.name, checked = display.id == state.display) {
                     state.display = display.id; a.selectDisplay(display.id); close()
                 } }

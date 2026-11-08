@@ -155,12 +155,13 @@ private fun PcPage(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, 
     val haptics = rememberHaptics()
     val conn = a.connection(card)
     val unlock = rememberUnlocker(card.id, { m -> conn?.sendIfOnline(m) == true }, conn?.incoming)
-    val modes = card.modes.filter { it in implemented }
+    val modes = card.modes.filter { it in implemented && it != Mode.SCREEN } // the screen opens from the preview
     @Composable fun preview(modifier: Modifier) {
         Monitor(thumb, card.online && !card.locked,
             modifier.combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() })) {
             StatusChip(card, Modifier.align(Alignment.TopStart).padding(8.dp))
             if (card.locked) Icon(Icons.Rounded.Lock, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(32.dp))
+            else if (card.online) Icon(Icons.Rounded.PlayArrow, stringResource(R.string.pcr_mode_screen), tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(40.dp))
         }
     }
     @Composable fun identity(modifier: Modifier) {
@@ -238,9 +239,8 @@ private fun PrimaryRow(card: PcCardUi, a: HomeActions, unlock: () -> Unit) {
         when {
             card.locked && card.canUnlock -> {
                 PrimaryButton(stringResource(R.string.pcr_unlock_fp), unlock, Modifier.weight(1f), icon = Icons.Rounded.Fingerprint)
-                if (Mode.SCREEN in card.modes) GhostButton(stringResource(R.string.pcr_mode_screen), { a.open(card, Mode.SCREEN) }, icon = Icons.Rounded.Monitor)
             }
-            card.primary == PrimaryAction.OPEN -> PrimaryButton(stringResource(R.string.pcr_open_screen), { a.primary(card) }, Modifier.weight(1f), icon = Icons.Rounded.PlayArrow)
+            card.primary == PrimaryAction.OPEN -> Unit // the preview opens the screen
             card.primary == PrimaryAction.WAKE -> PrimaryButton(stringResource(R.string.pcr_wake), { a.primary(card) }, Modifier.weight(1f), icon = Icons.Rounded.PowerSettingsNew)
             card.primary == PrimaryAction.OFFLINE_HELP -> GhostButton(stringResource(R.string.pcr_help), { a.primary(card) }, Modifier.weight(1f), icon = Icons.AutoMirrored.Rounded.HelpOutline)
             else -> PrimaryButton(stringResource(R.string.pcr_checking), {}, Modifier.weight(1f), enabled = false)

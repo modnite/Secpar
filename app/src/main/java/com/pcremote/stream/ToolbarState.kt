@@ -25,6 +25,12 @@ class ToolbarState {
     /** The PC's displays (only offered when there are several) and the one being streamed. */
     var displays by mutableStateOf<List<com.pcremote.agent.DisplayInfo>>(emptyList())
     var display by mutableStateOf("")
+    /** The size last picked in the menu (0 x 0 = the PC display's own), and whether the old-host notice shows. */
+    var sizeW by mutableStateOf(0)
+    var sizeH by mutableStateOf(0)
+    var resizeNotice by mutableStateOf(false)
+    /** Ctrl+Alt+S hides the Secpar button. */
+    var buttonHidden by mutableStateOf(false)
     val bar = KeyboardBarModel()
     var barTick by mutableIntStateOf(0)
 }
@@ -40,4 +46,5 @@ interface ToolbarActions {
     fun captureMouse() {}
     fun pictureInPicture() {}
     fun selectDisplay(id: String)
+    fun selectSize(w: Int, h: Int) {}
 }

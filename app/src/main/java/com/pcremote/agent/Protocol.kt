@@ -78,6 +78,8 @@ sealed interface Msg {
     ) : Msg
     /** Switch the running stream to another display. */
     @Serializable @SerialName("stream.display") data class StreamDisplay(val id: String) : Msg
+    /** Resize the running stream; 0 x 0 is the display's own size. Older hosts ignore it. */
+    @Serializable @SerialName("stream.size") data class StreamSize(val w: Int, val h: Int) : Msg
     @Serializable @SerialName("stream.displays") data class StreamDisplays(val list: List<DisplayInfo>, val current: String) : Msg
     @Serializable @SerialName("stream.ready") data class StreamReady(
         val codec: String, val w: Int, val h: Int, val fps: Int, val port: Int, val session: Long, val key: String,

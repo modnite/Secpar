@@ -34,7 +34,7 @@ class StreamControllerTest {
         assertEquals(Msg.StreamStart(2400, 1080, 120, listOf("hevc", "h264"), 40_000), sent.single())
         assertEquals(StreamUi.Connecting, c.ui.value)
         incoming.tryEmit(ready()); runCurrent()
-        assertEquals(StreamUi.Streaming("hevc", 1920, 1080), c.ui.value)
+        assertEquals(StreamUi.Streaming("hevc", 1920, 1080, 60), c.ui.value)
         c.sendInput(Msg.MouseMove(1, 2))
         assertEquals(listOf<Msg>(Msg.MouseMove(1, 2)), made.single().inputs)
         advanceTimeBy(10_000); runCurrent()
@@ -50,7 +50,18 @@ class StreamControllerTest {
         incoming.tryEmit(ready(w = 1280)); runCurrent()
         assertEquals(1, made.size)
         assertEquals(1280, made.single().resized.single().w)
-        assertEquals(StreamUi.Streaming("hevc", 1280, 720), c.ui.value)
+        assertEquals(StreamUi.Streaming("hevc", 1280, 720, 60), c.ui.value)
+    }
+
+    @Test fun pickingASizeSendsStreamSizeAndKeepsTheSession() = scope.run {
+        c.start(StreamRequest(1920, 1080, 60, 20_000)); runCurrent()
+        incoming.tryEmit(ready()); runCurrent()
+        c.selectSize(1280, 720)
+        assertEquals(Msg.StreamSize(1280, 720), sent.last())
+        incoming.tryEmit(ready(w = 1280)); runCurrent()
+        assertEquals(1, made.size)
+        assertEquals(1, made.single().resized.size)
+        assertEquals(1, sent.count { it is Msg.StreamStart })
     }
 
     @Test fun decoderFailureFallsBackToNextCodec() = scope.run {

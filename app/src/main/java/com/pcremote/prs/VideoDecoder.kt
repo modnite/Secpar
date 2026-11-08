@@ -45,6 +45,9 @@ class VideoDecoder(
     private var presented = 0
     private var statsAtNs = System.nanoTime()
 
+    /** The MediaCodec component in use, empty until the first keyframe configures it. */
+    @Volatile var name = ""; private set
+
     /** Called on each rendered frame with the frame's arrival time (our clock, µs). */
     @Volatile var onRendered: ((receivedUs: Long) -> Unit)? = null
 
@@ -100,6 +103,7 @@ class VideoDecoder(
             }
             c.start()
             mc = c
+            name = info.name
             choreographer = Choreographer.getInstance()
             if (Build.VERSION.SDK_INT >= 30) runCatching {
                 surface.setFrameRate(fps.toFloat(), Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)

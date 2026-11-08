@@ -119,8 +119,19 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
         onDispose { controller.stop(); pipe = null; nextSock.getAndSet(null)?.close() }
     }
     val zoom = remember { ZoomPan() }
+    // a picked size is pending until the host answers with a new stream.ready; older hosts never do
+    val resize = remember { ResizeWait() }
+    var resizeTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(resizeTick) {
+        while (true) {
+            val next = resize.nextChangeMs(System.currentTimeMillis())
+            toolbar.resizeNotice = resize.showNotice(System.currentTimeMillis())
+            delay(next ?: break)
+        }
+    }
     LaunchedEffect(session) {
         session.conn.incoming.collect { m ->
+            if (m is Msg.StreamReady) { resize.answered(); toolbar.resizeNotice = false }
             if (m is Msg.StreamCand) pipe?.addCandidate(m.c)
             if (m is Msg.StreamDisplays) {
                 if (m.current != toolbar.display) zoom.reset()
@@ -142,9 +153,8 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     toolbar.link = if (stats.lossPct > 5f || stats.rttMs > 80) LinkState.POOR else LinkState.GOOD
     val route by remember(pipe) { pipe?.route ?: MutableStateFlow("Connecting") }.collectAsState()
     toolbar.perfText = streaming?.let {
-        stringResource(R.string.pcr_s2_perf, it.codec.uppercase(), it.w, it.h, stats.fps, stats.kbps / 1000f,
-            stats.rttMs / 2 + stats.decodeMs, stats.rttMs, stats.lossPct) // network one-way + decode/render
-    }?.let { "$route · $it" }.orEmpty()
+        stripText(StripStats(it.w, it.h, it.fps, route, stats.rttMs, stats.kbps, stats.fps, pipe?.decoderName.orEmpty()))
+    }.orEmpty()
 
     // latest controller: a retry builds a new one, and handlers created earlier must reach it
     val currentController by rememberUpdatedState(controller)
@@ -185,6 +195,17 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
             if (activity?.desktopInput === desktop) { activity.desktopInput = null; activity.desktopCapture = null }
         }
     }
+    // dock keyboard chords: kept here, never forwarded to the PC (the PC's held Ctrl and Alt are released first)
+    DisposableEffect(activity) {
+        activity?.streamChords = { chord ->
+            desktop.release()
+            when (chord) {
+                StreamChord.DISCONNECT -> onBack()
+                StreamChord.TOGGLE_BUTTON -> toolbar.buttonHidden = !toolbar.buttonHidden
+            }
+        }
+        onDispose { activity?.streamChords = null }
+    }
     val trackpad = remember { TrackpadModel(settings.pointerSpeed, settings.naturalScroll) }
     val direct = remember { DirectTouchModel(settings.naturalScroll) }
     toolbar.mouseCaptured = captured
@@ -203,6 +224,9 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
             override fun coachDone() = markCoachSeen(ctx)
             override fun selectDisplay(id: String) {
                 currentController.selectDisplay(id); saveDisplay(ctx, pcId, id); zoom.reset()
+            }
+            override fun selectSize(w: Int, h: Int) {
+                currentController.selectSize(w, h); resize.asked(System.currentTimeMillis()); resizeTick++
             }
         }
     }

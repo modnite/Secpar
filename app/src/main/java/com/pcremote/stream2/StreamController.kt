@@ -22,7 +22,7 @@ interface Pipeline {
 
 sealed interface StreamUi {
     data object Connecting : StreamUi
-    data class Streaming(val codec: String, val w: Int, val h: Int) : StreamUi
+    data class Streaming(val codec: String, val w: Int, val h: Int, val fps: Int = 0) : StreamUi
     data class Failed(val code: String, val msg: String) : StreamUi
 }
 
@@ -86,7 +86,7 @@ class StreamController(
                     val codec = m.codec
                     pipeline = pipelines(m) { scope.launch { decoderFailed(codec) } }
                 }
-                _ui.value = StreamUi.Streaming(m.codec, m.w, m.h)
+                _ui.value = StreamUi.Streaming(m.codec, m.w, m.h, m.fps)
             }
             is Msg.StreamError -> if (_ui.value !is StreamUi.Streaming || m.code != "busy") {
                 timeout?.cancel(); teardown(); _ui.value = StreamUi.Failed(m.code, m.msg)
@@ -109,6 +109,9 @@ class StreamController(
         request = request?.copy(display = id)
         send(Msg.StreamDisplay(id))
     }
+
+    /** Asks the host to resize the running stream; it answers with a new `stream.ready`, no reconnect. */
+    fun selectSize(w: Int, h: Int) { send(Msg.StreamSize(w, h)) }
 
     fun stop() {
         timeout?.cancel(); listen?.cancel(); listen = null
