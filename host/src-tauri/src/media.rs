@@ -2,6 +2,7 @@
 
 use crate::agent::Outbox;
 use crate::input::{Emitter, Ev, SendInputEmitter};
+#[cfg(test)]
 use crate::proto::ServerMsg;
 use std::time::Duration;
 use windows::Media::Control::{
@@ -13,55 +14,7 @@ use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Cmd {
-    PlayPause,
-    Next,
-    Prev,
-    VolUp,
-    VolDown,
-    Mute,
-    VolSet(u8),
-}
-
-impl Cmd {
-    pub fn parse(c: &str, v: Option<u8>) -> Result<Self, &'static str> {
-        Ok(match c {
-            "play_pause" => Cmd::PlayPause,
-            "next" => Cmd::Next,
-            "prev" => Cmd::Prev,
-            "vol_up" => Cmd::VolUp,
-            "vol_down" => Cmd::VolDown,
-            "mute" => Cmd::Mute,
-            "vol_set" => Cmd::VolSet(v.ok_or("bad_request")?.min(100)),
-            _ => return Err("bad_request"),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct MediaState {
-    pub title: String,
-    pub artist: String,
-    pub app: String,
-    pub playing: bool,
-    pub vol: u8,
-    pub muted: bool,
-}
-
-/// Remembers the last pushed state so `media` is only sent on change.
-#[derive(Default)]
-pub struct Diff(Option<MediaState>);
-
-impl Diff {
-    pub fn changed(&mut self, s: MediaState) -> Option<ServerMsg> {
-        if self.0.as_ref() == Some(&s) {
-            return None;
-        }
-        self.0 = Some(s.clone());
-        Some(ServerMsg::Media { title: s.title, artist: s.artist, app: s.app, playing: s.playing, vol: s.vol, muted: s.muted })
-    }
-}
+pub use secpar_host_core::media::{Cmd, Diff, MediaState};
 
 /// "SpotifyAB.SpotifyMusic_x!Spotify" → "Spotify", "chrome.exe" → "chrome".
 pub fn app_name(aumid: &str) -> String {

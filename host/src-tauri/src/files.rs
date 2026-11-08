@@ -1,84 +1,10 @@
 //! File transfer: phone → PC into the received-files folder (resumable), and PC → phone offers.
+//! The portable logic lives in secpar-host-core and is shared with Linux; this file adds the
+//! Windows free-space check, the toast and the drive listing.
 
-use crate::proto::{chunk_frame, parse_binary, Binary, ServerMsg};
-use crate::tls::hex;
-use ring::digest::{Context, SHA256};
-use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+pub use secpar_host_core::files::*;
+use crate::proto::FsEntry;
 use std::path::{Path, PathBuf};
-
-/// Chunk payload size, per protocol (≤ 256 KiB).
-pub const CHUNK: usize = 256 * 1024;
-
-/// A safe Windows file name: base name only, no reserved device names or invalid characters.
-pub fn sanitize(name: &str) -> String {
-    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
-    let mut s: String = base
-        .chars()
-        .map(|c| if c < ' ' || "<>:\"/\\|?*".contains(c) { '_' } else { c })
-        .take(200)
-        .collect();
-    s = s.trim_end_matches(['.', ' ']).trim_start().to_string();
-    if s.is_empty() {
-        return "file".into();
-    }
-    let stem = s.split('.').next().unwrap_or("").to_ascii_uppercase();
-    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.as_bytes()[3].is_ascii_digit()
-            && stem.as_bytes()[3] != b'0');
-    if reserved {
-        s.insert(0, '_');
-    }
-    s
-}
-
-/// A phone-supplied relative path ("Photos/2024/a.jpg") made safe: every component sanitised,
-/// `.`/`..`/empty parts and drive or UNC prefixes dropped, so it can never leave the target folder.
-pub fn safe_rel(name: &str) -> PathBuf {
-    let parts: Vec<String> = name
-        .split(['/', '\\'])
-        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
-        .map(sanitize)
-        .collect();
-    let keep = parts.len().saturating_sub(16); // at most 16 levels deep
-    let p: PathBuf = parts[keep..].iter().collect();
-    if p.as_os_str().is_empty() { PathBuf::from("file") } else { p }
-}
-
-/// `dir/name`, or `name (1)`, `name (2)`… if taken.
-pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let (stem, ext) = match name.rfind('.') {
-        Some(i) if i > 0 => (&name[..i], &name[i..]),
-        _ => (name, ""),
-    };
-    let mut p = dir.join(name);
-    let mut n = 1;
-    while p.exists() {
-        p = dir.join(format!("{stem} ({n}){ext}"));
-        n += 1;
-    }
-    p
-}
-
-pub fn parse_uuid(s: &str) -> Option<[u8; 16]> {
-    let h: String = s.chars().filter(|c| *c != '-').collect();
-    if h.len() != 32 {
-        return None;
-    }
-    let mut out = [0u8; 16];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(h.get(i * 2..i * 2 + 2)?, 16).ok()?;
-    }
-    Some(out)
-}
-
-pub fn format_uuid(b: &[u8; 16]) -> String {
-    let h = hex(b);
-    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
-}
 
 fn free_space(dir: &Path) -> Option<u64> {
     use windows::core::HSTRING;
@@ -89,176 +15,13 @@ fn free_space(dir: &Path) -> Option<u64> {
     Some(free)
 }
 
-struct Rx {
-    id: String,
-    /// Final folder (the received-files folder, or a subfolder of it) and file name.
-    dir: PathBuf,
-    name: String,
-    part: PathBuf,
-    file: File,
-    len: u64,
-    size: u64,
-    hash: Context,
-}
-
-/// One session's phone → PC transfers. `.part` files survive a dropped connection,
-/// so a new `file.begin` with the same id and name resumes.
-pub struct Incoming {
-    dir: PathBuf,
-    active: HashMap<[u8; 16], Rx>,
-}
-
-impl Incoming {
-    pub fn new(dir: PathBuf) -> Self {
-        Incoming { dir, active: HashMap::new() }
-    }
-
-    fn error(id: &str, code: &str) -> ServerMsg {
-        ServerMsg::FileError { id: id.into(), code: code.into() }
-    }
-
-    pub fn begin(&mut self, id: &str, name: &str, size: u64) -> ServerMsg {
-        let Some(key) = parse_uuid(id) else { return Self::error(id, "denied") };
-        let rel = safe_rel(name);
-        let dir = rel.parent().map_or(self.dir.clone(), |p| self.dir.join(p));
-        let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
-        if std::fs::create_dir_all(&dir).is_err() {
-            return Self::error(id, "denied");
-        }
-        let part = dir.join(format!("{name}.{}.part", &hex(&key)[..12]));
-        let Ok(mut file) = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&part) else {
-            return Self::error(id, "denied");
-        };
-        let mut len = file.metadata().map(|m| m.len()).unwrap_or(0);
-        if len > size {
-            let _ = file.set_len(0);
-            len = 0;
-        }
-        if free_space(&self.dir).is_some_and(|f| f < size - len) {
-            return Self::error(id, "disk_full");
-        }
-        // Resuming: the final hash covers the whole file, so fold in what is already there.
-        let mut hash = Context::new(&SHA256);
-        let mut buf = vec![0u8; CHUNK];
-        let mut left = len;
-        while left > 0 {
-            match file.read(&mut buf[..CHUNK.min(left as usize)]) {
-                Ok(0) | Err(_) => return Self::error(id, "denied"),
-                Ok(n) => {
-                    hash.update(&buf[..n]);
-                    left -= n as u64;
-                }
-            }
-        }
-        let _ = file.seek(SeekFrom::End(0));
-        self.active.insert(key, Rx { id: id.into(), dir, name, part, file, len, size, hash });
-        ServerMsg::FileReady { id: id.into(), offset: len }
-    }
-
-    /// Writes a chunk at the current end of its `.part`; stale or unknown chunks are ignored.
-    pub fn chunk(&mut self, frame: &[u8]) -> Option<ServerMsg> {
-        let Some(Binary::FileChunk { id, offset, data }) = parse_binary(frame) else { return None };
-        let rx = self.active.get_mut(&id)?;
-        if offset != rx.len {
-            return None;
-        }
-        if rx.len + data.len() as u64 > rx.size {
-            let rx = self.active.remove(&id)?;
-            drop(rx.file);
-            let _ = std::fs::remove_file(&rx.part);
-            return Some(Self::error(&rx.id, "too_large"));
-        }
-        if let Err(e) = rx.file.write_all(&data) {
-            let code = if e.kind() == std::io::ErrorKind::StorageFull { "disk_full" } else { "denied" };
-            let id = rx.id.clone();
-            self.active.remove(&parse_uuid(&id)?);
-            return Some(Self::error(&id, code));
-        }
-        rx.hash.update(&data);
-        rx.len += data.len() as u64;
-        None
-    }
-
-    /// Checks the SHA-256 and moves the file into place.
-    pub fn end(&mut self, id: &str, sha256: &str) -> ServerMsg {
-        let Some(rx) = parse_uuid(id).and_then(|k| self.active.remove(&k)) else { return Self::error(id, "denied") };
-        drop(rx.file);
-        if !hex(rx.hash.finish().as_ref()).eq_ignore_ascii_case(sha256) || rx.len != rx.size {
-            let _ = std::fs::remove_file(&rx.part);
-            return Self::error(id, "bad_hash");
-        }
-        let dest = unique_path(&rx.dir, &rx.name);
-        match std::fs::rename(&rx.part, &dest) {
-            Ok(()) => {
-                crate::notify::file_received(&dest);
-                ServerMsg::FileDone { id: id.into(), path: dest.to_string_lossy().into() }
-            }
-            Err(_) => Self::error(id, "denied"),
-        }
-    }
-
-    /// `file.cancel`: stops the upload and deletes its partial file.
-    pub fn cancel(&mut self, id: &str) {
-        if let Some(rx) = parse_uuid(id).and_then(|k| self.active.remove(&k)) {
-            drop(rx.file);
-            let _ = std::fs::remove_file(&rx.part);
-        }
-    }
-}
-
-/// Files offered to phones, by transfer id, until accepted or rejected.
-pub type Outgoing = std::sync::Arc<std::sync::Mutex<HashMap<String, PathBuf>>>;
-
-/// Registers `path` and returns the `file.offer` to send.
-pub fn offer(outgoing: &Outgoing, path: &Path) -> std::io::Result<ServerMsg> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
-    offer_as(outgoing, path, name)
-}
-
-fn offer_as(outgoing: &Outgoing, path: &Path, name: String) -> std::io::Result<ServerMsg> {
-    let size = std::fs::metadata(path)?.len();
-    let id = format_uuid(&crate::store::random::<16>());
-    outgoing.lock().unwrap().insert(id.clone(), path.to_path_buf());
-    Ok(ServerMsg::FileOffer { id, name, size })
-}
-
-/// Most files one folder download offers.
-const TREE_MAX: usize = 5000;
-
-/// `fs.get`: a file → one offer; a folder → one offer per file inside, named `folder/sub/file`.
-pub fn offer_tree(outgoing: &Outgoing, path: &Path) -> std::io::Result<Vec<ServerMsg>> {
-    if !std::fs::metadata(path)?.is_dir() {
-        return Ok(vec![offer(outgoing, path)?]);
-    }
-    let root = path.parent().unwrap_or(path);
-    let mut out = vec![];
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        for e in rd.flatten() {
-            let p = e.path();
-            match e.file_type() {
-                Ok(t) if t.is_dir() => stack.push(p),
-                Ok(t) if t.is_file() => {
-                    let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
-                    if let Ok(m) = offer_as(outgoing, &p, rel) {
-                        out.push(m);
-                    }
-                    if out.len() >= TREE_MAX {
-                        return Ok(out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(out)
+/// An `Incoming` that checks free disk space and shows the "File received" toast.
+pub fn incoming(dir: PathBuf) -> Incoming {
+    Incoming::with_hooks(dir, Hooks { free_space: Some(free_space), received: Some(crate::notify::file_received) })
 }
 
 /// `fs.list`: a folder's entries (folders first), or for "" the drives and the user's folders.
-pub fn list(path: &str, home: &Path) -> std::io::Result<Vec<crate::proto::FsEntry>> {
-    use crate::proto::FsEntry;
-    let secs = |m: &std::fs::Metadata| m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+pub fn list(path: &str, home: &Path) -> std::io::Result<Vec<FsEntry>> {
     if path.is_empty() {
         let mut v: Vec<FsEntry> = ["Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music"]
             .iter()
@@ -276,49 +39,16 @@ pub fn list(path: &str, home: &Path) -> std::io::Result<Vec<crate::proto::FsEntr
         }
         return Ok(v);
     }
-    let mut v: Vec<FsEntry> = std::fs::read_dir(path)?
-        .flatten()
-        .filter_map(|e| {
-            let m = e.metadata().ok()?;
-            use std::os::windows::fs::MetadataExt;
-            if m.file_attributes() & 0x6 != 0 {
-                return None; // hidden or system
-            }
-            Some(FsEntry { name: e.file_name().to_string_lossy().into(), path: e.path().to_string_lossy().into(), dir: m.is_dir(), size: if m.is_dir() { 0 } else { m.len() }, mtime: secs(&m) })
-        })
-        .collect();
-    v.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-    Ok(v)
-}
-
-/// Reads `path` in chunks, sending frames from `offset` on; returns the whole file's SHA-256.
-/// `send` returning false (phone gone) stops early.
-pub fn stream(path: &Path, id: &[u8; 16], offset: u64, send: &mut dyn FnMut(Vec<u8>) -> bool) -> std::io::Result<String> {
-    let mut f = File::open(path)?;
-    let mut hash = Context::new(&SHA256);
-    let mut buf = vec![0u8; CHUNK];
-    let mut pos = 0u64;
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            return Ok(hex(hash.finish().as_ref()));
-        }
-        hash.update(&buf[..n]);
-        let end = pos + n as u64;
-        if end > offset {
-            let skip = offset.saturating_sub(pos) as usize;
-            if !send(chunk_frame(id, pos + skip as u64, &buf[skip..n])) {
-                return Err(std::io::ErrorKind::BrokenPipe.into());
-            }
-        }
-        pos = end;
-    }
+    list_dir(path, |_, m| {
+        use std::os::windows::fs::MetadataExt;
+        m.file_attributes() & 0x6 != 0 // hidden or system
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::chunk_frame;
+    use crate::proto::{chunk_frame, ServerMsg};
 
     fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("pcr-files-{name}-{}", std::process::id()));
