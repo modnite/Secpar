@@ -17,15 +17,17 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    // Opening Secpar brings hosting back after Quit, even when its window is already open.
+    #[cfg(windows)]
+    let hosting = std::thread::spawn(pc_remote_host::service::ensure_running);
     #[cfg(windows)]
     let Some(_instance) = instance::Instance::acquire() else {
+        let _ = hosting.join(); // a second launch only needed to bring hosting back
         return Ok(());
     };
     #[cfg(windows)]
     {
         let _ = pc_remote_host::win::sys::register_send_verb();
-        // Opening Secpar brings hosting back after Quit.
-        std::thread::spawn(pc_remote_host::service::ensure_running);
     }
     secpar_desktop::run()
 }
