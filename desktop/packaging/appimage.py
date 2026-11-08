@@ -9,13 +9,13 @@ TAG = os.environ["SECPAR_RELEASE_TAG"]
 if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", TAG):raise RuntimeError("Use a plain vX.Y.Z release tag")
 if TAG.encode() not in BINARY.read_bytes():raise RuntimeError("Build the binary with the selected release tag")
 if ".debug_" in subprocess.check_output(["readelf","-S",str(BINARY)],text=True):raise RuntimeError("Debug sections must not be published")
-PLUGINS = Path(subprocess.check_output(["pkg-config","--variable=pluginsdir","gstreamer-1.0"],text=True).strip())
 DEST = ROOT/"dist-desktop/Secpar-Linux-x64.AppImage"
 DEST.parent.mkdir(exist_ok=True)
+# GStreamer and its GLib come from the system too: the PipeWire plugin has to match the PipeWire in use.
 # Drivers, their Wayland ABI and the C runtime must come from the user's distribution.
 # ALSA/Pulse/PipeWire also load distribution plugins and configuration; bundling a
 # Debian audio library breaks Arch's plugin directory and can silently disable output.
-SYSTEM = re.compile(r"^(?:ld-linux|lib(?:c\.so|m\.so|pthread|dl\.so|rt\.so|resolv|util\.so|GL|EGL|OpenGL|GLES|vulkan|drm|gbm|va\.so|va-drm|va-x11|nvidia|cuda|wayland-|asound\.so|pulse|pipewire-|spa-))")
+SYSTEM = re.compile(r"^(?:ld-linux|lib(?:c\.so|m\.so|pthread|dl\.so|rt\.so|resolv|util\.so|GL|EGL|OpenGL|GLES|vulkan|drm|gbm|va\.so|va-drm|va-x11|nvidia|cuda|wayland-|asound\.so|pulse|pipewire-|spa-|gst|glib-2|gobject-2|gio-2|gmodule-2|orc-0))")
 with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     app=Path(temp)/"Secpar.AppDir"; lib=app/"usr/lib"; exe=app/"usr/bin"
     lib.mkdir(parents=True);exe.mkdir()
@@ -29,17 +29,6 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     shutil.copy2(ROOT/"assets/icons/lucide/LICENSE",licenses/"Lucide-ISC.txt")
     pending=[BINARY]
     distributed=[BINARY]
-    plugin_dir=lib/"gstreamer-1.0";plugin_dir.mkdir()
-    names=["app","coreelements","audioconvert","audioresample","pulseaudio","pipewire","videoconvertscale","videorate","videoparsersbad","x264","openh264","va","nvcodec"]
-    for name in names:
-        src=PLUGINS/("libgst"+name+".so")
-        if not src.exists():
-            if name in {"va","nvcodec","openh264"}:continue
-            raise RuntimeError("Missing required GStreamer plugin: "+name)
-        shutil.copy2(src,plugin_dir/src.name);pending.append(src);distributed.append(src)
-    scanners=list(Path("/usr/lib").glob("**/gstreamer-1.0/gst-plugin-scanner"))
-    if not scanners:raise RuntimeError("GStreamer plugin scanner not found")
-    shutil.copy2(scanners[0],exe/"gst-plugin-scanner");pending.append(scanners[0])
     copied=set()
     while pending:
         src=pending.pop()
@@ -64,25 +53,17 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
 set -eu
 APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
 export APPDIR
-# A system GStreamer with the PipeWire plugin wins over the bundled one: the bundled plugin is older
-# than current PipeWire and fails desktop capture ("error alloc buffers"). The bundle stays the
-# fallback for systems without GStreamer.
+# GStreamer comes from the system, not the bundle: its PipeWire plugin has to match the PipeWire in use
+# (a bundled one fails desktop capture with "error alloc buffers" on current PipeWire).
 system_gst=""
 for dir in /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu; do
     if [ -e "$dir/libgstreamer-1.0.so.0" ] && [ -e "$dir/gstreamer-1.0/libgstpipewire.so" ]; then system_gst=$dir; break; fi
 done
-if [ -n "$system_gst" ]; then
-    export LD_LIBRARY_PATH="$system_gst:$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    export GST_PLUGIN_SYSTEM_PATH_1_0="$system_gst/gstreamer-1.0"
-    unset GST_PLUGIN_PATH_1_0 GST_PLUGIN_SCANNER
-else
-    export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
-    export GST_PLUGIN_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
-    export GST_PLUGIN_SCANNER="$APPDIR/usr/bin/gst-plugin-scanner"
+if [ -z "$system_gst" ]; then
+    echo "Secpar needs GStreamer with its PipeWire plugin installed (gst-plugins-base, gst-plugin-pipewire; for hosting also the x264 or VA-API encoder plugins)." >&2
+    exit 1
 fi
-export GST_REGISTRY="${XDG_CACHE_HOME:-$HOME/.cache}/secpar/appimage-gst-registry.bin"
-mkdir -p "$(dirname -- "$GST_REGISTRY")"
+export LD_LIBRARY_PATH="$system_gst:$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ "${1:-}" = --install ]; then
     shift
     exec "$APPDIR/usr/bin/secpar-install" "$@"
