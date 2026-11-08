@@ -42,12 +42,18 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
       await unlink(env,machine.computer);
       return json({unlinked:true});
     }
+    if(path==="/v1/host/friends" && method==="GET") {
+      await api.limit(request,env,"host_friends",120);
+      const rows=await q(env,"SELECT x.id,x.handle,COALESCE(s.input,'view') AS input,COALESCE(s.connect,'ask') AS connect FROM friends f JOIN accounts x ON x.id=CASE WHEN f.a=? THEN f.b ELSE f.a END LEFT JOIN friend_settings s ON s.owner=? AND s.friend=x.id WHERE (f.a=? OR f.b=?) AND f.state='accepted' AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?))",machine.owner,machine.owner,machine.owner,machine.owner,machine.owner,machine.owner).all();
+      return json(rows.results);
+    }
     const lease=path.match(/^\/v1\/host\/requests\/([a-f0-9-]{36})$/);
     if(lease && method==="GET") {
       const row=await q(env,"SELECT id,guest,approved,state,expires FROM connection_requests WHERE id=? AND computer=?",lease[1],machine.computer).first<{id:string;guest:string;approved:string|null;state:string;expires:number}>();
       if(!row) api.fail(404,"request_not_found");
       const active=row.state==="claimed"&&row.expires>now()&&await friends(env,machine.owner,row.guest);
-      return json({...row,approved:row.approved?JSON.parse(row.approved):[],active});
+      const policy=await q(env,"SELECT COALESCE(input,'view') AS input,COALESCE(connect,'ask') AS connect FROM friend_settings WHERE owner=? AND friend=?",machine.owner,row.guest).first<{input:string;connect:string}>();
+      return json({...row,approved:row.approved?JSON.parse(row.approved):[],active,input:policy?.input??"view",connect:policy?.connect??"ask"});
     }
     return json({error:"host_scope_denied"},403);
   }

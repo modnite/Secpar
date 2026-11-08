@@ -42,6 +42,7 @@ class Database {
     this.db.exec(readFileSync(new URL("../migrations/0003_hosts.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0004_owner_pairings.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0005_usernames.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0006_directory_and_friend_settings.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -966,7 +967,7 @@ describe("usernames", () => {
     for (let i = 0; i < 21; i++) last = (await add("nobody")).status;
     expect(last).toBe(429);
   });
-  it("offers no way to list or search usernames", async () => {
+  it("offers no unauthenticated way to list or search usernames", async () => {
     expect((await call("/v1/friends/by-username/", "alice", "GET")).status).toBe(404);
     expect((await call("/v1/users?q=b", "alice")).status).toBe(404);
     expect((await call("/v1/friends/by-username", "alice", "PUT")).status).toBe(404);
@@ -1124,5 +1125,161 @@ describe("usernames", () => {
       // A row from an older Worker without handle_lower is still accepted.
       old.prepare("INSERT INTO accounts(id,github_id,handle,name) VALUES('late','late','Late','Late')").run();
     });
+  });
+});
+
+describe("user directory", () => {
+  const list = async (query: string, actor: keyof typeof tokens = "alice") => {
+    const r = await call("/v1/directory" + query, actor);
+    expect(r.status).toBe(200);
+    return (await r.json()) as { handle: string; relation: string; cursor: string }[];
+  };
+  const show = (actor: keyof typeof tokens) =>
+    call("/v1/me/visibility", actor, "PUT", { visible: true });
+  it("hides every account until its owner opts in", async () => {
+    expect(await list("")).toEqual([]);
+    expect(await list("?q=bob")).toEqual([]);
+    expect((await show("bob")).status).toBe(200);
+    expect((await list("?q=bo")).map((r) => r.handle)).toEqual(["bob"]);
+    expect(((await (await call("/v1/me", "bob")).json()) as { visible: boolean }).visible).toBe(true);
+    expect((await call("/v1/me/visibility", "bob", "PUT", { visible: false })).status).toBe(200);
+    expect(await list("?q=bob")).toEqual([]);
+  });
+  it("validates the visibility value and needs a session", async () => {
+    expect((await call("/v1/me/visibility", "bob", "PUT", { visible: "yes" })).status).toBe(400);
+    expect((await call("/v1/me/visibility", null, "PUT", { visible: true })).status).toBe(401);
+    expect((await call("/v1/directory", null)).status).toBe(401);
+  });
+  it("searches by prefix without regard to case and treats wildcards as plain text", async () => {
+    await show("bob");
+    await show("mallory");
+    expect((await list("?q=B")).map((r) => r.handle)).toEqual(["bob"]);
+    expect((await list("?q=%40MAL")).map((r) => r.handle)).toEqual(["mallory"]);
+    expect((await list("")).map((r) => r.handle)).toEqual(["bob", "mallory"]);
+    for (const bad of ["%25", "_", "b_b", "b%25", "a-b", "x".repeat(31)]) {
+      expect(await list("?q=" + bad), bad).toEqual([]);
+    }
+  });
+  it("leaves out the caller and anyone blocked in either direction", async () => {
+    await show("alice");
+    await show("bob");
+    await show("mallory");
+    expect((await list("")).map((r) => r.handle)).toEqual(["bob", "mallory"]);
+    await call("/v1/blocks/bob", "alice", "PUT");
+    expect((await list("")).map((r) => r.handle)).toEqual(["mallory"]);
+    await call("/v1/blocks/alice", "mallory", "PUT");
+    expect(await list("")).toEqual([]);
+  });
+  it("shows the relation and pages by cursor", async () => {
+    await show("bob");
+    await show("mallory");
+    expect((await list("")).map((r) => r.relation)).toEqual(["none", "none"]);
+    await call("/v1/friends/by-username/bob", "alice", "PUT");
+    expect((await list("")).map((r) => r.relation)).toEqual(["requested", "none"]);
+    expect((await list("", "bob")).map((r) => r.relation)).toEqual(["none"]);
+    await show("alice");
+    expect((await list("", "bob")).map((r) => r.relation)).toEqual(["incoming", "none"]);
+    await call("/v1/friends/alice/accept", "bob", "POST");
+    expect((await list("")).map((r) => r.relation)).toEqual(["friend", "none"]);
+    const first = await list("");
+    expect((await list("?after=" + first[0].cursor)).map((r) => r.handle)).toEqual(["mallory"]);
+  });
+  it("returns at most 20 names and is rate limited", async () => {
+    for (let i = 0; i < 25; i++) {
+      const name = "user_" + String(i).padStart(2, "0");
+      await db
+        .prepare("INSERT INTO accounts(id,github_id,handle,handle_lower,name,visible) VALUES(?,?,?,?,?,1)")
+        .bind("u" + i, "u" + i, name, name, "u")
+        .run();
+    }
+    expect(await list("?q=user_")).toHaveLength(20);
+    expect(await list("?q=userx")).toEqual([]);
+    let last = 0;
+    for (let i = 0; i < 60; i++) last = (await call("/v1/directory?q=a")).status;
+    expect(last).toBe(429);
+  });
+  it("never lists invisible accounts and leaks no ids or emails", async () => {
+    await show("bob");
+    const rows = await list("");
+    expect(JSON.stringify(rows)).not.toContain("mallory");
+    expect(Object.keys(rows[0]).sort()).toEqual(["cursor", "handle", "name", "relation"]);
+  });
+});
+
+describe("per-friend host settings", () => {
+  const settings = (actor: keyof typeof tokens, friend: string, data?: unknown) =>
+    call(`/v1/friends/${friend}/settings`, actor, data ? "PUT" : "GET", data);
+  const ask = (host: string, permissions: string[], actor: keyof typeof tokens = "bob") =>
+    call("/v1/requests", actor, "POST", { computer: host, permissions });
+  it("defaults to view only and ask each time", async () => {
+    await friendship();
+    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "view", connect: "ask" });
+    const list = await (await call("/v1/friends", "alice")).json();
+    expect(list[0]).toMatchObject({ input: "view", connect: "ask" });
+  });
+  it("is only for the owner and only for accepted friends", async () => {
+    expect((await settings("alice", "bob", { input: "full" })).status).toBe(404);
+    await friendship();
+    expect((await settings("alice", "mallory", { input: "full" })).status).toBe(404);
+    expect((await settings("alice", "bob", { input: "full" })).status).toBe(200);
+    expect(await (await settings("bob", "alice")).json()).toEqual({ input: "view", connect: "ask" });
+    expect((await settings("alice", "bob", {})).status).toBe(400);
+    expect((await settings("alice", "bob", { input: "admin" })).status).toBe(400);
+    expect((await settings("alice", "bob", { connect: "never" })).status).toBe(400);
+    expect((await settings("alice", "bob", { connect: "always" })).status).toBe(200);
+    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "full", connect: "always" });
+  });
+  it("strips keyboard and mouse for a view only friend and refuses input only requests", async () => {
+    await friendship();
+    const host = await computer();
+    const r = await ask(host, ["view", "keyboard", "mouse"]);
+    expect(r.status).toBe(201);
+    const made = await r.json();
+    expect(made).toMatchObject({ state: "pending", permissions: ["view"] });
+    expect((await ask(host, ["keyboard"])).status).toBe(403);
+    expect(
+      (await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view", "mouse"] })).status,
+    ).toBe(400);
+    expect(
+      (await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view"] })).status,
+    ).toBe(200);
+  });
+  it("keeps input in the grant only for a friend with full access and revokes it when lowered", async () => {
+    await friendship();
+    const host = await computer();
+    await settings("alice", "bob", { input: "full" });
+    const made = await (await ask(host, ["view", "keyboard", "mouse"])).json();
+    expect(made.permissions).toEqual(["keyboard", "mouse", "view"]);
+    expect(
+      (await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view", "keyboard"] })).status,
+    ).toBe(200);
+    await settings("alice", "bob", { input: "view" });
+    const row = await (await call(`/v1/requests/${made.id}`, "alice")).json();
+    expect(row.state).toBe("revoked");
+  });
+  it("approves at once when the friend may connect at any time", async () => {
+    await friendship();
+    const host = await computer();
+    await settings("alice", "bob", { connect: "always" });
+    const made = await (await ask(host, ["view", "audio"])).json();
+    expect(made).toMatchObject({ state: "approved", permissions: ["audio", "view"] });
+    expect((await call(`/v1/requests/${made.id}/claim`, "bob", "POST")).status).toBe(200);
+  });
+  it("refuses a blocked friend even with connect at any time", async () => {
+    await friendship();
+    const host = await computer();
+    await settings("alice", "bob", { connect: "always" });
+    await call("/v1/blocks/bob", "alice", "PUT");
+    expect((await ask(host, ["view"])).status).toBe(403);
+  });
+  it("names the guest and the computer on connection requests", async () => {
+    await friendship();
+    const host = await computer();
+    await ask(host, ["view"]);
+    const rows = await (await call("/v1/requests", "alice")).json();
+    expect(rows[0]).toMatchObject({ guest_handle: "bob", computer_name: "Desktop", state: "pending" });
+  });
+  it("gives a host its friends only with the machine credential", async () => {
+    expect((await call("/v1/host/friends", "alice")).status).toBe(401);
   });
 });

@@ -12,7 +12,7 @@ export interface Env {
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
 }
-type Account = { id: string; handle: string; name: string };
+type Account = { id: string; handle: string; name: string; visible: number };
 type Grant = {
   id: string;
   computer: string;
@@ -174,7 +174,7 @@ async function user(request: Request, env: Env): Promise<Account> {
     deny(403, "invalid_origin");
   const row = await q(
     env,
-    "SELECT a.id,a.handle,a.name FROM sessions s JOIN accounts a ON a.id=s.user_id WHERE s.hash=? AND s.expires>?",
+    "SELECT a.id,a.handle,a.name,a.visible FROM sessions s JOIN accounts a ON a.id=s.user_id WHERE s.hash=? AND s.expires>?",
     await hash(token),
     seconds(),
   ).first<Account>();
@@ -201,6 +201,15 @@ async function friends(env: Env, a: string, b: string): Promise<boolean> {
       high,
     ).first())
   );
+}
+async function friendSettings(env: Env, owner: string, friend: string) {
+  const row = await q(
+    env,
+    "SELECT input,connect FROM friend_settings WHERE owner=? AND friend=?",
+    owner,
+    friend,
+  ).first<{ input: string; connect: string }>();
+  return { input: row?.input ?? "view", connect: row?.connect ?? "ask" };
 }
 async function signing(env: Env) {
   let jwk: JWK;
@@ -594,7 +603,43 @@ export async function handle(
     }
 
     if (path === "/account" && method === "GET") return accountPage(me.handle);
-    if (path === "/v1/me" && method === "GET") return response(me);
+    if (path === "/v1/me" && method === "GET")
+      return response({ ...me, visible: !!me.visible });
+    if (path === "/v1/me/visibility" && method === "PUT") {
+      const visible = (await body(request)).visible;
+      if (typeof visible !== "boolean") deny(400, "invalid_value");
+      await q(env, "UPDATE accounts SET visible=? WHERE id=?", visible ? 1 : 0, me.id).run();
+      return response({ visible });
+    }
+    if (path === "/v1/directory" && method === "GET") {
+      await limit(request, env, "directory", 60);
+      const search = (url.searchParams.get("q") ?? "").trim().replace(/^@/, "").toLowerCase();
+      const after = (url.searchParams.get("after") ?? "").toLowerCase();
+      if (
+        (search && !/^[a-z0-9_]{1,30}$/.test(search)) ||
+        (after && !/^[a-z0-9_]{1,30}$/.test(after))
+      )
+        return response([]);
+      const rows = await q(
+        env,
+        "SELECT x.id,x.handle,x.name,x.handle_lower AS lower,f.state,f.requester FROM accounts x LEFT JOIN friends f ON f.a=MIN(x.id,?) AND f.b=MAX(x.id,?) WHERE x.visible=1 AND x.id<>? AND x.handle_lower LIKE ? ESCAPE '!' AND x.handle_lower>? AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?)) ORDER BY x.handle_lower LIMIT 20",
+        me.id,
+        me.id,
+        me.id,
+        search.replaceAll("_", "!_") + "%",
+        after,
+        me.id,
+        me.id,
+      ).all<{ id: string; handle: string; name: string; lower: string; state: string | null; requester: string | null }>();
+      return response(
+        rows.results.map((r) => ({
+          handle: r.handle,
+          name: r.name,
+          cursor: r.lower,
+          relation: !r.state ? "none" : r.state === "accepted" ? "friend" : r.requester === me.id ? "requested" : "incoming",
+        })),
+      );
+    }
     if (path === "/auth/logout" && method === "POST") {
       const token =
         request.headers
@@ -623,7 +668,8 @@ export async function handle(
     if (path === "/v1/friends" && method === "GET") {
       const rows = await q(
         env,
-        "SELECT x.id,x.handle,x.name,f.state,f.requester FROM friends f JOIN accounts x ON x.id=CASE WHEN f.a=? THEN f.b ELSE f.a END WHERE (f.a=? OR f.b=?) AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?))",
+        "SELECT x.id,x.handle,x.name,f.state,f.requester,COALESCE(s.input,'view') AS input,COALESCE(s.connect,'ask') AS connect FROM friends f JOIN accounts x ON x.id=CASE WHEN f.a=? THEN f.b ELSE f.a END LEFT JOIN friend_settings s ON s.owner=? AND s.friend=x.id WHERE (f.a=? OR f.b=?) AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?))",
+        me.id,
         me.id,
         me.id,
         me.id,
@@ -631,6 +677,41 @@ export async function handle(
         me.id,
       ).all();
       return response(rows.results);
+    }
+    const settings = path.match(/^\/v1\/friends\/([^/]+)\/settings$/);
+    if (settings && ["GET", "PUT"].includes(method)) {
+      const other = settings[1];
+      if (!(await friends(env, me.id, other))) deny(404, "account_unavailable");
+      if (method === "PUT") {
+        const b = await body(request);
+        const input = b.input ?? null,
+          connect = b.connect ?? null;
+        if (
+          (input !== null && input !== "view" && input !== "full") ||
+          (connect !== null && connect !== "ask" && connect !== "always") ||
+          (input === null && connect === null)
+        )
+          deny(400, "invalid_value");
+        await q(
+          env,
+          "INSERT INTO friend_settings(owner,friend,input,connect) VALUES(?,?,COALESCE(?,'view'),COALESCE(?,'ask')) ON CONFLICT(owner,friend) DO UPDATE SET input=COALESCE(?,input),connect=COALESCE(?,connect)",
+          me.id,
+          other,
+          input,
+          connect,
+          input,
+          connect,
+        ).run();
+        if (input === "view")
+          // A view only friend cannot keep a grant that already allows input.
+          await q(
+            env,
+            "UPDATE connection_requests SET state='revoked' WHERE owner=? AND guest=? AND state IN ('pending','approved','claimed') AND (requested LIKE '%\"keyboard\"%' OR requested LIKE '%\"mouse\"%') AND (COALESCE(approved,requested) LIKE '%\"keyboard\"%' OR COALESCE(approved,requested) LIKE '%\"mouse\"%')",
+            me.id,
+            other,
+          ).run();
+      }
+      return response(await friendSettings(env, me.id, other));
     }
     const byName = path.match(/^\/v1\/friends\/by-username\/([^/]+)$/);
     if (byName && method === "PUT") {
@@ -796,25 +877,38 @@ export async function handle(
       ).first<{ owner: string }>();
       if (!host || !(await friends(env, host.owner, me.id)))
         deny(403, "friend_access_required");
+      const policy = await friendSettings(env, host.owner, me.id);
+      // A view only friend never gets keyboard or mouse, whatever the app asks for.
+      const allowed =
+        policy.input === "full"
+          ? requested
+          : requested.filter((p) => p !== "keyboard" && p !== "mouse");
+      if (!allowed.length) deny(403, "input_not_allowed");
       const id = crypto.randomUUID();
+      const auto = policy.connect === "always";
       await q(
         env,
-        "INSERT INTO connection_requests(id,computer,owner,guest,requested,state,expires) VALUES(?,?,?,?,?,'pending',?)",
+        "INSERT INTO connection_requests(id,computer,owner,guest,requested,approved,state,expires) VALUES(?,?,?,?,?,?,?,?)",
         id,
         computer,
         host.owner,
         me.id,
-        JSON.stringify(requested),
+        JSON.stringify(allowed),
+        auto ? JSON.stringify(allowed) : null,
+        auto ? "approved" : "pending",
         seconds() + 300,
       ).run();
-      return response({ id, state: "pending", expires_in: 300 }, 201);
+      return response(
+        { id, state: auto ? "approved" : "pending", expires_in: 300, permissions: allowed },
+        201,
+      );
     }
     if (path === "/v1/requests" && method === "GET")
       return response(
         (
           await q(
             env,
-            "SELECT * FROM connection_requests WHERE (owner=? OR guest=?) AND expires>? ORDER BY expires",
+            "SELECT r.*,g.handle AS guest_handle,c.name AS computer_name FROM connection_requests r JOIN accounts g ON g.id=r.guest LEFT JOIN computers c ON c.id=r.computer WHERE (r.owner=? OR r.guest=?) AND r.expires>? ORDER BY r.expires",
             me.id,
             me.id,
             seconds(),
@@ -845,6 +939,11 @@ export async function handle(
           requested = new Set(JSON.parse(row.requested) as string[]);
         if (!approved.every((p) => requested.has(p)))
           deny(400, "cannot_expand_requested_permissions");
+        if (
+          (await friendSettings(env, row.owner, row.guest)).input !== "full" &&
+          approved.some((p) => p === "keyboard" || p === "mouse")
+        )
+          deny(400, "input_not_allowed");
         const changed = await q(
           env,
           "UPDATE connection_requests SET state='approved',approved=? WHERE id=? AND state='pending' AND expires>?",
