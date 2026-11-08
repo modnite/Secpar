@@ -757,6 +757,7 @@ impl eframe::App for App {
         raw.events=local;
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        #[cfg(windows)]
         if let Some(tray) = &self.tray {
             tray.set_connected(self.command.is_some());
             if tray.take_disconnect() && self.command.is_some() {
