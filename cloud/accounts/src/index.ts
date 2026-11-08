@@ -1,5 +1,6 @@
 import { hostRoutes } from "./hosts";
 import { passwordRoutes, accountPage } from "./passwords";
+import { assetRoute, escapeHtml, heading, renderPage } from "./ui";
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
 
 export interface Env {
@@ -92,24 +93,8 @@ export async function hash(value: string): Promise<string> {
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
-function html(text: string, status = 200): Response {
-  return new Response(text, {
-    status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "content-security-policy":
-        "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-      "x-content-type-options": "nosniff",
-    },
-  });
-}
-const escapeHtml = (s: string) =>
-  s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+const html = (title: string, content: string, status = 200): Response =>
+  renderPage(title, content, status);
 function setCookie(name: string, value: string, age: number): string {
   return `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
 }
@@ -274,6 +259,8 @@ export async function handle(
       const key = await signing(env);
       return response({ keys: [key.publicKey] });
     }
+    const asset = assetRoute(request);
+    if (asset) return asset;
     const passwordResponse = await passwordRoutes(request, env, providerFetch);
     if (passwordResponse) return passwordResponse;
     if (path === "/auth/start" && method === "GET")
@@ -534,7 +521,8 @@ export async function handle(
       ).first<{ name: string }>();
       if (!row) deny(400, "device_code_expired_or_used");
       return html(
-        `<!doctype html><html lang="en"><meta charset="utf-8"><title>Secpar device approval</title><h1>Authorize ${escapeHtml(row.name)}</h1><p>Signed in as ${escapeHtml(signed.handle)}.</p><p>Approve only if this code matches the one in your Secpar app: <strong>${code}</strong></p><form method="post" action="/activate"><input type="hidden" name="code" value="${code}"><button type="submit">Approve device</button></form></html>`,
+        "Approve a computer",
+        `${heading("Approve " + row.name, "The Secpar app on that device asked to sign in to your app account.")}<p>This browser is signed in as <strong>${escapeHtml(signed.handle)}</strong>.</p><p>The app shows this code. Approve only if the codes match:</p><p class="code" aria-label="Device code">${code}</p><form method="post" action="/activate"><input type="hidden" name="code" value="${code}"><button class="button" type="submit">Approve</button></form><p class="fine">The code works for 10 minutes after the app shows it. If you did not start this, close the page.</p>`,
       );
     }
     const hostApi = {body,fail:deny,hash,limit:(r:Request,_env:unknown,operation:string,maximum:number)=>limit(r,env,operation,maximum)};
@@ -555,7 +543,8 @@ export async function handle(
       ).run();
       if (!changed.meta.changes) deny(409, "device_code_expired_or_used");
       return html(
-        '<!doctype html><html lang="en"><meta charset="utf-8"><title>Secpar</title><h1>Device approved</h1><p>Return to Secpar.</p></html>',
+        "Device approved",
+        `${heading("Computer approved")}<p>Go back to the Secpar app. It signs in within a few seconds. You can close this page.</p>`,
       );
     }
 

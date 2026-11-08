@@ -1,4 +1,5 @@
 import { scrypt, timingSafeEqual, randomBytes } from "node:crypto";
+import { APP_ACCOUNT_NOTE, escapeHtml, field, heading, renderPage } from "./ui";
 
 export interface PasswordEnv {
   DB: D1Database;
@@ -14,12 +15,6 @@ const digest = async (s: string) =>
   Buffer.from(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)),
   ).toString("hex");
-const escape = (s: string) =>
-  s
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 class Failure extends Error {
   constructor(
     readonly status: number,
@@ -80,23 +75,10 @@ function email(value: unknown): string {
     fail(400, "Enter a valid email address.");
   return normalized;
 }
+// no-referrer makes browser form POSTs send Origin: null.
+// same-origin preserves Origin without leaking recovery URLs off-site.
 function page(title: string, content: string, status = 200): Response {
-  const nonce = random();
-  return new Response(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Secpar</title><style nonce="${nonce}">:root{color-scheme:light dark;font:17px system-ui}body{max-width:28rem;margin:3rem auto;padding:0 1.2rem}input,button{box-sizing:border-box;font:inherit;padding:.7rem;width:100%;margin:.4rem 0 1rem}label{display:block}a{color:inherit}h1{font-size:1.7rem}</style><h1>${escape(title)}</h1>${content}</html>`,
-    {
-      status,
-      headers: {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-        // no-referrer makes browser form POSTs send Origin: null.
-        // same-origin preserves Origin without leaking recovery URLs off-site.
-        "referrer-policy": "same-origin",
-        "x-content-type-options": "nosniff",
-        "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
-      },
-    },
-  );
+  return renderPage(title, content, status, { "referrer-policy": "same-origin" });
 }
 async function data(request: Request): Promise<Record<string, unknown>> {
   const reader = request.body?.getReader();
@@ -159,14 +141,14 @@ async function rate(
       now() + 1200,
     ).first<{ count: number }>();
     if (!row || row.count > maximum)
-      fail(429, "Too many attempts. Please try again later.");
+      fail(429, "Too many attempts. Wait a few minutes and try again.");
   }
 }
 function mailReady(env: PasswordEnv) {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM)
     fail(
       503,
-      "Email delivery is being configured. Registration and password reset are not available yet.",
+      "Email sending is not set up yet, so sign-up and password reset are closed for now.",
     );
 }
 async function send(
@@ -178,7 +160,7 @@ async function send(
 ) {
   const link = `${env.PUBLIC_ORIGIN}/auth/${purpose}?token=${token}`;
   const action =
-    purpose === "verify" ? "Verify your email" : "Reset your password";
+    purpose === "verify" ? "Confirm your email" : "Reset your password";
   const result = await sendFetch("https://api.resend.com/emails", {
     method: "POST",
     signal: AbortSignal.timeout(10000),
@@ -190,25 +172,35 @@ async function send(
       from: env.EMAIL_FROM,
       to: [to],
       subject: `${action} · Secpar`,
-      text: `${action}:\n${link}\n\nThis link expires in 30 minutes. If you did not request this, ignore this email.`,
+      text: `${action}:\n${link}\n\nThis link works for 30 minutes. It is for your Secpar app account. If you did not ask for it, ignore this email.`,
     }),
   });
   if (!result.ok)
     fail(
       503,
-      "Email delivery is temporarily unavailable. Please try again later.",
+      "The email could not be sent. Try again in a few minutes.",
     );
 }
 export function accountPage(handle: string): Response {
   return page(
-    "Secpar account",
-    `<p>Signed in as <strong>${escape(handle)}</strong>.</p><p><a href="/auth/forgot">Reset password</a></p><form method="post" action="/auth/logout"><button>Sign out</button></form>`,
+    "Secpar app account",
+    `${heading("Secpar app account", APP_ACCOUNT_NOTE)}<p>This browser is signed in as <strong>${escapeHtml(handle)}</strong>. The Secpar app keeps its own sign-in.</p><form method="post" action="/auth/logout"><button class="button outline" type="submit">Sign out of this browser</button></form><p class="links"><a href="/auth/forgot">Reset password</a></p>`,
   );
 }
-const inputs =
-  '<label>Email<input type="email" name="email" autocomplete="email" required maxlength="254"></label>';
+const inputs = field(
+  "email",
+  "Email",
+  'type="email" name="email" autocomplete="email" required maxlength="254"',
+);
 const passwordInput = (newPassword: boolean) =>
-  `<label>Password<input type="password" name="password" autocomplete="${newPassword ? "new-password" : "current-password"}" required minlength="8" maxlength="256"></label>`;
+  field(
+    "password",
+    newPassword ? "New password" : "Password",
+    `type="password" name="password" autocomplete="${newPassword ? "new-password" : "current-password"}" required minlength="8" maxlength="256"`,
+    newPassword ? "At least 8 characters." : undefined,
+  );
+const submit = (label: string) =>
+  `<button class="button" type="submit">${escapeHtml(label)}</button>`;
 export async function passwordRoutes(
   request: Request,
   env: PasswordEnv,
@@ -229,39 +221,42 @@ export async function passwordRoutes(
   try {
     if (request.method === "GET") {
       const code = url.searchParams.get("activate_code");
-      const hidden =
-        code && /^[A-Z2-9]{8}$/.test(code)
-          ? `<input type="hidden" name="activate_code" value="${code}">`
-          : "";
+      const linking = !!code && /^[A-Z2-9]{8}$/.test(code);
+      const hidden = linking
+        ? `<input type="hidden" name="activate_code" value="${code}">`
+        : "";
+      const carry = linking ? "?activate_code=" + code : "";
       if (path === "/auth/sign-in")
         return page(
-          "Sign in to Secpar",
-          `<form method="post">${hidden}${inputs}${passwordInput(false)}<button>Sign in</button></form><p><a href="/auth/register${hidden ? "?activate_code=" + code : ""}">Create account</a> · <a href="/auth/forgot">Forgot password?</a></p>`,
+          "Secpar app account",
+          `${heading("Secpar app account", APP_ACCOUNT_NOTE)}${linking ? '<p class="notice">Sign in to approve the computer that is waiting in the Secpar app.</p>' : ""}<form method="post">${hidden}${inputs}${passwordInput(false)}${submit("Sign in")}</form><p class="links"><a href="/auth/register${carry}">Create an account</a><a href="/auth/forgot">Reset password</a></p>`,
         );
       if (path === "/auth/register") {
         mailReady(env);
         return page(
-          "Create your account",
-          `<form method="post">${hidden}${inputs}<label>Username<input name="handle" autocomplete="username" pattern="[a-zA-Z0-9_]{3,30}" required minlength="3" maxlength="30"></label>${passwordInput(true)}<p>Use at least 8 characters.</p><button>Create account</button></form>`,
+          "Create an app account",
+          `${heading("Create an app account", APP_ACCOUNT_NOTE)}<form method="post">${hidden}${inputs}${field("handle", "Username", 'name="handle" autocomplete="username" pattern="[a-zA-Z0-9_]{3,30}" required minlength="3" maxlength="30"', "3 to 30 letters, numbers or underscores. Friends see it.")}${passwordInput(true)}${submit("Create account")}</form><p class="fine">We email you a link to confirm the address. It works for 30 minutes.</p><p class="links"><a href="/auth/sign-in${carry}">I already have an account</a></p>`,
         );
       }
       if (path === "/auth/forgot") {
         mailReady(env);
         return page(
           "Reset your password",
-          `<form method="post">${inputs}<button>Send reset link</button></form>`,
+          `${heading("Reset your password", "Enter the email of your app account. We send a link that works for 30 minutes.")}<form method="post">${inputs}${submit("Send reset link")}</form><p class="links"><a href="/auth/sign-in">Back to sign in</a></p>`,
         );
       }
       const token = url.searchParams.get("token");
-      if (!token || !/^[a-f0-9]{64}$/.test(token)) fail(400, "Invalid link.");
+      if (!token || !/^[a-f0-9]{64}$/.test(token))
+        fail(400, "This link is not valid. Ask for a new one.");
+      const verifying = path.endsWith("verify");
       return page(
-        path.endsWith("verify") ? "Verify your email" : "Choose a new password",
-        `<form method="post"><input type="hidden" name="token" value="${token}">${path.endsWith("reset") ? passwordInput(true) : ""}<button>${path.endsWith("verify") ? "Verify email" : "Reset password"}</button></form>`,
+        verifying ? "Confirm your email" : "Choose a new password",
+        `${heading(verifying ? "Confirm your email" : "Choose a new password", verifying ? "Select the button to confirm this address for your Secpar app account." : "Saving a new password signs your account out on every device.")}<form method="post"><input type="hidden" name="token" value="${token}">${verifying ? "" : passwordInput(true)}${submit(verifying ? "Confirm email" : "Save password")}</form>`,
       );
     }
     if (request.method !== "POST") fail(405, "Method not allowed.");
     if (request.headers.get("origin") !== new URL(env.PUBLIC_ORIGIN).origin)
-      fail(403, "Invalid request origin.");
+      fail(403, "The request came from another site and was refused.");
     const b = await data(request);
     if (path === "/auth/register" || path === "/auth/forgot") {
       mailReady(env);
@@ -278,7 +273,7 @@ export async function passwordRoutes(
           typeof b.handle !== "string" ||
           !/^[a-zA-Z0-9_]{3,30}$/.test(b.handle)
         )
-          fail(400, "Use a username of 3–30 letters, numbers or underscores.");
+          fail(400, "Use a username of 3 to 30 letters, numbers or underscores.");
         const encoded = await passwordHash(pass); // Also performed for an existing email.
         if (!account) {
           const id = crypto.randomUUID();
@@ -338,7 +333,7 @@ export async function passwordRoutes(
       }
       return page(
         "Check your email",
-        '<p>If this address can receive the requested link, an email is on its way. You can request a password reset if you already have an account.</p><a href="/auth/sign-in">Back to sign in</a>',
+        `${heading("Check your email")}<p>If the address can receive mail, a link is on its way. It works for 30 minutes. Look in the spam folder if it does not arrive.</p><p>Open the link, then sign in again in the Secpar app.</p><p class="links"><a href="/auth/sign-in">Back to sign in</a></p>`,
       );
     }
     if (path === "/auth/sign-in") {
@@ -359,7 +354,7 @@ export async function passwordRoutes(
       if (!account || !match || !account.verified)
         fail(
           401,
-          "Email or password is incorrect, or the email has not been verified.",
+          "The email or password is wrong, or the email is not confirmed yet.",
         );
       const token = random();
       const created = await q(
@@ -371,7 +366,7 @@ export async function passwordRoutes(
         account.password_hash,
       ).run();
       if (!created.meta.changes)
-        fail(401, "Your credentials changed. Please sign in again.");
+        fail(401, "Your password changed while you signed in. Sign in again.");
       const code =
         typeof b.activate_code === "string" &&
         /^[A-Z2-9]{8}$/.test(b.activate_code)
@@ -389,7 +384,7 @@ export async function passwordRoutes(
     await rate(env, request, "email-token");
     const token = b.token;
     if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token))
-      fail(400, "Invalid or expired link.");
+      fail(400, "This link is not valid or has expired. Ask for a new one.");
     const purpose = path === "/auth/verify" ? "verify" : "reset";
     // KDF finishes before the atomic batch so a hashing failure cannot consume a link.
     const encoded =
@@ -443,21 +438,23 @@ export async function passwordRoutes(
         now(),
       ),
     ]);
-    if (!results[0].meta.changes) fail(400, "Invalid or expired link.");
+    if (!results[0].meta.changes)
+      fail(400, "This link is not valid or has expired. Ask for a new one.");
+    const done = purpose === "verify" ? "Email confirmed" : "Password changed";
     return page(
-      purpose === "verify" ? "Email verified" : "Password reset",
-      '<p>You can now sign in.</p><a href="/auth/sign-in">Sign in</a>',
+      done,
+      `${heading(done)}<p>${purpose === "verify" ? "Open the Secpar app and sign in with this email and your password." : "Every device was signed out. Open the Secpar app and sign in with the new password."}</p><a class="button outline" href="/auth/sign-in">Sign in on this page</a>`,
     );
   } catch (error) {
     if (error instanceof Failure)
       return page(
-        "Unable to continue",
-        `<p>${escape(error.message)}</p><a href="/auth/sign-in">Back to sign in</a>`,
+        "Cannot continue",
+        `${heading("Cannot continue")}<p class="notice" role="alert">${escapeHtml(error.message)}</p><p class="links"><a href="/auth/sign-in">Back to sign in</a></p>`,
         error.status,
       );
     return page(
-      "Unable to continue",
-      "<p>Something went wrong. Please try again later.</p>",
+      "Cannot continue",
+      `${heading("Cannot continue")}<p class="notice" role="alert">Something went wrong on our side. Try again in a few minutes.</p><p class="links"><a href="/auth/sign-in">Back to sign in</a></p>`,
       500,
     );
   }

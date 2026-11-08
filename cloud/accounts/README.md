@@ -41,3 +41,7 @@ Passwords accept 8–256 characters with whitespace preserved and no arbitrary c
 An email/password account gets an internal `password:<uuid>` identity in the legacy non-null github_id column. It is never linked to a GitHub identity merely because email addresses match. Existing GitHub account rows and owner pairings are preserved. Unverified accounts cannot sign in; an email owner can recover an existing unverified signup by resetting its password. Existing registrations do not overwrite stored credentials.
 
 Browser form pages use `Referrer-Policy: same-origin`. Using `no-referrer` makes browsers send `Origin: null` on these POSTs, which conflicts with the exact-origin CSRF check. The origin check remains enforced, and no referrer is sent to other sites. The failure was reproduced with a real browser form before the fix.
+
+## Page styling
+
+The browser pages share `src/ui.ts` (layout, stylesheet, wordmark). `src/assets.ts` holds the Rubik 400 and 500 files and the wordmark as text, copied from `cloud/site/public/assets`. The Worker serves them under `/assets/` so the content security policy only allows `self`.

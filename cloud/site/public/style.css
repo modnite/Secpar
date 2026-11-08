@@ -45,3 +45,4 @@ footer{border-top:1px solid var(--line);display:flex;align-items:center;gap:36px
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}a{transition:none}}
 
 @media(max-width:600px){.nav nav{gap:14px}.nav .brand img{width:114px}.nav nav .button{padding:9px 12px;gap:8px}}
+@media(max-width:400px){.nav{gap:10px}.nav .brand img{width:98px}.nav nav{gap:11px}.nav nav .button{padding:8px 10px}.nav nav .button span{display:none}}
