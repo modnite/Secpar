@@ -8,6 +8,9 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 const RING: usize = 3;
 
 pub struct Convert {
+    dev: ID3D11Device,
+    /// Filtered-chroma shader passes; the video processor below is the fallback.
+    ps: Option<super::convert_ps::Passes>,
     vdev: ID3D11VideoDevice,
     vctx: ID3D11VideoContext1,
     en: ID3D11VideoProcessorEnumerator,
@@ -62,12 +65,26 @@ impl Convert {
                 vdev.CreateVideoProcessorOutputView(&t, &en, &vd, Some(&mut v))?;
                 out.push((t, v.expect("view")));
             }
-            Ok(Convert { vdev, vctx, en, vp, out, next: 0, input: None })
+            let ps = if std::env::var_os("SECPAR_CONVERT_VP").is_some() {
+                None
+            } else {
+                let textures: Vec<_> = out.iter().map(|(t, _)| t.clone()).collect();
+                super::convert_ps::Passes::new(dev, ctx, (iw, ih), (ow, oh), &textures).ok()
+            };
+            Ok(Convert { dev: dev.clone(), ps, vdev, vctx, en, vp, out, next: 0, input: None })
         }
     }
 
     /// Converts `src` (BGRA, the input size) into the next NV12 texture of the ring.
     pub fn convert(&mut self, src: &ID3D11Texture2D) -> windows::core::Result<ID3D11Texture2D> {
+        if let Some(ps) = self.ps.as_mut() {
+            let idx = self.next;
+            if ps.run(&self.dev, src, idx).is_ok() {
+                self.next = (idx + 1) % RING;
+                return Ok(self.out[idx].0.clone());
+            }
+            self.ps = None; // this GPU can't do it: fall back to the video processor for good
+        }
         // SAFETY: as above; the stream struct's view reference is released after the Blt.
         unsafe {
             let key = src.as_raw() as usize;
@@ -145,5 +162,79 @@ mod tests {
         // SAFETY: GetDesc on a live texture.
         unsafe { a.GetDesc(&mut d) };
         assert_eq!((d.Width, d.Height, d.Format), (320, 180, DXGI_FORMAT_NV12));
+    }
+
+    /// ClearType-like columns (red, cyan, red, ...) average to grey: the shader path keeps luma
+    /// sharp and gives neutral chroma, where a point-sampled chroma would be fully saturated.
+    #[test]
+    fn subpixel_columns_give_neutral_chroma_and_sharp_luma() {
+        let Some((dev, ctx, _, _)) = crate::engine::capture::device("") else { return eprintln!("no D3D11 device") };
+        let (w, h) = (64u32, 64u32);
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..h {
+            for x in 0..w {
+                px.extend_from_slice(if x % 2 == 0 { &[0, 0, 255, 255] } else { &[255, 255, 0, 255] }); // BGRA
+            }
+        }
+        // SAFETY: test-only texture creation and readback on live objects.
+        unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                ..Default::default()
+            };
+            let mut src = None;
+            dev.CreateTexture2D(&desc, None, Some(&mut src)).unwrap();
+            let src = src.unwrap();
+            let up = D3D11_TEXTURE2D_DESC { Usage: D3D11_USAGE_STAGING, BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, ..desc };
+            let mut stage = None;
+            dev.CreateTexture2D(&up, None, Some(&mut stage)).unwrap();
+            let stage = stage.unwrap();
+            let mut mw = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&stage, 0, D3D11_MAP_WRITE, 0, Some(&mut mw)).unwrap();
+            for r in 0..h as usize {
+                std::ptr::copy_nonoverlapping(px.as_ptr().add(r * w as usize * 4), mw.pData.cast::<u8>().add(r * mw.RowPitch as usize), w as usize * 4);
+            }
+            ctx.Unmap(&stage, 0);
+            ctx.CopyResource(&src, &stage);
+            let up = D3D11_TEXTURE2D_DESC { Usage: D3D11_USAGE_STAGING, BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, ..desc };
+            let mut stage = None;
+            dev.CreateTexture2D(&up, None, Some(&mut stage)).unwrap();
+            let stage = stage.unwrap();
+            let mut mw = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&stage, 0, D3D11_MAP_WRITE, 0, Some(&mut mw)).unwrap();
+            for r in 0..h as usize {
+                std::ptr::copy_nonoverlapping(px.as_ptr().add(r * w as usize * 4), mw.pData.cast::<u8>().add(r * mw.RowPitch as usize), w as usize * 4);
+            }
+            ctx.Unmap(&stage, 0);
+            ctx.CopyResource(&src, &stage);
+            let mut c = Convert::new(&dev, &ctx, (w, h), (w, h)).unwrap();
+            if c.ps.is_none() {
+                return eprintln!("GPU can't render NV12 planes; video processor in use");
+            }
+            let out = c.convert(&src).unwrap();
+            let sd = D3D11_TEXTURE2D_DESC { Usage: D3D11_USAGE_STAGING, BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32, Format: DXGI_FORMAT_NV12, ..desc };
+            let mut st = None;
+            dev.CreateTexture2D(&sd, None, Some(&mut st)).unwrap();
+            let st = st.unwrap();
+            ctx.CopyResource(&st, &out);
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&st, 0, D3D11_MAP_READ, 0, Some(&mut m)).unwrap();
+            let base = m.pData.cast::<u8>();
+            let pitch = m.RowPitch as usize;
+            let y = |x: usize, r: usize| *base.add(r * pitch + x) as i32;
+            let uv = |x: usize, r: usize| *base.add((h as usize + r) * pitch + x) as i32;
+            let (y0, y1) = (y(20, 20), y(21, 20));
+            let worst = (4..28).flat_map(|r| (4..28).map(move |cx| (cx, r))).map(|(cx, r)| (uv(cx * 2, r) - 128).abs().max((uv(cx * 2 + 1, r) - 128).abs())).max().unwrap();
+            ctx.Unmap(&st, 0);
+            assert!((y1 - y0).abs() > 100, "luma stays sharp: {y0} vs {y1}");
+            assert!(worst <= 3, "chroma is neutral, worst deviation {worst}");
+        }
     }
 }

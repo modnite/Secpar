@@ -656,13 +656,11 @@ impl eframe::App for App {
                 }
                 return;
             }
-            if !self.input.captured { self.capture(ctx, true); }
-            for m in self.input.modifiers(raw.modifiers) { self.send(Command::Input(m)); }
-            for event in std::mem::take(&mut raw.events) {
-                if matches!(event,UiEvent::PointerMoved(_)|UiEvent::PointerGone){raw.events.push(event);continue;}
-                for m in self.input.event(&event) { self.send(Command::Input(m)); }
-            }
-            return;
+            // Fullscreen maps the pointer exactly as the window does: absolute positions on the
+            // picture, so it lands where the host cursor is. Relative deltas drift from the host's
+            // own pointer acceleration. The keyboard goes to the host at once.
+            self.remote_keyboard = true;
+            if !self.input.enabled { self.input.free(); }
         }
         if !ready { return; }
         if self.input.captured { self.capture(ctx, false); }

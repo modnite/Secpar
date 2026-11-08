@@ -5,6 +5,7 @@ pub mod audio;
 pub mod bitrate;
 pub mod capture;
 pub mod convert;
+pub mod convert_ps;
 pub mod cursor;
 pub mod encode;
 pub mod input;
