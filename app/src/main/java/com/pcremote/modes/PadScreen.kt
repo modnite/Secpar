@@ -19,14 +19,11 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -121,7 +118,7 @@ fun PadScreen(pcId: String, onBack: () -> Unit) {
         }
         // Top bar: back, layouts, edit
         Row(Modifier.align(Alignment.TopCenter).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Chip(icon = true, onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null, tint = c.text, modifier = Modifier.size(18.dp)) }
+            Chip(icon = true, onClick = onBack) { Icon(painterResource(R.drawable.lucide_arrow_left), null, tint = c.text, modifier = Modifier.size(18.dp)) }
             layouts.forEach { l ->
                 Chip(selected = l.id == current.id, onClick = { current = l }) {
                     Text(stringResource(layoutName(l.id)), color = if (l.id == current.id) c.onAccent else c.text, style = MaterialTheme.typography.labelMedium)
@@ -134,7 +131,7 @@ fun PadScreen(pcId: String, onBack: () -> Unit) {
                     if (i >= 0) layouts[i] = current // keep the edit when switching layouts
                 }
                 editing = !editing
-            }) { Icon(if (editing) Icons.Rounded.Check else Icons.Rounded.Edit, null, tint = if (editing) c.onAccent else c.text, modifier = Modifier.size(18.dp)) }
+            }) { Icon(painterResource(if (editing) R.drawable.lucide_check else R.drawable.lucide_pencil), null, tint = if (editing) c.onAccent else c.text, modifier = Modifier.size(18.dp)) }
             when {
                 state is AgentState.Failed -> Chip(onClick = { session?.let { s -> scope.launch { s.conn.hello(s.pc.token, Build.MODEL) } } }) {
                     Text(stringResource(if ((state as AgentState.Failed).reason == com.pcremote.agent.FailReason.REVOKED) R.string.pcr_conn_revoked else R.string.pcr_pad_retry),

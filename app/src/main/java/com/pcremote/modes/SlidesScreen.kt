@@ -9,19 +9,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -81,20 +77,20 @@ private fun ColumnScope.SlidesBody(send: (List<Msg>) -> Unit) {
                 color = c.textDim, style = MaterialTheme.typography.bodySmall)
         }
         Pill(if (TARGETS_MIN[targetIdx] == 0) stringResource(R.string.pcr_slides_no_target)
-             else stringResource(R.string.pcr_slides_target, TARGETS_MIN[targetIdx]), Icons.Rounded.Timer) {
+             else stringResource(R.string.pcr_slides_target, TARGETS_MIN[targetIdx]), R.drawable.lucide_timer) {
             targetIdx = (targetIdx + 1) % TARGETS_MIN.size
         }
     }
 
     // Prev / Next zones
     Row(Modifier.weight(1f).fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Zone(Modifier.weight(1f), Icons.AutoMirrored.Rounded.ArrowBack, R.string.pcr_slides_prev, primary = false) { haptics.click(); send(Slides.prev()) }
-        Zone(Modifier.weight(2f), Icons.AutoMirrored.Rounded.ArrowForward, R.string.pcr_slides_next, primary = true) { haptics.click(); send(Slides.next()) }
+        Zone(Modifier.weight(1f), R.drawable.lucide_arrow_left, R.string.pcr_slides_prev, primary = false) { haptics.click(); send(Slides.prev()) }
+        Zone(Modifier.weight(2f), R.drawable.lucide_arrow_right, R.string.pcr_slides_next, primary = true) { haptics.click(); send(Slides.next()) }
     }
 
     // Tools
     Row(Modifier.fillMaxWidth().padding(16.dp, 0.dp, 16.dp, 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Pill(stringResource(R.string.pcr_slides_black), if (black) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
+        Pill(stringResource(R.string.pcr_slides_black), if (black) R.drawable.lucide_eye else R.drawable.lucide_eye_off,
             Modifier.weight(1f), active = black) { black = !black; send(Slides.black()) }
         val gyro = remember { (ctx.getSystemService(Context.SENSOR_SERVICE) as SensorManager).getDefaultSensor(Sensor.TYPE_GYROSCOPE) }
         if (gyro != null) LaserButton(Modifier.weight(1f), gyro, send)
@@ -136,14 +132,14 @@ private fun LaserButton(modifier: Modifier, gyro: Sensor, send: (List<Msg>) -> U
             },
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.Highlight, null, tint = if (held) c.onAccent else c.text)
+        Icon(painterResource(R.drawable.lucide_highlighter), null, tint = if (held) c.onAccent else c.text)
         Spacer(Modifier.width(8.dp))
         Text(stringResource(R.string.pcr_slides_laser), color = if (held) c.onAccent else c.text, style = MaterialTheme.typography.labelLarge)
     }
 }
 
 @Composable
-private fun Zone(modifier: Modifier, icon: ImageVector, label: Int, primary: Boolean, onClick: () -> Unit) {
+private fun Zone(modifier: Modifier, @androidx.annotation.DrawableRes icon: Int, label: Int, primary: Boolean, onClick: () -> Unit) {
     val c = LocalMidnight.current
     Column(
         modifier.fillMaxHeight().clip(MidnightShapes.card)
@@ -151,14 +147,14 @@ private fun Zone(modifier: Modifier, icon: ImageVector, label: Int, primary: Boo
             .border(1.dp, c.border, MidnightShapes.card).clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
     ) {
-        Icon(icon, null, tint = c.text, modifier = Modifier.size(if (primary) 56.dp else 40.dp))
+        Icon(painterResource(icon), null, tint = c.text, modifier = Modifier.size(if (primary) 56.dp else 40.dp))
         Spacer(Modifier.height(10.dp))
         Text(stringResource(label), color = c.textDim, style = MaterialTheme.typography.titleMedium)
     }
 }
 
 @Composable
-private fun Pill(text: String, icon: ImageVector, modifier: Modifier = Modifier, active: Boolean = false, onClick: () -> Unit) {
+private fun Pill(text: String, @androidx.annotation.DrawableRes icon: Int, modifier: Modifier = Modifier, active: Boolean = false, onClick: () -> Unit) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
     Row(
@@ -166,7 +162,7 @@ private fun Pill(text: String, icon: ImageVector, modifier: Modifier = Modifier,
             .clickable { haptics.tick(); onClick() }.padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = if (active) c.onAccent else c.text)
+        Icon(painterResource(icon), null, tint = if (active) c.onAccent else c.text)
         Spacer(Modifier.width(8.dp))
         Text(text, color = if (active) c.onAccent else c.text, style = MaterialTheme.typography.labelLarge)
     }

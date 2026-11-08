@@ -37,6 +37,10 @@ class AccountControllerTest {
         var ownerRequests = 0
         var cancelled = 0
         var meGate: CompletableDeferred<Unit>? = null
+        var friendList = listOf<Friend>()
+        var blockList = listOf<AccountUser>()
+        val actions = mutableListOf<Pair<FriendAction, String>>()
+        var actionFails: AccountError? = null
         override suspend fun beginSignIn(name: String) = DeviceSignIn("d".repeat(64), "ABCD2345",
             "https://accounts.secpar.win/activate?code=ABCD2345", 600, 5)
         override suspend fun pollSignIn(deviceCode: String) = signPoll
@@ -45,6 +49,13 @@ class AccountControllerTest {
             return user
         }
         override suspend fun computers() = entries
+        override suspend fun friends() = friendList
+        override suspend fun blocks() = blockList
+        override suspend fun friendAction(action: FriendAction, id: String) {
+            actionFails?.let { throw AccountException(it) }
+            actions += action to id
+            if (action == FriendAction.INVITE) friendList = friendList + Friend(id, "new-friend", "pending", owner)
+        }
         override suspend fun beginOwnerPair(computerId: String, deviceName: String): OwnerPairPending {
             ownerRequests++
             return OwnerPairPending(request, 1120)
@@ -147,7 +158,7 @@ class AccountControllerTest {
         assertNull(store.session())
         assertNull(c.state.value.user)
         assertFalse(c.state.value.busy)
-        assertTrue(c.state.value.error!!.contains("could not revoke"))
+        assertTrue(c.state.value.error!!.contains("Could not revoke"))
     }
 
     @Test fun `restoring login preserves cached access but unlinked computers revoke it`() = runTest {
@@ -200,5 +211,57 @@ class AccountControllerTest {
         assertNull(store.session())
         assertTrue(c.revision.value >= revision + 2)
         assertTrue(fake.loggedOut)
+    }
+
+    private val friendCode = "44444444-4444-4444-8444-444444444444"
+
+    @Test fun `refresh loads friends and blocked people`() = runTest {
+        val fake = Fake().apply {
+            friendList = listOf(Friend(friendCode, "river", "accepted", owner))
+            blockList = listOf(AccountUser("55555555-5555-4555-8555-555555555555", "noisy"))
+        }
+        val c = controller(store(), { fake })
+        login(c)
+        assertEquals("river", c.state.value.friends.single().handle)
+        assertEquals("noisy", c.state.value.blocked.single().handle)
+    }
+
+    @Test fun `adding a friend sends the cleaned code and shows the sent note`() = runTest {
+        val fake = Fake()
+        val c = controller(store(), { fake })
+        login(c)
+        c.friendAction(FriendAction.INVITE, "  " + friendCode.uppercase() + " "); runCurrent()
+        assertEquals(listOf(FriendAction.INVITE to friendCode), fake.actions)
+        assertEquals("Friend request sent", c.state.value.note)
+        assertEquals(1, c.state.value.friends.size)
+        assertFalse(c.state.value.working)
+    }
+
+    @Test fun `an incomplete friend code is refused without a request`() = runTest {
+        val fake = Fake()
+        val c = controller(store(), { fake })
+        login(c)
+        c.friendAction(FriendAction.INVITE, "not-a-code"); runCurrent()
+        assertTrue(fake.actions.isEmpty())
+        assertEquals("Paste your friend's complete friend code.", c.state.value.error)
+    }
+
+    @Test fun `a friend error shows the shared wording and can be dismissed`() = runTest {
+        val fake = Fake().apply { actionFails = AccountError.OWN_CODE }
+        val c = controller(store(), { fake })
+        login(c)
+        c.friendAction(FriendAction.INVITE, friendCode); runCurrent()
+        assertEquals("That is your own friend code.", c.state.value.error)
+        assertFalse(c.state.value.working)
+        c.dismissError()
+        assertNull(c.state.value.error)
+    }
+
+    @Test fun `signing out forgets the friend lists`() = runTest {
+        val fake = Fake().apply { friendList = listOf(Friend(friendCode, "river", "accepted", owner)) }
+        val c = controller(store(), { fake })
+        login(c)
+        c.signOut(); runCurrent()
+        assertTrue(c.state.value.friends.isEmpty())
     }
 }

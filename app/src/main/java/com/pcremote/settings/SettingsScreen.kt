@@ -2,60 +2,91 @@ package com.pcremote.settings
 
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.pcremote.BuildConfig
 import com.pcremote.R
-import com.pcremote.quality.QualityPreset
-import com.pcremote.quality.QualityPrefs
+import com.pcremote.home.RemoteWake
+import com.pcremote.home.WakeMethod
+import com.pcremote.stream2.STREAM_SIZES
+import com.pcremote.stream2.sizeLabel
+import com.pcremote.ui.components.*
 import com.pcremote.ui.theme.LocalMidnight
 import com.pcremote.ui.theme.MidnightShapes
-import com.pcremote.ui.components.glass
 import com.pcremote.ui.theme.rememberHaptics
 
 private const val REPO_URL = "https://github.com/modnite/Secpar"
+const val HELP_URL = "https://secpar.win/help/"
 
+/** What the Video dropdowns offer, as the text shown. */
+object SettingsOptions {
+    val resolutions: List<Pair<Int, Int>> = STREAM_SIZES
+    val resolutionLabels: List<String> = STREAM_SIZES.map { (w, h) -> sizeLabel(w, h) }
+    val frameRateLabels: List<String> = SettingsModel.FRAME_RATES.map { "$it fps" }
+    val bitrateLabels: List<String> = SettingsModel.BITRATES_MBPS.map { "$it Mbps" }
+}
+
+/** The Settings tab: a page title and one card per group. */
 @Composable
-fun SettingsScreen(model: SettingsModel, onBack: () -> Unit, onThemeChanged: () -> Unit) {
-    val c = LocalMidnight.current
-    val ctx = LocalContext.current
+fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Modifier = Modifier) {
     var theme by remember { mutableStateOf(model.theme) }
-    var dynamic by remember { mutableStateOf(model.dynamicColor) }
     var haptics by remember { mutableStateOf(model.haptics) }
     var natural by remember { mutableStateOf(model.naturalScroll) }
     var pointer by remember { mutableFloatStateOf(model.pointerSpeed) }
     var gyro by remember { mutableFloatStateOf(model.gyroSensitivity) }
-    var auto by remember { mutableStateOf(QualityPrefs.isAuto(ctx)) }
-    var preset by remember { mutableStateOf(QualityPrefs.current(ctx)) }
+    var resolution by remember { mutableStateOf(model.resolution) }
+    var fps by remember { mutableIntStateOf(model.frameRate) }
+    var bitrate by remember { mutableIntStateOf(model.bitrateMbps) }
+    var audio by remember { mutableStateOf(model.playHostAudio) }
+    var clipboard by remember { mutableStateOf(model.shareClipboard) }
+    val ctx = LocalContext.current
 
-    Box(Modifier.fillMaxSize().background(c.bg)) {
-    com.pcremote.ui.components.Aurora(intensity = 0.4f)
-    Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            com.pcremote.ui.components.GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.pcr_back), onBack)
-            Spacer(Modifier.width(14.dp))
-            Text(stringResource(R.string.pcr_settings), color = c.text, style = MaterialTheme.typography.headlineMedium)
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        PageHeader(stringResource(R.string.pcr_settings))
+
+        Group(R.string.pcr_set_video) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlatDropdown(stringResource(R.string.pcr_resolution), sizeLabel(resolution.first, resolution.second), SettingsOptions.resolutionLabels,
+                    { i -> resolution = SettingsOptions.resolutions[i]; model.resolution = resolution }, Modifier.weight(1f))
+                FlatDropdown(stringResource(R.string.pcr_frame_rate), "$fps fps", SettingsOptions.frameRateLabels,
+                    { i -> fps = SettingsModel.FRAME_RATES[i]; model.frameRate = fps }, Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlatDropdown(stringResource(R.string.pcr_bitrate_limit), "$bitrate Mbps", SettingsOptions.bitrateLabels,
+                    { i -> bitrate = SettingsModel.BITRATES_MBPS[i]; model.bitrateMbps = bitrate }, Modifier.weight(1f))
+                Spacer(Modifier.weight(1f))
+            }
+            }
         }
-
+        Group(R.string.pcr_set_audio) {
+            FlatCheckbox(audio, stringResource(R.string.pcr_play_host_audio), { audio = it; model.playHostAudio = it })
+        }
+        Group(R.string.pcr_set_clipboard) {
+            FlatCheckbox(clipboard, stringResource(R.string.pcr_share_clipboard), { clipboard = it; model.shareClipboard = it })
+        }
+        Group(R.string.pcr_set_controls) {
+            FlatCheckbox(haptics, stringResource(R.string.pcr_haptics), { haptics = it; model.haptics = it })
+            FlatCheckbox(natural, stringResource(R.string.pcr_natural_scroll), { natural = it; model.naturalScroll = it })
+            SliderRow(R.string.pcr_pointer_speed, pointer, 0.5f..3f) { pointer = it; model.pointerSpeed = it }
+            SliderRow(R.string.pcr_gyro_sensitivity, gyro, 0.25f..3f) { gyro = it; model.gyroSensitivity = it }
+        }
         Group(R.string.pcr_set_appearance) {
-            Row(Modifier.fillMaxWidth().padding(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(ThemeChoice.SYSTEM to R.string.pcr_theme_system, ThemeChoice.DARK to R.string.pcr_theme_dark,
                     ThemeChoice.LIGHT to R.string.pcr_theme_light).forEach { (t, label) ->
                     Segment(stringResource(label), selected = theme == t, Modifier.weight(1f)) {
@@ -63,106 +94,59 @@ fun SettingsScreen(model: SettingsModel, onBack: () -> Unit, onThemeChanged: () 
                     }
                 }
             }
-            if (Build.VERSION.SDK_INT >= 31) {
-                SwitchRow(Icons.Rounded.Palette, R.string.pcr_dynamic_color, R.string.pcr_dynamic_color_desc, dynamic) {
-                    dynamic = it; model.dynamicColor = it; onThemeChanged()
-                }
-            }
         }
-
-        Group(R.string.pcr_set_quality) {
-            SwitchRow(Icons.Rounded.AutoAwesome, R.string.pcr_auto_quality, R.string.pcr_auto_quality_desc, auto) {
-                auto = it; QualityPrefs.setAuto(ctx, it)
-            }
-            listOf(QualityPreset.SMOOTH to R.string.pcr_preset_SMOOTH, QualityPreset.SHARP to R.string.pcr_preset_SHARP,
-                QualityPreset.BATTERY to R.string.pcr_preset_BATTERY).forEach { (p, label) ->
-                Row(
-                    Modifier.fillMaxWidth().clip(MidnightShapes.control).clickable(enabled = !auto) { preset = p; QualityPrefs.apply(ctx, p) }
-                        .padding(horizontal = 4.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(!auto && preset == p, null, enabled = !auto)
-                    Spacer(Modifier.width(12.dp))
-                    Text(stringResource(label), color = if (auto) c.textDim else c.text, style = MaterialTheme.typography.bodyLarge)
-                }
-            }
-        }
-
-        Group(R.string.pcr_set_controls) {
-            SwitchRow(Icons.Rounded.Vibration, R.string.pcr_haptics, null, haptics) { haptics = it; model.haptics = it }
-            SwitchRow(Icons.Rounded.SwapVert, R.string.pcr_natural_scroll, R.string.pcr_natural_scroll_desc, natural) { natural = it; model.naturalScroll = it }
-            SliderRow(Icons.Rounded.Mouse, R.string.pcr_pointer_speed, pointer, 0.5f..3f) { pointer = it; model.pointerSpeed = it }
-            SliderRow(Icons.Rounded.ScreenRotation, R.string.pcr_gyro_sensitivity, gyro, 0.25f..3f) { gyro = it; model.gyroSensitivity = it }
-        }
-
         WakeGroup()
         UnlockGroup()
-
         Group(R.string.pcr_set_about) {
-            LinkRow(Icons.Rounded.Info, R.string.pcr_version, null, trailing = BuildConfig.VERSION_NAME) {}
-            val update by com.pcremote.update.Updater.state.collectAsState()
-            LinkRow(Icons.Rounded.SystemUpdate, R.string.pcr_update_check, R.string.pcr_update_check_desc, trailing = if (update.release != null) "Available" else null) {
-                ctx.startActivity(Intent(ctx, com.pcremote.update.UpdatesActivity::class.java))
-            }
-            LinkRow(Icons.Rounded.Code, R.string.pcr_source, R.string.pcr_source_desc) {
-                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL)))
-            }
-            LinkRow(Icons.Rounded.HelpOutline, R.string.pcr_setup_guide, null) {
-                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(com.pcremote.SETUP_GUIDE_URL)))
-            }
+            LinkRow(R.string.pcr_help) { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(HELP_URL))) }
+            LinkRow(R.string.pcr_source) { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) }
         }
-        Spacer(Modifier.height(24.dp))
-    }
     }
 }
 
-/** Wake from anywhere through Home Assistant. */
+/** Wake from the phone: on the network, through an HTTPS link, or through Home Assistant. */
 @Composable
 private fun WakeGroup() {
     val c = LocalMidnight.current
     val ctx = LocalContext.current
     val ha = remember { com.pcremote.home.HomeAssistant.get(ctx) }
-    val remote = remember { com.pcremote.home.RemoteWake.get(ctx) }
+    val remote = remember { RemoteWake.get(ctx) }
     var method by remember { mutableStateOf(remote.method) }
-    var url by remember(method) { mutableStateOf(if (method == com.pcremote.home.WakeMethod.HOME_ASSISTANT) ha.url else remote.url) }
-    var token by remember(method) { mutableStateOf(if (method == com.pcremote.home.WakeMethod.HOME_ASSISTANT) ha.token else remote.token) }
+    var url by remember(method) { mutableStateOf(if (method == WakeMethod.HOME_ASSISTANT) ha.url else remote.url) }
+    var token by remember(method) { mutableStateOf(if (method == WakeMethod.HOME_ASSISTANT) ha.token else remote.token) }
     var saved by remember(method) { mutableStateOf(false) }
     var invalid by remember { mutableStateOf(false) }
     Group(R.string.pcr_set_wake) {
-        Text(stringResource(R.string.secpar_wake_desc), color = c.textDim, style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(12.dp, 8.dp))
-        com.pcremote.home.WakeMethod.entries.forEach { option ->
-            Row(Modifier.fillMaxWidth().clickable { method = option; remote.method = option; invalid = false },
+        WakeMethod.entries.forEach { option ->
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { method = option; remote.method = option; invalid = false },
                 verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(selected = option == method, onClick = { method = option; remote.method = option; invalid = false })
+                RadioButton(selected = option == method, onClick = null)
+                Spacer(Modifier.width(10.dp))
                 Text(stringResource(when (option) {
-                    com.pcremote.home.WakeMethod.LOCAL -> R.string.secpar_wake_local
-                    com.pcremote.home.WakeMethod.WEBHOOK -> R.string.secpar_wake_webhook
-                    com.pcremote.home.WakeMethod.HOME_ASSISTANT -> R.string.secpar_wake_ha
+                    WakeMethod.LOCAL -> R.string.secpar_wake_local
+                    WakeMethod.WEBHOOK -> R.string.secpar_wake_webhook
+                    WakeMethod.HOME_ASSISTANT -> R.string.secpar_wake_ha
                 }), color = c.text, style = MaterialTheme.typography.bodyMedium)
             }
         }
-        if (method != com.pcremote.home.WakeMethod.LOCAL) {
-            OutlinedTextField(url, { url = it; saved = false; invalid = false }, singleLine = true,
-                label = { Text(stringResource(if (method == com.pcremote.home.WakeMethod.WEBHOOK) R.string.secpar_wake_link else R.string.pcr_ha_url)) },
-                isError = invalid, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(8.dp, 4.dp))
-            if (invalid) Text(stringResource(R.string.secpar_wake_https), color = c.bad, modifier = Modifier.padding(horizontal = 8.dp))
-            OutlinedTextField(token, { token = it; saved = false }, singleLine = true,
-                label = { Text(stringResource(R.string.secpar_wake_token)) },
-                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(8.dp, 4.dp))
-            com.pcremote.ui.components.GhostButton(stringResource(if (saved) R.string.pcr_saved else R.string.pcr_save), {
-                if (method == com.pcremote.home.WakeMethod.WEBHOOK) {
-                    invalid = !com.pcremote.home.RemoteWake.validUrl(url)
-                    if (!invalid) { remote.url = url; remote.token = token; saved = true }
-                } else { ha.url = url; ha.token = token; saved = true }
-            }, modifier = Modifier.padding(8.dp), icon = if (saved) Icons.Rounded.Check else Icons.Rounded.Save)
+        if (method != WakeMethod.LOCAL) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlatField(url, { url = it; saved = false; invalid = false }, stringResource(if (method == WakeMethod.WEBHOOK) R.string.secpar_wake_link else R.string.pcr_ha_url),
+                    Modifier.fillMaxWidth(), masked = true, isError = invalid)
+                if (invalid) Text(stringResource(R.string.secpar_wake_https), color = c.bad, style = MaterialTheme.typography.bodySmall)
+                FlatField(token, { token = it; saved = false }, stringResource(R.string.secpar_wake_token), Modifier.fillMaxWidth(), masked = true)
+                GhostButton(stringResource(if (saved) R.string.pcr_saved else R.string.pcr_save), {
+                    if (method == WakeMethod.WEBHOOK) {
+                        invalid = !RemoteWake.validUrl(url)
+                        if (!invalid) { remote.url = url; remote.token = token; saved = true }
+                    } else { ha.url = url; ha.token = token; saved = true }
+                }, icon = if (saved) R.drawable.lucide_check else null)
+            }
         }
     }
 }
 
-/** PINs kept behind the fingerprint, one per PC. */
+/** PINs kept behind the fingerprint, one per computer. */
 @Composable
 private fun UnlockGroup() {
     val c = LocalMidnight.current
@@ -170,79 +154,64 @@ private fun UnlockGroup() {
     val pcs = remember { com.pcremote.agent.PcStore.get(ctx).all() }
     var tick by remember { mutableIntStateOf(0) }
     Group(R.string.pcr_set_unlock) {
-        Text(stringResource(if (com.pcremote.agent.PinVault.available(ctx)) R.string.pcr_unlock_settings_desc else R.string.pcr_unlock_settings_nofp),
-            color = c.textDim, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(12.dp, 8.dp, 12.dp, 4.dp))
         key(tick) {
-            pcs.filter { com.pcremote.agent.PinVault.has(ctx, it.id) }.forEach { pc ->
-                RowShell(Icons.Rounded.Fingerprint, R.string.pcr_unlock_saved_for, null, null, label = pc.name) {
-                    TextButton({ com.pcremote.agent.PinVault.forget(ctx, pc.id); tick++ }) { Text(stringResource(R.string.pcr_forget), color = c.bad) }
+            val saved = pcs.filter { com.pcremote.agent.PinVault.has(ctx, it.id) }
+            if (saved.isEmpty()) Text(stringResource(R.string.pcr_unlock_none), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+            saved.forEach { pc ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(pc.name, color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    GhostButton(stringResource(R.string.pcr_forget), { com.pcremote.agent.PinVault.forget(ctx, pc.id); tick++ }, tint = c.bad, compact = true)
                 }
             }
         }
     }
 }
 
+/** Settings card: radius 7, margin 10, title 14 strong inside at the top. */
 @Composable
 private fun Group(title: Int, content: @Composable ColumnScope.() -> Unit) {
     val c = LocalMidnight.current
-    Spacer(Modifier.height(24.dp))
-    Text(stringResource(title), color = c.textDim, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
-    Column(Modifier.fillMaxWidth().glass().padding(8.dp), content = content)
+    Column(Modifier.fillMaxWidth().clip(MidnightShapes.card).background(c.surface).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(title), color = c.text, style = MaterialTheme.typography.titleSmall)
+        content()
+    }
 }
 
 @Composable
 private fun Segment(text: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val c = LocalMidnight.current
     val h = rememberHaptics()
-    Box(modifier.clip(MidnightShapes.control).background(if (selected) c.accent else c.surfaceHigh)
-        .clickable { h.tick(); onClick() }.padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+    Box(modifier.minimumInteractiveComponentSize().height(32.dp).clip(MidnightShapes.control).background(if (selected) c.accent else c.surfaceHigh)
+        .clickable { h.tick(); onClick() }, contentAlignment = Alignment.Center) {
         Text(text, color = if (selected) c.onAccent else c.text, style = MaterialTheme.typography.labelLarge)
     }
 }
 
 @Composable
-private fun RowShell(icon: ImageVector, title: Int, desc: Int?, onClick: (() -> Unit)?, label: String? = null, trailing: @Composable () -> Unit) {
+private fun LinkRow(title: Int, onClick: () -> Unit) {
     val c = LocalMidnight.current
-    Row(
-        Modifier.fillMaxWidth().clip(MidnightShapes.control).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = c.accent, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.width(16.dp))
-        Column(Modifier.weight(1f)) {
-            Text(label ?: stringResource(title), color = c.text, style = MaterialTheme.typography.bodyLarge)
-            if (desc != null) Text(stringResource(desc), color = c.textDim, style = MaterialTheme.typography.bodySmall)
-        }
-        trailing()
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(title), color = c.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Icon(painterResource(R.drawable.lucide_chevron_right), null, tint = c.textDim, modifier = Modifier.size(18.dp))
     }
 }
 
+/** Label and value (12 muted) over a flat slider: 4dp track, 16dp thumb, no halo. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SwitchRow(icon: ImageVector, title: Int, desc: Int?, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val h = rememberHaptics()
-    RowShell(icon, title, desc, { h.tick(); onChange(!checked) }) { Switch(checked, { h.tick(); onChange(it) }) }
-}
-
-@Composable
-private fun LinkRow(icon: ImageVector, title: Int, desc: Int?, trailing: String? = null, onClick: () -> Unit) {
+private fun SliderRow(title: Int, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
     val c = LocalMidnight.current
-    RowShell(icon, title, desc, onClick) {
-        if (trailing != null) Text(trailing, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-        else Icon(Icons.Rounded.ChevronRight, null, tint = c.textDim)
-    }
-}
-
-@Composable
-private fun SliderRow(icon: ImageVector, title: Int, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
-    val c = LocalMidnight.current
-    Column(Modifier.padding(12.dp)) {
+    val source = remember { MutableInteractionSource() }
+    Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = c.accent, modifier = Modifier.size(22.dp))
-            Spacer(Modifier.width(16.dp))
-            Text(stringResource(title), color = c.text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            Text("%.1f×".format(value), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+            Text(stringResource(title), color = c.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Text("%.1f×".format(value), color = c.textDim, style = MaterialTheme.typography.bodySmall)
         }
-        Slider(value, onChange, valueRange = range, modifier = Modifier.padding(start = 38.dp))
+        val colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent, inactiveTrackColor = c.surfaceHigh)
+        Slider(value, onChange, valueRange = range, interactionSource = source, colors = colors,
+            thumb = { SliderDefaults.Thumb(source, colors = colors, thumbSize = DpSize(16.dp, 16.dp)) },
+            track = { state -> SliderDefaults.Track(state, Modifier.height(4.dp), colors = colors, drawStopIndicator = null, thumbTrackGapSize = 0.dp) })
     }
 }

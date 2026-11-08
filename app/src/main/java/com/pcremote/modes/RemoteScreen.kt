@@ -11,21 +11,17 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.KeyboardBackspace
-import androidx.compose.material.icons.automirrored.rounded.KeyboardReturn
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -146,7 +142,7 @@ private fun ColumnScope.RemoteBody(send: (Msg) -> Unit) {
                     }
                 },
             contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Rounded.UnfoldMore, null, tint = c.textDim) }
+        ) { Icon(painterResource(R.drawable.lucide_chevrons_up_down), null, tint = c.textDim) }
     }
 
     // Click buttons
@@ -162,7 +158,7 @@ private fun ColumnScope.RemoteBody(send: (Msg) -> Unit) {
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        KeyCap(Icons.Rounded.Keyboard, active = keyboard) { keyboard = !keyboard }
+        KeyCap(R.drawable.lucide_keyboard, active = keyboard) { keyboard = !keyboard }
         for (m in Mod.entries) {
             KeyCap(null, m.name.lowercase().replaceFirstChar { it.uppercase() }, state = bar.state(m)) {
                 bar.tap(m, System.currentTimeMillis()); barTick++
@@ -170,12 +166,12 @@ private fun ColumnScope.RemoteBody(send: (Msg) -> Unit) {
         }
         KeyCap(null, "Esc") { bar.key(0x1B).forEach { send(it.toMsg()) }; barTick++ }
         KeyCap(null, "Tab") { bar.key(0x09).forEach { send(it.toMsg()) }; barTick++ }
-        KeyCap(Icons.Rounded.SwapHoriz) { Shortcut.ALT_TAB.events().forEach { send(it.toMsg()) } }
-        KeyCap(Icons.Rounded.Window) { Shortcut.WIN.events().forEach { send(it.toMsg()) } }
-        KeyCap(Icons.Rounded.KeyboardArrowLeft) { bar.key(0x25).forEach { send(it.toMsg()) }; barTick++ }
-        KeyCap(Icons.Rounded.KeyboardArrowUp) { bar.key(0x26).forEach { send(it.toMsg()) }; barTick++ }
-        KeyCap(Icons.Rounded.KeyboardArrowDown) { bar.key(0x28).forEach { send(it.toMsg()) }; barTick++ }
-        KeyCap(Icons.Rounded.KeyboardArrowRight) { bar.key(0x27).forEach { send(it.toMsg()) }; barTick++ }
+        KeyCap(R.drawable.lucide_arrow_left_right) { Shortcut.ALT_TAB.events().forEach { send(it.toMsg()) } }
+        KeyCap(R.drawable.lucide_app_window) { Shortcut.WIN.events().forEach { send(it.toMsg()) } }
+        KeyCap(R.drawable.lucide_chevron_left) { bar.key(0x25).forEach { send(it.toMsg()) }; barTick++ }
+        KeyCap(R.drawable.lucide_chevron_up) { bar.key(0x26).forEach { send(it.toMsg()) }; barTick++ }
+        KeyCap(R.drawable.lucide_chevron_down) { bar.key(0x28).forEach { send(it.toMsg()) }; barTick++ }
+        KeyCap(R.drawable.lucide_chevron_right) { bar.key(0x27).forEach { send(it.toMsg()) }; barTick++ }
     }
     Spacer(Modifier.height(12.dp))
     AnimatedVisibility(keyboard) { TypingField(send, bar) { barTick++ } }
@@ -211,9 +207,9 @@ internal fun TypingField(send: (Msg) -> Unit, bar: KeyboardBarModel, onBarChange
             keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { key(0x0D) }),
             modifier = Modifier.weight(1f).focusRequester(focus).height(1.dp),
         )
-        KeyCap(Icons.AutoMirrored.Rounded.KeyboardBackspace) { key(0x08) }
+        KeyCap(R.drawable.lucide_delete) { key(0x08) }
         Spacer(Modifier.width(8.dp))
-        KeyCap(Icons.AutoMirrored.Rounded.KeyboardReturn) { key(0x0D) }
+        KeyCap(R.drawable.lucide_corner_down_left) { key(0x0D) }
     }
     Text(stringResource(R.string.pcr_remote_typing), color = c.textDim, style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.padding(horizontal = 16.dp))
@@ -249,7 +245,7 @@ private fun ClickPad(modifier: Modifier, button: String, send: (Msg) -> Unit) {
 }
 
 @Composable
-private fun KeyCap(icon: ImageVector?, text: String? = null, active: Boolean = false, state: ModState = ModState.OFF, onClick: () -> Unit) {
+private fun KeyCap(@androidx.annotation.DrawableRes icon: Int?, text: String? = null, active: Boolean = false, state: ModState = ModState.OFF, onClick: () -> Unit) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
     val bg = when {
@@ -263,7 +259,7 @@ private fun KeyCap(icon: ImageVector?, text: String? = null, active: Boolean = f
             .clickable { haptics.tick(); onClick() }.padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        if (icon != null) Icon(icon, text, tint = fg, modifier = Modifier.size(20.dp))
+        if (icon != null) Icon(painterResource(icon), text, tint = fg, modifier = Modifier.size(20.dp))
         else Text(text ?: "", color = fg, style = MaterialTheme.typography.labelLarge)
     }
 }

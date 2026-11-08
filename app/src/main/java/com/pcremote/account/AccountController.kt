@@ -16,7 +16,25 @@ data class AccountUi(
     val computers: List<OwnedComputer> = emptyList(),
     val connecting: String? = null,
     val error: String? = null,
+    val friends: List<Friend> = emptyList(),
+    val blocked: List<AccountUser> = emptyList(),
+    /** A short confirmation for the Friends page, such as "Friend request sent". */
+    val note: String? = null,
+    /** A friend change is in flight. */
+    val working: Boolean = false,
 )
+
+/** Wording shared with the desktop client. */
+object AccountText {
+    const val SIGNED_OUT_OFFLINE = "Signed out here. Could not revoke the remote session while offline."
+    const val FRIEND_CODE_COPIED = "Friend code copied"
+    const val REQUEST_SENT = "Friend request sent"
+    const val NO_BROWSER = "No browser is available. Open accounts.secpar.win/activate and enter the code."
+    val UUID_CODE = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
+
+    /** A friend code as the server expects it, or null when it is not a complete code. */
+    fun cleanCode(raw: String): String? = raw.trim().lowercase().takeIf { UUID_CODE.matches(it) }
+}
 
 /** Main-dispatcher controller. Every asynchronous operation belongs to one login generation. */
 class AccountController(
@@ -135,7 +153,7 @@ class AccountController(
             if (service != null) {
                 val revoked = runCatching { service.logout() }.isSuccess
                 if (!revoked && epoch == generation) mutable.value = state.value.copy(
-                    error = "Signed out on this device. Secpar could not revoke the session online.")
+                    error = AccountText.SIGNED_OUT_OFFLINE)
             }
         }
     }
@@ -148,6 +166,8 @@ class AccountController(
         refreshJob = scope.launch {
             try {
                 val computers = service.computers()
+                val friends = runCatching { service.friends() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                val blocked = runCatching { service.blocks() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 if (epoch != generation) return@launch
                 val removed = withContext(io) {
                     store.owned(saved).filter { access -> computers.none {
@@ -155,7 +175,8 @@ class AccountController(
                     } }.onEach { store.forgetOwned(saved, it.computerId) }.isNotEmpty()
                 }
                 if (epoch != generation) return@launch
-                mutable.value = state.value.copy(computers = computers, error = null)
+                mutable.value = state.value.copy(computers = computers, error = null,
+                    friends = friends ?: state.value.friends, blocked = blocked ?: state.value.blocked)
                 if (removed) changes.value++
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
@@ -216,6 +237,35 @@ class AccountController(
             } finally {
                 if (epoch == generation && attempt == pairGeneration) mutable.value = state.value.copy(connecting = null)
                 requestId?.let { id -> withContext(NonCancellable) { runCatching { service.cancelOwnerPair(id) } } }
+            }
+        }
+    }
+
+    fun dismissError() { mutable.value = state.value.copy(error = null) }
+
+    fun showNote(text: String) { mutable.value = state.value.copy(note = text) }
+
+    /** Add by friend code, accept a request, or change the lists. Refreshes the lists afterwards. */
+    fun friendAction(action: FriendAction, rawId: String) {
+        val service = api ?: return
+        if (session == null || state.value.working) return
+        val id = AccountText.cleanCode(rawId)
+        if (id == null) { mutable.value = state.value.copy(error = AccountException(AccountError.BAD_CODE).message); return }
+        val epoch = generation
+        mutable.value = state.value.copy(working = true, error = null, note = null)
+        scope.launch {
+            try {
+                service.friendAction(action, id)
+                val friends = service.friends()
+                val blocked = service.blocks()
+                if (epoch != generation) return@launch
+                mutable.value = state.value.copy(friends = friends, blocked = blocked, working = false,
+                    note = if (action == FriendAction.INVITE) AccountText.REQUEST_SENT else null)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (epoch != generation) return@launch
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
+                else mutable.value = state.value.copy(working = false, error = message(e))
             }
         }
     }

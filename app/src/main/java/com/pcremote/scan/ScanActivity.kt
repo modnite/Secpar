@@ -21,15 +21,12 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.FlashlightOff
-import androidx.compose.material.icons.rounded.FlashlightOn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -236,11 +233,11 @@ class ScanActivity : ComponentActivity() {
                 }
             }
             Row(Modifier.fillMaxWidth().safeDrawingPadding().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(::finish) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null, tint = Color.White) }
+                IconButton(::finish) { Icon(painterResource(R.drawable.lucide_arrow_left), null, tint = Color.White) }
                 Spacer(Modifier.weight(1f))
                 if (camera?.cameraInfo?.hasFlashUnit() == true) {
                     IconButton({ torch = !torch; camera?.cameraControl?.enableTorch(torch) }) {
-                        Icon(if (torch) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff, null, tint = Color.White)
+                        Icon(painterResource(if (torch) R.drawable.lucide_flashlight else R.drawable.lucide_flashlight_off), null, tint = Color.White)
                     }
                 }
             }

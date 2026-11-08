@@ -9,13 +9,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.KeyboardTab
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
@@ -44,6 +44,9 @@ import com.pcremote.ui.components.GhostButton
 import com.pcremote.ui.components.PrimaryButton
 import com.pcremote.ui.components.StatusDot
 import com.pcremote.ui.theme.LocalMidnight
+import com.pcremote.ui.theme.MenuColors
+import com.pcremote.ui.theme.MenuTokens
+import kotlinx.coroutines.delay
 import com.pcremote.ui.theme.MidnightShapes
 import com.pcremote.ui.theme.rememberHaptics
 
@@ -77,16 +80,15 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
         }
         if (!state.connected) return@BoxWithConstraints
         LaunchedEffect(state.buttonHidden) { if (state.buttonHidden) panel = false }
-        if (!state.buttonHidden) Box(Modifier.align(Alignment.TopStart).zIndex(2f).padding(12.dp).size(44.dp)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)).background(Color(0xff191b1d).copy(alpha = 135f / 255f))
+        if (!state.buttonHidden) Box(Modifier.align(Alignment.TopStart).zIndex(2f).padding(MenuTokens.BUTTON_MARGIN.dp).size(MenuTokens.BUTTON.dp)
+            .clip(RoundedCornerShape(MenuTokens.BUTTON_RADIUS.dp)).background(MenuColors.buttonFill)
             .semantics { contentDescription = "Stream menu" }
             .clickable { panel = !panel }, contentAlignment = Alignment.Center) {
-            Image(painterResource(R.drawable.secpar_mark), null, Modifier.size(26.dp))
+            Image(painterResource(R.drawable.secpar_mark), null, Modifier.size(MenuTokens.LOGO.dp))
         }
         val strip = state.showPerf || state.resizeNotice
-        if (strip) StatsStrip(if (state.resizeNotice) RESIZE_UNSUPPORTED else state.perfText.ifEmpty { "Waiting for stream stats" },
+        if (strip) StatsStrip(StreamMenuModel.stripText(state.resizeNotice, RESIZE_UNSUPPORTED, state.perfText),
             if (state.buttonHidden) 12.dp else 60.dp, Modifier.align(Alignment.TopStart))
-        if (state.offerLowerQuality) LowerQualityChip(a, Modifier.align(Alignment.TopCenter).padding(top = 12.dp))
         AnimatedVisibility(state.keyboardOpen, Modifier.align(Alignment.TopCenter).padding(top = 56.dp),
             enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut()) {
             KeyboardBar(state, a)
@@ -96,9 +98,11 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
             Box(Modifier.fillMaxSize().background(Color.Transparent)
                 .clickable(remember { MutableInteractionSource() }, null) { panel = false })
         }
-        AnimatedVisibility(panel, Modifier.align(Alignment.TopStart).padding(start = if (maxWidth >= 320.dp) 68.dp else 12.dp, top = if (maxWidth >= 320.dp) (if (strip) 32.dp else 12.dp) else 64.dp, end = 12.dp, bottom = 12.dp),
+        val wide = maxWidth >= 320.dp
+        val top = if (wide) StreamMenuModel.panelTop(strip).dp else 64.dp
+        AnimatedVisibility(panel, Modifier.align(Alignment.TopStart).padding(start = if (wide) MenuTokens.PANEL_X.dp else 12.dp, top = top, end = 12.dp, bottom = 12.dp),
             enter = fadeIn(), exit = fadeOut()) {
-            EdgePanel(state, a, Modifier.heightIn(max = (maxHeight - if (maxWidth >= 320.dp) (if (strip) 44.dp else 24.dp) else 76.dp).coerceAtLeast(120.dp))) { panel = false }
+            EdgePanel(state, a, Modifier.heightIn(max = (maxHeight - top - 12.dp).coerceAtLeast(120.dp))) { panel = false }
         }
 
     }
@@ -106,65 +110,68 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
 
 @Composable
 private fun StatsStrip(text: String, start: androidx.compose.ui.unit.Dp, modifier: Modifier) {
-    Box(modifier.fillMaxWidth().height(26.dp).background(Color(15, 17, 19, 215)).padding(start = start, end = 12.dp),
-        contentAlignment = Alignment.CenterStart) {
-        Text(text, color = Color(0xffe9ebed), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Box(modifier.fillMaxWidth().height(MenuTokens.STRIP_HEIGHT.dp).background(MenuColors.stripFill).padding(horizontal = start),
+        contentAlignment = Alignment.Center) {
+        Text(text, color = MenuColors.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 
 @Composable
-private fun LowerQualityChip(a: ToolbarActions, modifier: Modifier) {
-    val c = LocalMidnight.current
-    Row(
-        modifier.clip(MidnightShapes.pill).background(glass()).border(1.dp, c.warn.copy(alpha = 0.6f), MidnightShapes.pill)
-            .clickable(onClick = a::lowerQuality).padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.NetworkCheck, null, tint = c.warn, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(stringResource(R.string.pcr_tb_lower_quality), color = c.text, style = MaterialTheme.typography.labelLarge)
-    }
+internal fun MenuDivider() {
+    Box(Modifier.fillMaxWidth().padding(vertical = MenuTokens.DIVIDER_GAP.dp).height(1.dp).background(MenuColors.divider))
 }
 
 @Composable
 private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier, close: () -> Unit) {
-    var page by remember { mutableIntStateOf(0) }
+    var page by remember { mutableStateOf(MenuPage.MAIN) }
+    var audioDetails by remember { mutableStateOf("") }
     val context = LocalContext.current
-    Column(modifier.widthIn(max = 268.dp).fillMaxWidth()
-        .clip(androidx.compose.foundation.shape.RoundedCornerShape(5.dp))
-        .background(Color(0xff191b1d).copy(alpha = 0.97f))
-        .verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
-        if (page == 0) {
-            StreamMenuRow(R.drawable.lucide_keyboard, "Keyboard", checked = state.keyboardOpen) { a.keyboard(); close() }
-            StreamMenuRow(R.drawable.lucide_mouse, "Trackpad", checked = state.trackpad) {
-                state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad); close()
+    if (page == MenuPage.AUDIO) LaunchedEffect(Unit) {
+        while (true) { audioDetails = a.audioDetails(); delay(1000) }
+    }
+    Column(modifier.widthIn(max = MenuTokens.PANEL_WIDTH.dp).fillMaxWidth()
+        .clip(RoundedCornerShape(MenuTokens.PANEL_RADIUS.dp))
+        .background(MenuColors.fill)
+        .verticalScroll(rememberScrollState()).padding(MenuTokens.PANEL_PADDING.dp)) {
+        if (page == MenuPage.MAIN) {
+            for (row in StreamMenuModel.mainRows(state.canPip, state.displays.size)) when (row) {
+                MenuRow.KEYBOARD -> StreamMenuRow(R.drawable.lucide_keyboard, row.label, checked = state.keyboardOpen) { a.keyboard(); close() }
+                MenuRow.TRACKPAD -> StreamMenuRow(R.drawable.lucide_mouse, row.label, checked = state.trackpad) {
+                    state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad); close()
+                }
+                MenuRow.PICTURE_IN_PICTURE -> StreamMenuRow(R.drawable.lucide_picture_in_picture_2, row.label) { close(); a.pictureInPicture() }
+                MenuRow.RESOLUTION -> StreamMenuRow(R.drawable.lucide_monitor, row.label, value = sizeLabel(state.sizeW, state.sizeH), arrow = true) { page = MenuPage.RESOLUTION }
+                MenuRow.SWITCH_DISPLAY -> StreamMenuRow(R.drawable.lucide_monitor, row.label, arrow = true) { page = MenuPage.DISPLAYS }
+                MenuRow.SHARE_CLIPBOARD -> StreamMenuRow(R.drawable.lucide_clipboard, row.label, checked = state.shareClipboard) {
+                    state.shareClipboard = !state.shareClipboard; a.setShareClipboard(state.shareClipboard)
+                }
+                MenuRow.STREAM_STATS -> StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, row.label, checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
+                MenuRow.AUDIO -> StreamMenuRow(R.drawable.lucide_volume_2, row.label, arrow = true) { page = MenuPage.AUDIO }
+                MenuRow.MORE_KEYS -> StreamMenuRow(R.drawable.lucide_command, row.label, arrow = true) { page = MenuPage.KEYS }
+                MenuRow.HELP -> {
+                    StreamMenuRow(R.drawable.lucide_circle_help, row.label) { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(StreamMenuModel.HELP_URL))) }
+                    MenuDivider()
+                }
+                MenuRow.DISCONNECT -> StreamMenuRow(R.drawable.lucide_log_out, row.label, value = StreamMenuModel.DISCONNECT_HINT, destructive = true) { a.disconnect() }
             }
-            if (state.canPip) StreamMenuRow(R.drawable.lucide_picture_in_picture_2, "Picture in picture") { close(); a.pictureInPicture() }
-            StreamMenuRow(R.drawable.lucide_monitor, "Resolution", value = sizeLabel(state.sizeW, state.sizeH), arrow = true) { page = 4 }
-            if (state.displays.size > 1) StreamMenuRow(R.drawable.lucide_monitor, "Switch display", arrow = true) { page = 3 }
-            StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, "Stream stats", checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
-            StreamMenuRow(R.drawable.lucide_command, "More keys", arrow = true) { page = 1 }
-            StreamMenuRow(R.drawable.lucide_circle_help, "Help") { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
-                android.net.Uri.parse("https://secpar.win/help/#stream-menu"))) }
-            androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
-            StreamMenuRow(R.drawable.lucide_log_out, "Disconnect", destructive = true) { a.disconnect() }
             Text("Secpar " + com.pcremote.BuildConfig.VERSION_NAME,
-                color = Color(0xff94999e),
+                color = MenuColors.muted,
                 style = androidx.compose.ui.text.TextStyle(
                     fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
                     fontWeight = FontWeight.Normal,
-                    fontSize = 11.sp,
-                    lineHeight = 16.sp,
+                    fontSize = MenuTokens.FOOTER_SIZE.sp,
+                    lineHeight = 12.sp,
                     letterSpacing = 0.sp,
                     platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
                 ),
                 maxLines = 1,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+                modifier = Modifier.padding(start = (MenuTokens.FOOTER_X - MenuTokens.PANEL_PADDING).dp, top = MenuTokens.FOOTER_TOP.dp))
         } else {
-            StreamMenuRow(R.drawable.lucide_arrow_left, when(page) { 1 -> "Keys"; 2 -> "Media keys"; 4 -> "Resolution"; else -> "Displays" }) { page = if (page == 2) 1 else 0 }
-            androidx.compose.material3.HorizontalDivider(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), color = Color.White.copy(alpha = 0.09f))
+            StreamMenuRow(R.drawable.lucide_arrow_left, StreamMenuModel.backTitle(page)) { page = StreamMenuModel.backTarget(page) }
+            MenuDivider()
             when (page) {
-                1 -> {
+                MenuPage.KEYS -> {
                     StreamMenuRow(R.drawable.lucide_corner_down_left, "Escape") { a.keys(chord(listOf(VK_ESC))); close() }
                     StreamMenuRow(R.drawable.lucide_panels_top_left, "Windows key") { a.shortcut(Shortcut.WIN); close() }
                     StreamMenuRow(R.drawable.lucide_arrow_left_right, "Switch app", value = "Alt+Tab") { a.shortcut(Shortcut.ALT_TAB); close() }
@@ -173,9 +180,9 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                     StreamMenuRow(R.drawable.lucide_panels_top_left, "Show desktop") { a.keys(chord(listOf(0x5B, 0x44))); close() }
                     StreamMenuRow(R.drawable.lucide_monitor, "Task Manager") { a.keys(chord(listOf(0x11, 0x10, VK_ESC))); close() }
                     StreamMenuRow(R.drawable.lucide_x, "Close window", value = "Alt+F4") { a.keys(chord(listOf(0x12, 0x73))); close() }
-                    StreamMenuRow(R.drawable.lucide_music_2, "Media keys", arrow = true) { page = 2 }
+                    StreamMenuRow(R.drawable.lucide_music_2, "Media keys", arrow = true) { page = MenuPage.MEDIA }
                 }
-                2 -> {
+                MenuPage.MEDIA -> {
                     for ((icon, label, shortcut) in listOf(
                         Triple(R.drawable.lucide_skip_back,"Previous",Shortcut.PREV),
                         Triple(R.drawable.lucide_play,"Play / pause",Shortcut.PLAY_PAUSE),
@@ -186,30 +193,53 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                         StreamMenuRow(icon, label) { a.shortcut(shortcut) }
                     }
                 }
-                4 -> STREAM_SIZES.forEach { (w, h) -> StreamMenuRow(R.drawable.lucide_monitor, sizeLabel(w, h), checked = w == state.sizeW && h == state.sizeH) {
+                MenuPage.RESOLUTION -> STREAM_SIZES.forEach { (w, h) -> StreamMenuRow(R.drawable.lucide_monitor, sizeLabel(w, h), checked = w == state.sizeW && h == state.sizeH) {
                     if (w != state.sizeW || h != state.sizeH) { state.sizeW = w; state.sizeH = h; a.selectSize(w, h) }
-                    page = 0
+                    page = StreamMenuModel.pageAfterPick()
                 } }
-                3 -> state.displays.forEach { display -> StreamMenuRow(R.drawable.lucide_monitor, display.name, checked = display.id == state.display) {
-                    state.display = display.id; a.selectDisplay(display.id); close()
+                MenuPage.DISPLAYS -> state.displays.forEach { display -> StreamMenuRow(R.drawable.lucide_monitor, display.name, checked = display.id == state.display) {
+                    state.display = display.id; a.selectDisplay(display.id); page = StreamMenuModel.pageAfterPick()
                 } }
+                MenuPage.AUDIO -> {
+                    val body = StreamMenuModel.audioBody(state.audioOn, audioDetails)
+                    if (body.isNotEmpty()) Text(body, color = if (state.audioOn) MenuColors.text else MenuColors.muted, fontSize = 12.sp,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = MenuTokens.ICON_X.dp, vertical = 8.dp))
+                    if (state.audioOn) {
+                        StreamMenuRow(R.drawable.lucide_clipboard, StreamMenuModel.AUDIO_COPY_DETAILS) { a.copyText(audioDetails) }
+                        StreamMenuRow(R.drawable.lucide_volume_2, StreamMenuModel.AUDIO_REOPEN) { a.reopenAudio() }
+                    }
+                }
+                MenuPage.MAIN -> Unit
             }
         }
     }
 }
 
 @Composable
-private fun StreamMenuRow(icon: Int, label: String, value: String? = null, arrow: Boolean = false,
+internal fun StreamMenuRow(icon: Int, label: String, value: String? = null, arrow: Boolean = false,
     checked: Boolean = false, destructive: Boolean = false, onClick: () -> Unit) {
-    val color = if (destructive) Color(0xfff2695e) else Color(0xffe9ebed)
-    Row(Modifier.fillMaxWidth().height(42.dp).semantics { contentDescription = label }
-        .clickable(onClick = onClick).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(painterResource(icon), null, tint = color, modifier = Modifier.size(21.dp))
-        Spacer(Modifier.width(14.dp))
+    val color = if (destructive) MenuColors.danger else MenuColors.text
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val hovered by source.collectIsHoveredAsState()
+    val trailing = checked || arrow
+    Row(Modifier.fillMaxWidth().height(MenuTokens.ROW_HEIGHT.dp).semantics { contentDescription = label }
+        .clip(RoundedCornerShape(MenuTokens.ROW_RADIUS.dp)).background(if (pressed || hovered) MenuColors.rowPressed else Color.Transparent)
+        .hoverable(source).clickable(source, null, onClick = onClick).padding(start = MenuTokens.ICON_X.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(icon), null, tint = color, modifier = Modifier.size(MenuTokens.ICON.dp))
+        Spacer(Modifier.width((MenuTokens.LABEL_X - MenuTokens.ICON_X - MenuTokens.ICON).dp))
         Text(label, color = color, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        value?.let { Text(it, color = Color(0xff94999e), fontSize = 12.sp, maxLines = 1) }
-        if (checked) Icon(painterResource(R.drawable.lucide_check), null, tint = Color(0xff0affb6), modifier = Modifier.size(18.dp))
-        else if (arrow) Icon(painterResource(R.drawable.lucide_chevron_right), null, tint = Color(0xff94999e), modifier = Modifier.size(18.dp))
+        if (value != null) Text(value, color = MenuColors.muted, fontSize = 12.sp, maxLines = 1)
+        if (trailing) {
+            // the value ends 30 from the row edge; the 18 icon is centred 15 from it
+            val end = (MenuTokens.TRAILING_CENTRE - MenuTokens.TRAILING_ICON / 2).dp
+            val gap = (MenuTokens.VALUE_END_WITH_TRAILING - MenuTokens.TRAILING_ICON - MenuTokens.TRAILING_CENTRE + MenuTokens.TRAILING_ICON / 2).dp
+            Spacer(Modifier.width(gap))
+            Icon(painterResource(if (checked) R.drawable.lucide_check else R.drawable.lucide_chevron_right), null,
+                tint = if (checked) MenuColors.check else MenuColors.muted, modifier = Modifier.size(MenuTokens.TRAILING_ICON.dp))
+            Spacer(Modifier.width(end))
+        } else if (value != null) Spacer(Modifier.width(MenuTokens.VALUE_END.dp))
     }
 }
 
@@ -221,7 +251,7 @@ private fun KeyboardBar(state: ToolbarState, a: ToolbarActions) {
     @Suppress("UNUSED_EXPRESSION") state.barTick // recompose when modifiers change
 
     @Composable
-    fun Cap(text: String? = null, icon: ImageVector? = null, mod: Mod? = null, onClick: () -> Unit) {
+    fun Cap(text: String? = null, @androidx.annotation.DrawableRes icon: Int? = null, mod: Mod? = null, onClick: () -> Unit) {
         val st = mod?.let { state.bar.state(it) } ?: ModState.OFF
         val bg = when (st) { ModState.LOCKED -> c.accent; ModState.ONE_SHOT -> c.accent.copy(alpha = 0.3f); else -> c.surfaceHigh }
         val fg = if (st == ModState.LOCKED) c.onAccent else c.text
@@ -230,7 +260,7 @@ private fun KeyboardBar(state: ToolbarState, a: ToolbarActions) {
                 .clickable { haptics.tick(); onClick() }.padding(horizontal = 12.dp),
             contentAlignment = Alignment.Center,
         ) {
-            if (icon != null) Icon(icon, text, tint = fg, modifier = Modifier.size(20.dp))
+            if (icon != null) Icon(painterResource(icon), text, tint = fg, modifier = Modifier.size(20.dp))
             else Text(text ?: "", color = fg, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -245,18 +275,18 @@ private fun KeyboardBar(state: ToolbarState, a: ToolbarActions) {
     ) {
         if (fn) {
             for (i in 0 until 12) Cap("F${i + 1}") { press(VK_F1 + i) }
-            Cap(icon = Icons.Rounded.KeyboardReturn) { fn = false }
+            Cap(icon = R.drawable.lucide_corner_down_left) { fn = false }
         } else {
             Cap("Esc") { press(VK_ESC) }
-            Cap(icon = Icons.AutoMirrored.Rounded.KeyboardTab) { press(VK_TAB) }
+            Cap(icon = R.drawable.lucide_arrow_right_to_line) { press(VK_TAB) }
             Cap("Ctrl", mod = Mod.CTRL) { tapMod(Mod.CTRL) }
             Cap("Alt", mod = Mod.ALT) { tapMod(Mod.ALT) }
             Cap("Shift", mod = Mod.SHIFT) { tapMod(Mod.SHIFT) }
-            Cap(icon = Icons.Rounded.Window, mod = Mod.WIN) { tapMod(Mod.WIN) }
-            Cap(icon = Icons.Rounded.KeyboardArrowLeft) { press(VK_LEFT) }
-            Cap(icon = Icons.Rounded.KeyboardArrowUp) { press(VK_UP) }
-            Cap(icon = Icons.Rounded.KeyboardArrowDown) { press(VK_DOWN) }
-            Cap(icon = Icons.Rounded.KeyboardArrowRight) { press(VK_RIGHT) }
+            Cap(icon = R.drawable.lucide_app_window, mod = Mod.WIN) { tapMod(Mod.WIN) }
+            Cap(icon = R.drawable.lucide_chevron_left) { press(VK_LEFT) }
+            Cap(icon = R.drawable.lucide_chevron_up) { press(VK_UP) }
+            Cap(icon = R.drawable.lucide_chevron_down) { press(VK_DOWN) }
+            Cap(icon = R.drawable.lucide_chevron_right) { press(VK_RIGHT) }
             Cap("Fn") { fn = true }
             Cap("Del") { press(VK_DELETE) }
             Cap("Home") { press(VK_HOME) }
@@ -279,7 +309,7 @@ private fun Connecting(pcName: String?, stage: String, cancel: () -> Unit) {
             androidx.compose.material3.CircularProgressIndicator(color = c.accent, trackColor = c.surfaceHigh, strokeWidth = 3.dp,
                 modifier = Modifier.size(48.dp))
             Spacer(Modifier.height(28.dp))
-            Text(stringResource(R.string.pcr_connecting_to, pcName ?: "PC"), color = c.text, style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.pcr_connecting_to, pcName ?: "computer"), color = c.text, style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(8.dp))
             AnimatedContent(stage, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "stage") {
                 Text(it, color = c.textDim, style = MaterialTheme.typography.bodyMedium)

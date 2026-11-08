@@ -54,10 +54,12 @@ class ClipSync {
  * readable value is only a baseline, so opening/reconnecting never pushes stale Android text.
  */
 @Composable
-fun ClipboardSync(session: AgentSession?, state: AgentState) {
+fun ClipboardSync(session: AgentSession?, state: AgentState, enabled: Boolean? = null) {
     val ctx = LocalContext.current
     val cm = remember(ctx) { ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
-    val online = session != null && state is AgentState.Online && "clip" in state.caps
+    // null = the saved "Share clipboard" setting; the stream screen passes its live value
+    val on = enabled ?: remember(ctx) { com.pcremote.settings.SettingsModel.get(ctx).shareClipboard }
+    val online = on && session != null && state is AgentState.Online && "clip" in state.caps
     val sync = remember(session, online) { ClipSync() }
     val focused = LocalWindowInfo.current.isWindowFocused
     val currentFocus = rememberUpdatedState(focused)
@@ -67,7 +69,7 @@ fun ClipboardSync(session: AgentSession?, state: AgentState) {
             // Subscribe only once the receiver is listening, including on reconnect.
             session.conn.incoming.onSubscription { session.send(Msg.ClipSub(true)) }.collect { m ->
                 if (m is Msg.Clip) sync.onRemote(m)?.let {
-                    cm.setPrimaryClip(ClipData.newPlainText("PC", it))
+                    cm.setPrimaryClip(ClipData.newPlainText("Computer", it))
                 }
             }
         } finally {

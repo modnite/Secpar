@@ -151,4 +151,50 @@ class AccountApiTest {
         rejects(AccountError.SIGN_IN_REQUIRED) { api.me() }
         assertEquals(1, f.requests.size)
     }
+
+    private val friendId = "00000000-0000-4000-8000-0000000000f1"
+
+    @Test fun `friend list and block list parse and use the account session`() = runBlocking {
+        val f = Fake().apply {
+            reply("""[{"id":"$friendId","handle":"river","state":"accepted","requester":"$id"}]""")
+            reply("""[{"id":"$friendId","handle":"noisy"}]""")
+        }
+        val api = AccountApi(token, f)
+        assertEquals(Friend(friendId, "river", "accepted", id), api.friends().single())
+        assertEquals(AccountUser(friendId, "noisy"), api.blocks().single())
+        assertEquals(listOf("GET https://accounts.secpar.win/v1/friends", "GET https://accounts.secpar.win/v1/blocks"),
+            f.requests.map { it.method + " " + it.url })
+        assertTrue(f.requests.all { it.bearer == token })
+    }
+
+    @Test fun `friend actions use the desktop verbs and paths`() = runBlocking {
+        val f = Fake().apply { repeat(5) { reply("", 204) } }
+        val api = AccountApi(token, f)
+        FriendAction.entries.forEach { api.friendAction(it, friendId) }
+        assertEquals(listOf(
+            "PUT /v1/friends/$friendId", "POST /v1/friends/$friendId/accept", "DELETE /v1/friends/$friendId",
+            "PUT /v1/blocks/$friendId", "DELETE /v1/blocks/$friendId"),
+            f.requests.map { it.method + " " + it.url.removePrefix("https://accounts.secpar.win") })
+    }
+
+    @Test fun `friend action rejects a code that is not an id`() = runBlocking {
+        val f = Fake()
+        rejects(AccountError.BAD_CODE) { AccountApi(token, f).friendAction(FriendAction.INVITE, "../me") }
+        assertTrue(f.requests.isEmpty())
+    }
+
+    @Test fun `friend error codes map to the desktop messages`() = runBlocking {
+        for ((code, kind, text) in listOf(
+            Triple("account_unavailable", AccountError.FRIEND_UNAVAILABLE, "Friend code was not found or is unavailable."),
+            Triple("cannot_friend_yourself", AccountError.OWN_CODE, "That is your own friend code."),
+            Triple("incoming_request_not_found", AccountError.REQUEST_GONE, "This friend request is no longer available."),
+            Triple("session_expired", AccountError.SIGN_IN_REQUIRED, "Your session expired. Sign in again."))) {
+            val f = Fake().apply { reply("""{"error":"$code"}""", 400) }
+            try { AccountApi(token, f).friendAction(FriendAction.INVITE, friendId); fail("expected $code") }
+            catch (e: AccountException) { assertEquals(kind, e.kind); assertEquals(text, e.message) }
+        }
+        val limited = Fake().apply { reply("""{"error":"rate_limited"}""", 429) }
+        try { AccountApi(token, limited).friends(); fail() }
+        catch (e: AccountException) { assertEquals("Too many attempts. Please wait and try again.", e.message) }
+    }
 }

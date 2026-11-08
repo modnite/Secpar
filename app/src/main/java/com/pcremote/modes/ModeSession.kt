@@ -6,11 +6,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -24,8 +22,6 @@ import com.pcremote.agent.FailReason
 import com.pcremote.agent.Msg
 import com.pcremote.agent.PairedPc
 import com.pcremote.agent.PcStore
-import androidx.compose.material.icons.rounded.Fingerprint
-import androidx.compose.material.icons.rounded.Lock
 import com.pcremote.ui.components.Aurora
 import com.pcremote.ui.components.GhostButton
 import com.pcremote.ui.components.GlassIconButton
@@ -89,13 +85,13 @@ fun ModeScaffold(
         Aurora(intensity = 0.45f)
         Column(Modifier.fillMaxSize().safeDrawingPadding()) {
             Row(Modifier.fillMaxWidth().padding(16.dp, 10.dp, 16.dp, 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.pcr_back), onBack)
+                GlassIconButton(R.drawable.lucide_arrow_left, stringResource(R.string.pcr_back), onBack)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
                     Text(stringResource(title), color = c.text, style = MaterialTheme.typography.titleLarge)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val online = state is AgentState.Online
-                        StatusDot(if (locked && online) c.warn else if (online) c.ok else if (state is AgentState.Failed) c.bad else c.warn, live = online, size = 6.dp)
+                        StatusDot(if (locked && online) c.warn else if (online) c.ok else if (state is AgentState.Failed) c.bad else c.warn)
                         Text(session?.pc?.name ?: "", color = c.textDim, style = MaterialTheme.typography.bodySmall,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
@@ -103,17 +99,17 @@ fun ModeScaffold(
                 var power by remember { mutableStateOf(false) }
                 if (power && session != null) PowerSheet(session.pc.name, { session.send(it) }) { power = false }
                 if (showPower && state is AgentState.Online && "power" in (state as AgentState.Online).caps) {
-                    GlassIconButton(Icons.Rounded.PowerSettingsNew, stringResource(R.string.pcr_power), { power = true })
+                    GlassIconButton(R.drawable.lucide_power, stringResource(R.string.pcr_power), { power = true })
                 }
             }
             val online = state as? AgentState.Online
             AnimatedVisibility(online != null && locked && "unlock" in online.caps) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).glass(MidnightShapes.control).padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Lock, null, tint = c.warn, modifier = Modifier.size(18.dp))
+                    Icon(painterResource(R.drawable.lucide_lock), null, tint = c.warn, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(10.dp))
                     Text(stringResource(R.string.pcr_status_locked), color = c.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    GhostButton(stringResource(R.string.pcr_unlock), unlock, icon = Icons.Rounded.Fingerprint)
+                    GhostButton(stringResource(R.string.pcr_unlock), unlock, icon = R.drawable.lucide_fingerprint)
                 }
             }
             AnimatedVisibility(state !is AgentState.Online) {

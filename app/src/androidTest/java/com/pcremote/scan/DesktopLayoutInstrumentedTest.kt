@@ -32,11 +32,11 @@ class DesktopLayoutInstrumentedTest {
         ActivityScenario.launch(MainActivity::class.java).use {scenario ->
             scenario.onActivity {activity ->
                 activity.setContent {
-                    MidnightTheme(dark=true,dynamic=false) {
+                    MidnightTheme(dark=true) {
                         Box(if(width>0 && height>0)Modifier.size(width.dp,height.dp) else Modifier.fillMaxSize()) {
                         HomeScreen(listOf(PcCardUi("layout-fixture","Review PC",state.value,false,Mode.entries,
                             if(state.value)PrimaryAction.OPEN else PrimaryAction.CHECKING,os="Windows")),emptyMap(),Mode.entries.toSet(),
-                            HomeActions({_,_->},{},{},{},{},{_,_->},{}))
+                            HomeActions({_,_->},{},{},{},{_,_->},{}))
                         }
                     }
                 }

@@ -1,5 +1,6 @@
 package com.pcremote.home
 
+import com.pcremote.account.OwnedComputer
 import com.pcremote.agent.AgentState
 import com.pcremote.agent.PairedPc
 import com.pcremote.nav.Mode
@@ -20,6 +21,8 @@ data class PcCardUi(
     /** The host can type a PIN on its lock screen. */
     val canUnlock: Boolean = false,
     val os: String = "",
+    /** Certificate fingerprint of the paired computer; ties a saved card to its account entry. */
+    val fingerprint: String = "",
 )
 
 object HomeModel {
@@ -46,6 +49,50 @@ object HomeModel {
                 canPower = st is AgentState.Online && "power" in st.caps,
                 locked = online && locked[pc.id] == true,
                 canUnlock = st is AgentState.Online && "unlock" in st.caps,
-                os = (st as? AgentState.Online)?.pc?.os.orEmpty())
+                os = (st as? AgentState.Online)?.pc?.os.orEmpty(),
+                fingerprint = pc.fingerprint)
         }
+}
+
+/** What a computer card says about the computer. */
+enum class ComputerStatus { ONLINE, OFFLINE, STREAMING, LOCKED, CHECKING, HOST_UPDATE_REQUIRED }
+
+/** One entry of the Computers list: a saved computer, or an account computer not saved here yet. */
+sealed interface ComputerRow {
+    val key: String
+    data class Saved(val card: PcCardUi) : ComputerRow { override val key get() = "saved:" + card.id }
+    data class FromAccount(val computer: OwnedComputer) : ComputerRow { override val key get() = "account:" + computer.id }
+}
+
+object ComputerList {
+    /**
+     * Saved computers first, then account computers that are not already saved here. An account
+     * computer counts as saved when a card carries the same certificate fingerprint.
+     */
+    fun rows(cards: List<PcCardUi>, owned: List<OwnedComputer>): List<ComputerRow> {
+        val known = cards.mapNotNull { it.fingerprint.takeIf(String::isNotEmpty) }.toSet()
+        return cards.map { ComputerRow.Saved(it) } +
+            owned.filter { it.certificateFp == null || it.certificateFp !in known }.map { ComputerRow.FromAccount(it) }
+    }
+
+    fun status(card: PcCardUi): ComputerStatus = when {
+        card.locked -> ComputerStatus.LOCKED
+        card.streaming -> ComputerStatus.STREAMING
+        card.online -> ComputerStatus.ONLINE
+        card.primary == PrimaryAction.CHECKING -> ComputerStatus.CHECKING
+        else -> ComputerStatus.OFFLINE
+    }
+
+    fun status(c: OwnedComputer): ComputerStatus = when {
+        !c.linked -> ComputerStatus.HOST_UPDATE_REQUIRED
+        c.online -> ComputerStatus.ONLINE
+        else -> ComputerStatus.OFFLINE
+    }
+
+    fun platform(raw: String): String = when (raw.lowercase()) {
+        "windows" -> "Windows"
+        "linux" -> "Linux"
+        "macos" -> "macOS"
+        else -> raw
+    }
 }

@@ -11,9 +11,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -38,6 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -83,8 +81,15 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val agent by session.conn.state.collectAsState()
-    com.pcremote.modes.ClipboardSync(session, agent)
-    val toolbar = remember { ToolbarState().apply { pcName = session.pc.name; connecting = session.pc.name; coachShown = true } }
+    var shareClipboard by remember { mutableStateOf(settings.shareClipboard) }
+    com.pcremote.modes.ClipboardSync(session, agent, shareClipboard)
+    val toolbar = remember {
+        ToolbarState().apply {
+            pcName = session.pc.name; connecting = session.pc.name
+            sizeW = settings.resolution.first; sizeH = settings.resolution.second
+            this.shareClipboard = settings.shareClipboard; audioOn = settings.playHostAudio
+        }
+    }
 
     Immersive()
     KeepScreenOn()
@@ -115,7 +120,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     // start once the agent is online and the surface exists; stop when either goes away
     val ready = agent is AgentState.Online && surface != null
     DisposableEffect(controller, ready) {
-        if (ready) controller.start(request(ctx).copy(display = savedDisplay(ctx, pcId)))
+        if (ready) controller.start(request(ctx, settings).copy(display = savedDisplay(ctx, pcId)))
         onDispose { controller.stop(); pipe = null; nextSock.getAndSet(null)?.close() }
     }
     val zoom = remember { ZoomPan() }
@@ -149,7 +154,6 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val streaming = ui as? StreamUi.Streaming
     toolbar.connected = streaming != null
     toolbar.connecting = if (streaming == null && ui is StreamUi.Connecting) session.pc.name else null
-    toolbar.offerLowerQuality = false
     toolbar.link = if (stats.lossPct > 5f || stats.rttMs > 80) LinkState.POOR else LinkState.GOOD
     val route by remember(pipe) { pipe?.route ?: MutableStateFlow("Connecting") }.collectAsState()
     toolbar.perfText = streaming?.let {
@@ -218,14 +222,20 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
             override fun pictureInPicture() { activity?.enterStreamPip() }
             override fun keyboard() { toolbar.keyboardOpen = !toolbar.keyboardOpen }
             override fun setTrackpad(on: Boolean) { toolbar.trackpad = on }
-            override fun lowerQuality() {}
             override fun disconnect() = onBack()
             override fun keys(events: List<KeyEvt>) = events.forEach { send(it.toMsg()) }
-            override fun coachDone() = markCoachSeen(ctx)
+            override fun setShareClipboard(on: Boolean) { shareClipboard = on; settings.shareClipboard = on }
+            override fun audioDetails() = pipe?.audioDetails().orEmpty()
+            override fun copyText(text: String) {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Audio details", text))
+            }
+            override fun reopenAudio() { pipe?.reopenAudio() }
             override fun selectDisplay(id: String) {
                 currentController.selectDisplay(id); saveDisplay(ctx, pcId, id); zoom.reset()
             }
             override fun selectSize(w: Int, h: Int) {
+                settings.resolution = w to h
                 currentController.selectSize(w, h); resize.asked(System.currentTimeMillis()); resizeTick++
             }
         }
@@ -368,7 +378,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
         val canUnlock = (agent as? com.pcremote.agent.AgentState.Online)?.caps?.contains("unlock") == true
         androidx.compose.animation.AnimatedVisibility(!inPip && locked && canUnlock && streaming != null, Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)) {
             com.pcremote.ui.components.PrimaryButton(androidx.compose.ui.res.stringResource(R.string.pcr_unlock_fp), unlock,
-                icon = Icons.Rounded.Fingerprint)
+                icon = R.drawable.lucide_fingerprint)
         }
         if (!inPip && zoom.isZoomed) ZoomChip(zoom.scale, Modifier.align(Alignment.TopCenter).padding(top = 12.dp), zoom::reset)
         if (!inPip && toolbar.keyboardOpen && streaming != null) {
@@ -382,8 +392,9 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun Failure(f: StreamUi.Failed, retry: () -> Unit, back: () -> Unit) {
+internal fun Failure(f: StreamUi.Failed, retry: () -> Unit, back: () -> Unit) {
     val c = LocalMidnight.current
     val msg = when (f.code) {
         "no_encoder" -> R.string.pcr_s2_err_no_encoder
@@ -393,14 +404,19 @@ private fun Failure(f: StreamUi.Failed, retry: () -> Unit, back: () -> Unit) {
         "no_decoder" -> R.string.pcr_s2_err_no_decoder
         else -> R.string.pcr_s2_err_timeout
     }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val title = stringResource(R.string.pcr_s2_err_title)
+    val text = stringResource(msg)
     Box(Modifier.fillMaxSize().background(c.bg.copy(alpha = 0.96f)), contentAlignment = Alignment.Center) {
-        Column(Modifier.widthIn(max = 420.dp).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(stringResource(R.string.pcr_s2_err_title), color = c.text, style = MaterialTheme.typography.titleLarge)
+        Column(Modifier.widthIn(max = 420.dp).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, color = c.text, style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(8.dp))
-            Text(stringResource(msg), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(20.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                GhostButton(stringResource(R.string.pcr_s2_back), onClick = back)
+            Text(text, color = c.textDim, style = MaterialTheme.typography.bodyMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Spacer(Modifier.height(16.dp))
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                GhostButton(stringResource(R.string.pcr_copy_error), onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString("$title: $text (${f.code})")) }, compact = true)
+                GhostButton(stringResource(R.string.pcr_s2_back), onClick = back, compact = true)
                 PrimaryButton(stringResource(R.string.pcr_s2_retry), onClick = retry)
             }
         }
@@ -417,26 +433,15 @@ private fun fit(box: IntSize, w: Int, h: Int): Pic? {
 }
 
 /**
- * Auto quality: the phone's own landscape resolution and refresh rate, up to 50 Mbps (the host adapts
- * bitrate to the network and fits the PC's aspect inside). A chosen preset caps all three.
+ * The stream request, straight from Settings: the saved Resolution (default 1280 x 720; 0 x 0 is the
+ * host's own size), Frame rate (default 60) and Bitrate limit (default 30 Mbps). The menu shows the
+ * same size. Mobile data keeps its silent cap.
  */
-private fun request(ctx: Context): StreamRequest {
-    val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
-    val size = android.graphics.Point()
-    @Suppress("DEPRECATION")
-    wm.defaultDisplay.getRealSize(size)
-    val w = maxOf(size.x, size.y); val h = minOf(size.x, size.y)
-    @Suppress("DEPRECATION")
-    val hz = (ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.refreshRate
-    if (!com.pcremote.quality.QualityPrefs.isAuto(ctx)) {
-        val p = com.pcremote.quality.QualityPrefs.current(ctx)
-        return StreamRequest(p.width, p.height, p.fps, p.bitrateKbps)
-    }
-    // On mobile data, cap the stream: it keeps a relayed 4G path inside its capacity and the data
-    // plan sane (8 Mbps is about 3.6 GB an hour). Wi-Fi gets up to 50 Mbps; the host adapts below that.
+private fun request(ctx: Context, settings: SettingsModel): StreamRequest {
+    val (rw, rh) = settings.resolution
     val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
     val cellular = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
-    return StreamRequest(w, h, hz.toInt().coerceIn(30, if (cellular) 60 else 120), if (cellular) 8_000 else 50_000)
+    return StreamRequest(rw, rh, settings.frameRate, SettingsModel.requestKbps(settings.bitrateMbps, cellular), settings.playHostAudio)
 }
 
 @Composable
@@ -461,13 +466,13 @@ private fun Immersive() {
 private fun ZoomChip(scale: Float, modifier: Modifier, reset: () -> Unit) {
     val c = LocalMidnight.current
     Row(
-        modifier.clip(MidnightShapes.pill).background(c.surface.copy(alpha = 0.86f)).clickable(onClick = reset)
+        modifier.clip(MidnightShapes.control).background(c.surface.copy(alpha = 0.86f)).clickable(onClick = reset)
             .padding(start = 14.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("%.1f×".format(scale), color = c.text, style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.width(6.dp))
-        Icon(Icons.Rounded.Close, stringResource(R.string.pcr_zoom_reset), tint = c.textDim, modifier = Modifier.size(16.dp))
+        Icon(painterResource(R.drawable.lucide_x), stringResource(R.string.pcr_zoom_reset), tint = c.textDim, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -477,5 +482,3 @@ private fun savedDisplay(ctx: Context, pcId: String) =
 private fun saveDisplay(ctx: Context, pcId: String, id: String) =
     ctx.getSharedPreferences("pcr_stream2", Context.MODE_PRIVATE).edit().putString("display_$pcId", id).apply()
 
-private fun coachSeen(ctx: Context) = ctx.getSharedPreferences("pcr_stream2", Context.MODE_PRIVATE).getBoolean("coach", false)
-private fun markCoachSeen(ctx: Context) = ctx.getSharedPreferences("pcr_stream2", Context.MODE_PRIVATE).edit().putBoolean("coach", true).apply()

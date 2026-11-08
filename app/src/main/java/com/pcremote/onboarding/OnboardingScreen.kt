@@ -13,15 +13,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -50,29 +47,28 @@ fun OnboardingScreen(model: PairingModel, onDone: (String) -> Unit, onManual: ()
     fun scan() = scanQr(ctx, onUnavailable = onManual) { raw -> scope.launch { model.onScanned(raw) } }
 
     Box(Modifier.fillMaxSize().background(c.bg)) {
-        Aurora()
         Column(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onClick = onAccount) { Text("Sign in") }
+                TextButton(onClick = onAccount) { Text(stringResource(R.string.pcr_sign_in)) }
                 TextButton(onClick = onSkip) { Text(stringResource(R.string.pcr_ob_skip), color = c.textDim) }
             }
             HorizontalPager(pager, Modifier.weight(1f)) { page ->
                 when (page) {
-                    0 -> Step(Icons.Rounded.Devices, R.string.pcr_ob_welcome_title, R.string.pcr_ob_welcome_body)
-                    1 -> Step(Icons.Rounded.Download, R.string.pcr_ob_get_title, R.string.pcr_ob_get_body) {
+                    0 -> Step(R.drawable.lucide_monitor_smartphone, R.string.pcr_ob_welcome_title, null)
+                    1 -> Step(R.drawable.lucide_download, R.string.pcr_ob_get_title, R.string.pcr_ob_get_body) {
                         Spacer(Modifier.height(20.dp))
-                        GhostButton(stringResource(R.string.pcr_ob_download), icon = Icons.Rounded.Download, onClick = {
+                        GhostButton(stringResource(R.string.pcr_ob_download), icon = R.drawable.lucide_download, onClick = {
                             ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://" + ctx.getString(R.string.pcr_ob_get_link))))
                         })
                         Spacer(Modifier.height(16.dp))
-                        GhostButton(stringResource(R.string.pcr_ob_share), icon = Icons.Rounded.Share, onClick = {
+                        GhostButton(stringResource(R.string.pcr_ob_share), icon = R.drawable.lucide_share_2, onClick = {
                             ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
                                 putExtra(Intent.EXTRA_TEXT, "https://" + ctx.getString(R.string.pcr_ob_get_link))
                             }, null))
                         })
                     }
-                    else -> Step(Icons.Rounded.QrCodeScanner, R.string.pcr_ob_scan_title, R.string.pcr_ob_scan_body) {
+                    else -> Step(R.drawable.lucide_scan_qr_code, R.string.pcr_ob_scan_title, null) {
                         Spacer(Modifier.height(12.dp))
                         TextButton(onClick = onManual) { Text(stringResource(R.string.pcr_ob_manual), color = c.textDim) }
                     }
@@ -84,7 +80,7 @@ fun OnboardingScreen(model: PairingModel, onDone: (String) -> Unit, onManual: ()
                 if (pager.currentPage < 2) {
                     PrimaryButton(stringResource(R.string.pcr_ob_next), { scope.launch { pager.animateScrollToPage(pager.currentPage + 1) } })
                 } else {
-                    PrimaryButton(stringResource(R.string.pcr_ob_scan), ::scan, icon = Icons.Rounded.QrCodeScanner)
+                    PrimaryButton(stringResource(R.string.pcr_ob_scan), ::scan, icon = R.drawable.lucide_scan_qr_code)
                 }
             }
         }
@@ -93,7 +89,7 @@ fun OnboardingScreen(model: PairingModel, onDone: (String) -> Unit, onManual: ()
 }
 
 @Composable
-private fun Step(icon: ImageVector, title: Int, body: Int, extra: @Composable ColumnScope.() -> Unit = {}) {
+private fun Step(@androidx.annotation.DrawableRes icon: Int, title: Int, body: Int?, extra: @Composable ColumnScope.() -> Unit = {}) {
     val c = LocalMidnight.current
     // Scrolls when large text or landscape doesn't fit; centred otherwise
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -102,13 +98,15 @@ private fun Step(icon: ImageVector, title: Int, body: Int, extra: @Composable Co
             Modifier.size(112.dp).clip(CircleShape)
                 .background(c.surfaceHigh),
             contentAlignment = Alignment.Center,
-        ) { Icon(icon, null, tint = c.text, modifier = Modifier.size(52.dp)) }
-        Spacer(Modifier.height(36.dp))
+        ) { Icon(painterResource(icon), null, tint = c.text, modifier = Modifier.size(52.dp)) }
+        Spacer(Modifier.height(24.dp))
         if (title == R.string.pcr_ob_welcome_title) SecparWordmark(Modifier.width(280.dp).height(67.dp))
-        else Text(stringResource(title), style = MaterialTheme.typography.displaySmall, color = c.text, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(14.dp))
-        Text(stringResource(body), style = MaterialTheme.typography.bodyLarge, color = c.textDim, textAlign = TextAlign.Center,
-            modifier = Modifier.widthIn(max = 360.dp))
+        else Text(stringResource(title), style = MaterialTheme.typography.headlineMedium, color = c.text, textAlign = TextAlign.Center)
+        if (body != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(stringResource(body), style = MaterialTheme.typography.bodyMedium, color = c.textDim, textAlign = TextAlign.Center,
+                modifier = Modifier.widthIn(max = 360.dp))
+        }
         extra()
     }
     }
@@ -122,22 +120,22 @@ fun PairingOverlay(state: PairingState, onRetry: () -> Unit, onDismiss: () -> Un
     AnimatedContent(state, transitionSpec = { (fadeIn() + scaleIn(initialScale = 0.96f)) togetherWith fadeOut() }, label = "pair") { s ->
         when (s) {
             is PairingState.Pairing, is PairingState.Error -> Box(
-                Modifier.fillMaxSize().background(c.bg.copy(alpha = 0.88f)).safeDrawingPadding().padding(32.dp),
+                Modifier.fillMaxSize().background(c.bg.copy(alpha = 0.88f)).safeDrawingPadding().padding(20.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                GlassCard(Modifier.fillMaxWidth()) {
+                GlassCard(Modifier.fillMaxWidth(), padding = 16.dp) {
                     if (s is PairingState.Pairing) {
                         LinearProgressIndicator(Modifier.fillMaxWidth(), color = c.accent, trackColor = c.surfaceHigh)
                         Spacer(Modifier.height(20.dp))
-                        Text(stringResource(R.string.pcr_ob_pairing, s.pcName), style = MaterialTheme.typography.titleLarge, color = c.text)
+                        Text(stringResource(R.string.pcr_ob_pairing, s.pcName), style = MaterialTheme.typography.titleMedium, color = c.text)
                     } else if (s is PairingState.Error) {
-                        Icon(Icons.Rounded.ErrorOutline, null, tint = c.bad, modifier = Modifier.size(36.dp))
+                        Icon(painterResource(R.drawable.lucide_circle_alert), null, tint = c.bad, modifier = Modifier.size(36.dp))
                         Spacer(Modifier.height(12.dp))
                         Text(stringResource(s.message), style = MaterialTheme.typography.bodyLarge, color = c.text)
                         Spacer(Modifier.height(20.dp))
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            PrimaryButton(stringResource(R.string.pcr_try_again), onRetry)
-                            GhostButton(stringResource(R.string.pcr_close), onDismiss)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                            PrimaryButton(stringResource(R.string.pcr_retry), onRetry)
+                            GhostButton(stringResource(R.string.pcr_close), onDismiss, compact = true)
                         }
                     }
                 }

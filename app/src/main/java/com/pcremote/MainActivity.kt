@@ -216,7 +216,7 @@ class MainActivity : ComponentActivity() {
                 com.pcremote.settings.ThemeChoice.SYSTEM -> isSystemInDarkTheme()
                 else -> true
             }
-            MidnightTheme(dark = dark, dynamic = remember(themeTick) { settings.dynamicColor }) {
+            MidnightTheme(dark = dark) {
                 val nav = rememberNavController()
                 val scope = rememberCoroutineScope()
                 fun finishOnboarding() {
@@ -237,7 +237,7 @@ class MainActivity : ComponentActivity() {
                             onDone = { pairing.reset(); finishOnboarding() },
                             onManual = ::manualPairing,
                             onSkip = ::finishOnboarding,
-                            onAccount = { nav.navigate(Routes.ACCOUNT) })
+                            onAccount = { com.pcremote.account.AccountRuntime.get(this@MainActivity).controller.signIn(); finishOnboarding() })
                     }
                     composable(Routes.modePattern(Mode.SCREEN)) { e ->
                         com.pcremote.stream2.StreamScreen(modeId(e), onBack = { nav.exitScreen(e) })
@@ -257,32 +257,44 @@ class MainActivity : ComponentActivity() {
                     composable(Routes.modePattern(Mode.FILES)) { e ->
                         com.pcremote.modes.FilesScreen(modeId(e), onBack = { nav.popBackStack() })
                     }
-                    composable(Routes.ACCOUNT) {
-                        com.pcremote.account.AccountScreen(com.pcremote.account.AccountRuntime.get(this@MainActivity).controller,
-                            onBack = { nav.popBackStack() }, onOpen = { id ->
-                                prefs.edit().putBoolean(PREF_ONBOARDED, true).apply()
-                                nav.navigate(Routes.HOME) { popUpTo(nav.graph.startDestinationId) { inclusive = true }; launchSingleTop = true }
-                                nav.navigate(Routes.mode(id, Mode.SCREEN))
-                            })
-                    }
-                    composable(Routes.SETTINGS) {
-                        com.pcremote.settings.SettingsScreen(settings, onBack = { nav.popBackStack() },
-                            onThemeChanged = { themeTick++; if (settings.theme == com.pcremote.settings.ThemeChoice.LIGHT) recreate() })
-                    }
                     composable(Routes.HOME) {
                         val account = com.pcremote.account.AccountRuntime.get(this@MainActivity).controller
                         LifecycleResumeEffect(account) {
                             val poll = lifecycleScope.launch { while (true) { account.refresh(); kotlinx.coroutines.delay(30_000) } }
-                            onPauseOrDispose { poll.cancel() }
+                            onPauseOrDispose { poll.cancel(); account.cancelConnection() }
                         }
                         val accountRevision by account.revision.collectAsState()
                         LifecycleResumeEffect(accountRevision) { home.start(); onPauseOrDispose { home.stop() } }
                         val cards by home.cards.collectAsState()
                         val thumbs by home.thumbs.collectAsState()
                         val pairState by pairing.state.collectAsState()
+                        val accountState by account.state.collectAsState()
+                        val update by com.pcremote.update.Updater.state.collectAsState()
+                        var browserError by remember { mutableStateOf<String?>(null) }
+                        fun openBrowser() {
+                            val approval = account.state.value.approval ?: return
+                            browserError = if (runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(approval.verificationUriComplete))) }.isSuccess)
+                                null else com.pcremote.account.AccountText.NO_BROWSER
+                        }
+                        LaunchedEffect(accountState.approval) { if (accountState.approval != null) openBrowser() }
+                        val accountActions = remember(account) {
+                            com.pcremote.account.AccountActions(
+                                signIn = account::signIn, cancelSignIn = account::cancelSignIn, signOut = account::signOut,
+                                refresh = account::refresh, openBrowser = ::openBrowser,
+                                connect = { computer ->
+                                    account.connect(computer) { id ->
+                                        prefs.edit().putBoolean(PREF_ONBOARDED, true).apply()
+                                        nav.navigate(Routes.mode(id, Mode.SCREEN))
+                                    }
+                                },
+                                cancelConnect = account::cancelConnection,
+                                dismissError = { browserError = null; account.dismissError() },
+                                friend = account::friendAction, note = account::showNote)
+                        }
                         LaunchedEffect(pairState) {
                             if (pairState is com.pcremote.onboarding.PairingState.Done) { pairing.reset(); home.stop(); home.start() }
                         }
+                        val shown = accountState.copy(error = browserError ?: accountState.error)
                         HomeScreen(cards, thumbs, IMPLEMENTED_MODES, HomeActions(
                             open = { card, mode -> nav.navigate(Routes.mode(card.id, mode)) },
                             primary = { card ->
@@ -296,14 +308,16 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             addPc = { scanQr(this@MainActivity, onUnavailable = ::manualPairing) { raw -> scope.launch { pairing.onScanned(raw) } } },
-                            settings = { nav.navigate(Routes.SETTINGS) },
-                            account = { nav.navigate(Routes.ACCOUNT) },
                             refresh = { home.stop(); home.start() },
                             rename = { card, name -> home.rename(card.id, name) },
                             remove = { card -> home.remove(card) },
                             send = { card, m -> home.connection(card.id)?.send(m) },
                             connection = { card -> home.connection(card.id) },
-                        ))
+                            updates = { startActivity(Intent(this@MainActivity, com.pcremote.update.UpdatesActivity::class.java)) },
+                        ), shown, accountActions, updateAvailable = update.release != null,
+                            friends = { com.pcremote.account.FriendsPage(shown, accountActions) },
+                            settings = { com.pcremote.settings.SettingsPage(settings,
+                                onThemeChanged = { themeTick++; if (settings.theme == com.pcremote.settings.ThemeChoice.LIGHT) recreate() }) })
                         PairingOverlay(pairState,
                             onRetry = { pairing.reset(); scanQr(this@MainActivity, onUnavailable = ::manualPairing) { raw -> scope.launch { pairing.onScanned(raw) } } },
                             onDismiss = pairing::reset)

@@ -3,19 +3,16 @@ package com.pcremote.modes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Logout
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.pcremote.R
@@ -24,12 +21,12 @@ import com.pcremote.ui.theme.LocalMidnight
 import com.pcremote.ui.theme.MidnightShapes
 import com.pcremote.ui.theme.rememberHaptics
 
-enum class PowerAction(val wire: String, val needsConfirm: Boolean, val label: Int, val icon: ImageVector) {
-    LOCK("lock", false, R.string.pcr_pw_lock, Icons.Rounded.Lock),
-    SLEEP("sleep", true, R.string.pcr_pw_sleep, Icons.Rounded.Bedtime),
-    RESTART("restart", true, R.string.pcr_pw_restart, Icons.Rounded.RestartAlt),
-    SHUTDOWN("shutdown", true, R.string.pcr_pw_shutdown, Icons.Rounded.PowerSettingsNew),
-    SIGNOUT("signout", true, R.string.pcr_pw_signout, Icons.AutoMirrored.Rounded.Logout);
+enum class PowerAction(val wire: String, val needsConfirm: Boolean, val label: Int, @androidx.annotation.DrawableRes val icon: Int) {
+    LOCK("lock", false, R.string.pcr_pw_lock, R.drawable.lucide_lock),
+    SLEEP("sleep", true, R.string.pcr_pw_sleep, R.drawable.lucide_moon),
+    RESTART("restart", true, R.string.pcr_pw_restart, R.drawable.lucide_rotate_ccw),
+    SHUTDOWN("shutdown", true, R.string.pcr_pw_shutdown, R.drawable.lucide_power),
+    SIGNOUT("signout", true, R.string.pcr_pw_signout, R.drawable.lucide_log_out);
 
     fun msg() = Msg.Power(wire)
 }
@@ -70,7 +67,7 @@ fun PowerSheet(pcName: String, send: (Msg) -> Unit, onDismiss: () -> Unit) {
                         }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(a.icon, null, tint = if (a.needsConfirm) c.bad else c.accent)
+                    Icon(painterResource(a.icon), null, tint = if (a.needsConfirm) c.bad else c.accent)
                     Spacer(Modifier.width(16.dp))
                     Text(stringResource(if (armed) R.string.pcr_pw_tap_again else a.label),
                         color = if (armed) c.bad else c.text, style = MaterialTheme.typography.bodyLarge)

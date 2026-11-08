@@ -51,10 +51,10 @@ class HomeInsetsInstrumentedTest {
             scenario.onActivity { activity ->
                 activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                 activity.setContent {
-                    MidnightTheme(dark = true, dynamic = false) {
+                    MidnightTheme(dark = true) {
                         HomeScreen(listOf(PcCardUi("fixture", "Review PC", true, false,
                             Mode.entries, PrimaryAction.OPEN)), emptyMap(), Mode.entries.toSet(),
-                            HomeActions({ _, _ -> }, {}, {}, {}, {}, { _, _ -> }, {}))
+                            HomeActions({ _, _ -> }, {}, {}, {}, { _, _ -> }, {}))
                     }
                 }
             }
@@ -88,7 +88,7 @@ class HomeInsetsInstrumentedTest {
     private fun accountBounds(): Rect? {
         val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow ?: return null
         fun find(node: android.view.accessibility.AccessibilityNodeInfo): Rect? {
-            if (node.contentDescription?.toString() == "Account") return Rect().also { node.getBoundsInScreen(it) }
+            if (node.text?.toString() == "Updates") return Rect().also { node.getBoundsInScreen(it) }
             for (i in 0 until node.childCount) node.getChild(i)?.let { find(it)?.let { rect -> return rect } }
             return null
         }

@@ -52,6 +52,23 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private var healthySinceNs = 0L
     private var recoveryDrops = 0
     internal fun diagnostics() = "submitted=$submittedPackets decoded=$decodedFrames accepted=$acceptedFrames overflow=${overflowPackets.get()} firstOverflow=[$firstOverflow] stale=$staleFrames incomplete=$incompleteWrites timelineMisses=$timelineMisses recoveries=$recoveries audioFailures=$audioFailures recoveryDrops=$recoveryDrops pending=${pending.get()} codecTimestampOffsetUs=$codecTimestampOffsetUs"
+    /** Output device and counters, for the stream menu's Audio page. */
+    fun details(): String {
+        val device = runCatching { track?.routedDevice?.let { d -> d.productName?.toString().orEmpty().ifBlank { "device ${d.type}" } } }.getOrNull()
+        return "Output: ${device ?: "not open"}\n" + diagnostics()
+    }
+
+    /** Close the output and open it again on the next packet; clears the restart back-off. */
+    fun reopen() {
+        if (dead) return
+        runCatching { exec.execute {
+            if (dead) return@execute
+            closeAudio()
+            failureStreak = 0; retryAfterNs = 0; healthySinceNs = 0
+            runCatching { start() }.onFailure { recoverAudio(it) }
+        } }
+    }
+
     private val info = MediaCodec.BufferInfo()
     private var pcm = ByteArray(0)
     @Volatile private var dead = false

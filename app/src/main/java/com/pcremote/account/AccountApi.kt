@@ -19,7 +19,8 @@ private const val MAX_BODY = 256 * 1024
 private val HEX64 = Regex("[a-f0-9]{64}")
 private val UUID = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
 
-enum class AccountError { NETWORK, INVALID_RESPONSE, INVALID_ARGUMENT, SIGN_IN_REQUIRED, EXPIRED, PENDING, SLOW_DOWN, UNAVAILABLE, RATE_LIMITED, REQUEST_FAILED }
+enum class AccountError { NETWORK, INVALID_RESPONSE, INVALID_ARGUMENT, SIGN_IN_REQUIRED, EXPIRED, PENDING, SLOW_DOWN, UNAVAILABLE, RATE_LIMITED, REQUEST_FAILED,
+    FRIEND_UNAVAILABLE, OWN_CODE, REQUEST_GONE, BAD_CODE }
 class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.NETWORK -> "Could not reach Secpar. Check your connection and try again."
     AccountError.INVALID_RESPONSE -> "Unexpected account response."
@@ -27,7 +28,12 @@ class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.SIGN_IN_REQUIRED -> "Your session expired. Sign in again."
     AccountError.EXPIRED -> "Sign-in expired. Please start again."
     AccountError.PENDING -> "Waiting for browser approval."
-    AccountError.SLOW_DOWN, AccountError.RATE_LIMITED -> "Please wait before trying again."
+    AccountError.SLOW_DOWN -> "Please wait before trying again."
+    AccountError.RATE_LIMITED -> "Too many attempts. Please wait and try again."
+    AccountError.FRIEND_UNAVAILABLE -> "Friend code was not found or is unavailable."
+    AccountError.OWN_CODE -> "That is your own friend code."
+    AccountError.REQUEST_GONE -> "This friend request is no longer available."
+    AccountError.BAD_CODE -> "Paste your friend's complete friend code."
     AccountError.UNAVAILABLE -> "Computer pairing is no longer available."
     AccountError.REQUEST_FAILED -> "The account request failed. Please try again."
 })
@@ -72,6 +78,10 @@ class OkHttpAccountTransport : AccountTransport {
 }
 
 data class AccountUser(val id: String, val handle: String)
+data class Friend(val id: String, val handle: String, val state: String, val requester: String) {
+    val accepted get() = state == "accepted"
+    val pending get() = state == "pending"
+}
 data class OwnedComputer(val id: String, val name: String, val platform: String, val certificateFp: String?, val linked: Boolean, val online: Boolean)
 class DeviceSignIn(val deviceCode: String, val userCode: String, val verificationUriComplete: String, val expiresIn: Long, val interval: Long) {
     override fun toString() = "DeviceSignIn(redacted)"
@@ -101,6 +111,17 @@ interface AccountService {
     suspend fun pollOwnerPair(requestId: String): OwnerPairPoll
     suspend fun cancelOwnerPair(requestId: String)
     suspend fun logout()
+    suspend fun friends(): List<Friend> = emptyList()
+    suspend fun blocks(): List<AccountUser> = emptyList()
+    /** One change to the friend or block lists. */
+    suspend fun friendAction(action: FriendAction, id: String) {}
+}
+
+/** The calls the Friends page makes. Paths and verbs match the desktop client. */
+enum class FriendAction(val method: String, val collection: String, val suffix: String = "") {
+    INVITE("PUT", "friends"), ACCEPT("POST", "friends", "/accept"), REMOVE("DELETE", "friends"),
+    BLOCK("PUT", "blocks"), UNBLOCK("DELETE", "blocks");
+    fun path(id: String) = "/v1/$collection/$id$suffix"
 }
 
 class AccountApi(sessionToken: String? = null, private val transport: AccountTransport = OkHttpAccountTransport()) : AccountService {
@@ -158,6 +179,31 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         }
     }
 
+    override suspend fun friends(): List<Friend> {
+        val rows = call("GET", "/v1/friends") as? JsonArray ?: invalid()
+        valid(rows.size <= 1024)
+        return rows.map { row ->
+            val o = row.objectValue()
+            val state = o.text("state").also { valid(it == "accepted" || it == "pending") }
+            Friend(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) },
+                state, o.text("requester").also { valid(UUID.matches(it)) })
+        }
+    }
+
+    override suspend fun blocks(): List<AccountUser> {
+        val rows = call("GET", "/v1/blocks") as? JsonArray ?: invalid()
+        valid(rows.size <= 1024)
+        return rows.map { row ->
+            val o = row.objectValue()
+            AccountUser(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) })
+        }
+    }
+
+    override suspend fun friendAction(action: FriendAction, id: String) {
+        if (!UUID.matches(id)) throw AccountException(AccountError.BAD_CODE)
+        call(action.method, action.path(id))
+    }
+
     override suspend fun beginOwnerPair(computerId: String, deviceName: String): OwnerPairPending {
         pathId(computerId); inputName(deviceName, 80)
         val o = call("POST", "/v1/owner-pairings", obj("computer" to computerId, "device" to deviceName)).objectValue()
@@ -192,13 +238,16 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         try {
             val response = transport.execute(AccountRequest(method, ORIGIN + path, token, body?.toString()))
             valid(response.body.size <= MAX_BODY)
-            val data = if (response.body.isEmpty() && response.status == 204) JsonNull else Json.parseToJsonElement(response.body.decodeToString(throwOnInvalidSequence = true))
+            val data = if (response.body.isEmpty()) JsonNull else Json.parseToJsonElement(response.body.decodeToString(throwOnInvalidSequence = true))
             if (response.status !in 200..299) {
                 val code = (data as? JsonObject)?.get("error")?.let { it as? JsonPrimitive }?.content
                 throw AccountException(when {
                     code == "authorization_pending" -> AccountError.PENDING
                     code == "slow_down" -> AccountError.SLOW_DOWN
-                    response.status == 401 -> AccountError.SIGN_IN_REQUIRED
+                    response.status == 401 || code == "session_expired" || code == "sign_in_required" -> AccountError.SIGN_IN_REQUIRED
+                    code == "account_unavailable" -> AccountError.FRIEND_UNAVAILABLE
+                    code == "cannot_friend_yourself" -> AccountError.OWN_CODE
+                    code == "incoming_request_not_found" -> AccountError.REQUEST_GONE
                     code == "device_code_expired_or_used" -> AccountError.EXPIRED
                     code == "pairing_request_unavailable" || code == "pairing_result_unavailable" || code == "computer_not_found" -> AccountError.UNAVAILABLE
                     response.status == 429 -> AccountError.RATE_LIMITED

@@ -8,12 +8,11 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,7 +49,7 @@ class ShareToPcActivity : ComponentActivity() {
                         pcs.forEach { pc ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 6.dp).clip(MidnightShapes.control).background(c.surface)
                                 .clickable { chosen = pc.id }.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Rounded.Computer, null, tint = c.accent)
+                                Icon(painterResource(R.drawable.lucide_monitor), null, tint = c.accent)
                                 Spacer(Modifier.width(14.dp))
                                 Text(pc.name, color = c.text, style = MaterialTheme.typography.titleMedium)
                             }

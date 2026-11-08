@@ -1,51 +1,53 @@
 package com.pcremote.home
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.HelpOutline
-import androidx.compose.material.icons.rounded.*
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.pcremote.BuildConfig
 import com.pcremote.R
+import com.pcremote.account.AccountActions
+import com.pcremote.account.AccountUi
+import com.pcremote.account.OwnedComputer
+import com.pcremote.account.SignInPanel
 import com.pcremote.agent.AgentConnection
 import com.pcremote.modes.rememberUnlocker
 import com.pcremote.nav.Mode
 import com.pcremote.ui.components.*
 import com.pcremote.ui.theme.LocalMidnight
 import com.pcremote.ui.theme.MidnightShapes
-import com.pcremote.ui.theme.rememberHaptics
 
-fun Mode.icon(): ImageVector = when (this) {
-    Mode.SCREEN -> Icons.Rounded.Monitor
-    Mode.REMOTE -> Icons.Rounded.TouchApp
-    Mode.MEDIA -> Icons.Rounded.MusicNote
-    Mode.SLIDES -> Icons.Rounded.Slideshow
-    Mode.PAD -> Icons.Rounded.SportsEsports
-    Mode.FILES -> Icons.Rounded.Folder
+@androidx.annotation.DrawableRes
+fun Mode.iconRes(): Int = when (this) {
+    Mode.SCREEN -> R.drawable.lucide_monitor
+    Mode.REMOTE -> R.drawable.lucide_touchpad
+    Mode.MEDIA -> R.drawable.lucide_music
+    Mode.SLIDES -> R.drawable.lucide_presentation
+    Mode.PAD -> R.drawable.lucide_gamepad_2
+    Mode.FILES -> R.drawable.lucide_folder
 }
 
 fun Mode.label(): Int = when (this) {
@@ -57,248 +59,282 @@ fun Mode.label(): Int = when (this) {
     Mode.FILES -> R.string.pcr_mode_files
 }
 
-/** One line under each mode: what you do with it. */
-fun Mode.hint(): Int = when (this) {
-    Mode.SCREEN -> R.string.pcr_hint_screen
-    Mode.REMOTE -> R.string.pcr_hint_remote
-    Mode.MEDIA -> R.string.pcr_hint_media
-    Mode.SLIDES -> R.string.pcr_hint_slides
-    Mode.PAD -> R.string.pcr_hint_pad
-    Mode.FILES -> R.string.pcr_hint_files
+enum class HomeTab(val label: Int) {
+    COMPUTERS(R.string.pcr_tab_computers), FRIENDS(R.string.pcr_tab_friends), SETTINGS(R.string.pcr_tab_settings)
 }
 
 class HomeActions(
     val open: (PcCardUi, Mode) -> Unit,
     val primary: (PcCardUi) -> Unit,
     val addPc: () -> Unit,
-    val settings: () -> Unit,
     val refresh: () -> Unit,
     val rename: (PcCardUi, String) -> Unit,
     val remove: (PcCardUi) -> Unit,
     val send: (PcCardUi, com.pcremote.agent.Msg) -> Unit = { _, _ -> },
     val connection: (PcCardUi) -> AgentConnection? = { null },
-    val account: () -> Unit = {},
+    val updates: () -> Unit = {},
 )
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun HomeScreen(cards: List<PcCardUi>, thumbs: Map<String, ImageBitmap>, implemented: Set<Mode>, a: HomeActions) {
-    val c = LocalMidnight.current
-    var sheetFor by remember { mutableStateOf<PcCardUi?>(null) }
-    val pager = rememberPagerState { cards.size }
-    val shown = cards.getOrNull(pager.currentPage)
+private val PageMargin = 20.dp
 
-    Box(Modifier.fillMaxSize().background(c.bg)) {
-        Aurora(screen = shown?.let { thumbs[it.id] }?.takeIf { shown.online })
-        Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-            Row(Modifier.fillMaxWidth().padding(20.dp, 12.dp, 16.dp, 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                SecparWordmark(Modifier.width(142.dp).height(34.dp))
-                Spacer(Modifier.weight(1f))
-                GlassIconButton(Icons.Rounded.AccountCircle, "Account", a.account)
-                Spacer(Modifier.width(4.dp))
-                GlassIconButton(Icons.Rounded.Add, stringResource(R.string.pcr_add_pc), a.addPc)
-                Spacer(Modifier.width(10.dp))
-                GlassIconButton(Icons.Rounded.Settings, stringResource(R.string.pcr_settings), a.settings)
-            }
-            if (cards.isEmpty()) {
-                EmptyState(a.addPc)
-            } else {
-                if (cards.size > 1) Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) { PagerDots(cards.size, pager.currentPage) }
-                HorizontalPager(pager, Modifier.fillMaxSize(), key = { cards[it].id }, pageSpacing = 16.dp) { i ->
-                    val card = cards[i]
-                    PcPage(card, thumbs[card.id], implemented, a, onMore = { sheetFor = card })
+/**
+ * Home: logo bar, tab strip, and the page of the selected tab. The Friends and Settings pages come
+ * in as slots so this file only knows about computers.
+ */
+@Composable
+fun HomeScreen(
+    cards: List<PcCardUi>, thumbs: Map<String, ImageBitmap>, implemented: Set<Mode>, a: HomeActions,
+    account: AccountUi = AccountUi(), acts: AccountActions = AccountActions(),
+    updateAvailable: Boolean = false, initialTab: HomeTab = HomeTab.COMPUTERS,
+    friends: @Composable () -> Unit = {}, settings: @Composable () -> Unit = {},
+) {
+    val c = LocalMidnight.current
+    var tab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
+    Column(Modifier.fillMaxSize().background(c.bg).safeDrawingPadding()) {
+        Header(updateAvailable, a.updates)
+        TabStrip(tab) { tab = it }
+        if (tab != HomeTab.SETTINGS) account.error?.let { ErrorBar(it, acts.dismissError) }
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
+            Box(Modifier.widthIn(max = 760.dp).fillMaxSize()) {
+                when (tab) {
+                    HomeTab.COMPUTERS -> ComputersPage(cards, thumbs, implemented, a, account, acts)
+                    HomeTab.FRIENDS -> friends()
+                    HomeTab.SETTINGS -> settings()
                 }
             }
         }
     }
-    sheetFor?.let { card -> PcSheet(card, a, onDismiss = { sheetFor = null }) }
+}
+
+@Composable
+private fun Header(updateAvailable: Boolean, onUpdates: () -> Unit) {
+    val c = LocalMidnight.current
+    Row(Modifier.fillMaxWidth().padding(horizontal = PageMargin, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        SecparWordmark(Modifier.width(112.dp).height(27.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(BuildConfig.VERSION_NAME, color = c.textDim, fontSize = 11.sp, maxLines = 1)
+        Spacer(Modifier.weight(1f))
+        GhostButton(stringResource(if (updateAvailable) R.string.pcr_update_available else R.string.pcr_updates), onUpdates, compact = true)
+    }
+}
+
+/** Three text tabs, 100 x 36, the selected one white with a 2dp accent underline. 48dp high to touch. */
+@Composable
+private fun TabStrip(selected: HomeTab, onSelect: (HomeTab) -> Unit) {
+    val c = LocalMidnight.current
+    Row(Modifier.fillMaxWidth().padding(horizontal = PageMargin - 8.dp)) {
+        HomeTab.entries.forEach { t ->
+            val on = t == selected
+            Box(Modifier.height(48.dp).clickable(role = androidx.compose.ui.semantics.Role.Tab) { onSelect(t) }.padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center) {
+                Box(Modifier.width(84.dp).height(36.dp)) {
+                    Text(stringResource(t.label), color = if (on) c.text else c.textDim, style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.align(Alignment.Center))
+                    if (on) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp).background(c.accent))
+                }
+            }
+        }
+    }
+}
+
+/** The error text, Copy error and Dismiss. */
+@Composable
+private fun ErrorBar(message: String, dismiss: () -> Unit) {
+    val c = LocalMidnight.current
+    val clipboard = LocalClipboardManager.current
+    Row(Modifier.fillMaxWidth().padding(horizontal = PageMargin), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(message, color = c.bad, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(vertical = 8.dp))
+        GhostButton(stringResource(R.string.pcr_copy_error), { clipboard.setText(AnnotatedString(message)) }, compact = true)
+        GhostButton(stringResource(R.string.pcr_dismiss), dismiss, compact = true)
+    }
+}
+
+@Composable
+private fun ComputersPage(
+    cards: List<PcCardUi>, thumbs: Map<String, ImageBitmap>, implemented: Set<Mode>, a: HomeActions,
+    account: AccountUi, acts: AccountActions,
+) {
+    val c = LocalMidnight.current
+    val rows = remember(cards, account.computers) { ComputerList.rows(cards, account.computers) }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = PageMargin, end = PageMargin, top = 8.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item("title") {
+            PageHeader(stringResource(R.string.pcr_tab_computers)) {
+                GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
+                if (account.user == null && account.approval == null) {
+                    GhostButton(stringResource(R.string.pcr_sign_in), acts.signIn, compact = true, enabled = account.ready && !account.busy)
+                }
+            }
+        }
+        account.user?.let { user ->
+            item("account") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(user.handle, color = c.textDim, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    GhostButton(stringResource(R.string.pcr_refresh), acts.refresh, compact = true, enabled = account.connecting == null)
+                    GhostButton(stringResource(R.string.pcr_sign_out), acts.signOut, compact = true)
+                }
+            }
+        }
+        if (account.user == null) account.approval?.let { item("approval") { SignInPanel(it, acts) } }
+        if (rows.isEmpty()) item("empty") { EmptyState(a.addPc) }
+        items(rows, key = { it.key }) { row ->
+            when (row) {
+                is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)
+                is ComputerRow.FromAccount -> AccountCard(row.computer, account.connecting, acts)
+            }
+        }
+    }
 }
 
 @Composable
 private fun EmptyState(addPc: () -> Unit) {
     val c = LocalMidnight.current
-    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Column(Modifier.widthIn(max = 480.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Icon(Icons.Rounded.DesktopWindows, null, tint = c.accent, modifier = Modifier.size(36.dp))
-            Text(stringResource(R.string.pcr_no_pcs_title), color = c.text, style = MaterialTheme.typography.headlineSmall)
-            Text(stringResource(R.string.pcr_no_pcs_body), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-            PrimaryButton(stringResource(R.string.pcr_ob_scan), addPc, icon = Icons.Rounded.QrCodeScanner, modifier = Modifier.fillMaxWidth())
-        }
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.pcr_no_pcs_title), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+        PrimaryButton(stringResource(R.string.pcr_ob_scan), addPc, icon = R.drawable.lucide_scan_qr_code)
     }
 }
 
-/** The PC's screen in a glass bezel: the live thumbnail, or a dark panel while it's away. */
 @Composable
-private fun Monitor(thumb: ImageBitmap?, online: Boolean, modifier: Modifier, ratio: Float = 16f / 9f, badge: @Composable BoxScope.() -> Unit = {}) {
+private fun statusColor(s: ComputerStatus): Color {
     val c = LocalMidnight.current
-    val shape = RoundedCornerShape(16.dp)
-    Box(
-        modifier.aspectRatio(ratio).clip(shape).background(Color.Black)
-            .border(1.dp, c.border, shape),
-    ) {
-        AnimatedContent(thumb, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "thumb") { t ->
-            if (t != null) Image(t, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            else Box(Modifier.fillMaxSize().background(c.surfaceHigh), contentAlignment = Alignment.Center) {
-                Icon(Icons.Rounded.DesktopWindows, null, tint = c.textDim.copy(alpha = 0.5f), modifier = Modifier.size(52.dp))
-            }
-        }
-        val dim by animateFloatAsState(if (online) 0f else 0.6f, label = "dim")
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = dim)))
-        badge()
+    return when (s) {
+        ComputerStatus.ONLINE -> c.ok
+        ComputerStatus.STREAMING -> c.accent
+        ComputerStatus.LOCKED, ComputerStatus.CHECKING, ComputerStatus.HOST_UPDATE_REQUIRED -> c.warn
+        ComputerStatus.OFFLINE -> c.textDim
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PcPage(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, a: HomeActions, onMore: () -> Unit) {
+private fun statusText(s: ComputerStatus) = stringResource(when (s) {
+    ComputerStatus.ONLINE -> R.string.pcr_status_online
+    ComputerStatus.OFFLINE -> R.string.pcr_status_offline
+    ComputerStatus.STREAMING -> R.string.pcr_status_streaming
+    ComputerStatus.LOCKED -> R.string.pcr_status_locked
+    ComputerStatus.CHECKING -> R.string.pcr_checking
+    ComputerStatus.HOST_UPDATE_REQUIRED -> R.string.pcr_host_update_required
+})
+
+/** Dot, name 14 bold, status 12 muted, platform at the right. */
+@Composable
+private fun CardTitle(name: String, platform: String, status: ComputerStatus, endPad: androidx.compose.ui.unit.Dp = 0.dp) {
     val c = LocalMidnight.current
-    val haptics = rememberHaptics()
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Box(Modifier.padding(top = 6.dp)) { StatusDot(statusColor(status)) }
+        Spacer(Modifier.width(8.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, color = c.text, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(statusText(status), color = c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+        }
+        if (platform.isNotEmpty()) Text(platform, color = c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+            modifier = Modifier.padding(start = 8.dp, top = 2.dp))
+        Spacer(Modifier.width(endPad))
+    }
+}
+
+@Composable
+private fun CardFrame(content: @Composable ColumnScope.() -> Unit) {
+    val c = LocalMidnight.current
+    Column(Modifier.fillMaxWidth().clip(MidnightShapes.card).background(c.surface).border(1.dp, c.border, MidnightShapes.card).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+}
+
+@Composable
+private fun AccountCard(computer: OwnedComputer, connecting: String?, acts: AccountActions) {
+    val status = ComputerList.status(computer)
+    CardFrame {
+        CardTitle(computer.name, ComputerList.platform(computer.platform), status)
+        if (connecting == computer.id) GhostButton(stringResource(R.string.pcr_cancel), acts.cancelConnect)
+        else PrimaryButton(stringResource(R.string.pcr_connect), { acts.connect(computer) }, enabled = computer.linked && connecting == null)
+    }
+}
+
+@Composable
+private fun SavedCard(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, a: HomeActions) {
     val conn = a.connection(card)
     val unlock = rememberUnlocker(card.id, { m -> conn?.sendIfOnline(m) == true }, conn?.incoming)
-    val modes = card.modes.filter { it in implemented && it != Mode.SCREEN } // the screen opens from the preview
-    @Composable fun preview(modifier: Modifier) {
-        Monitor(thumb, card.online && !card.locked,
-            modifier.combinedClickable(onClick = { a.primary(card) }, onLongClick = { haptics.heavy(); onMore() })) {
-            StatusChip(card, Modifier.align(Alignment.TopStart).padding(8.dp))
-            if (card.locked) Icon(Icons.Rounded.Lock, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(32.dp))
-            else if (card.online) Icon(Icons.Rounded.PlayArrow, stringResource(R.string.pcr_mode_screen), tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.align(Alignment.Center).size(40.dp))
-        }
+    val modes = card.modes.filter { it in implemented && it != Mode.SCREEN }
+    var renaming by remember { mutableStateOf(false) }
+    var confirmForget by remember { mutableStateOf(false) }
+    var power by remember { mutableStateOf(false) }
+    if (power) com.pcremote.modes.PowerSheet(card.name, { a.send(card, it) }) { power = false }
+    if (renaming) RenameDialog(card.name, { renaming = false }) { a.rename(card, it) }
+    val items = buildList {
+        if (card.canPower) add(MenuItem(R.drawable.lucide_power, stringResource(R.string.pcr_power)) { power = true })
+        if (card.primary != PrimaryAction.OPEN) add(MenuItem(R.drawable.lucide_zap, stringResource(R.string.pcr_wake)) { a.primary(card.copy(primary = PrimaryAction.WAKE)) })
+        add(MenuItem(R.drawable.lucide_pencil, stringResource(R.string.pcr_rename)) { renaming = true })
+        add(MenuItem(R.drawable.lucide_trash_2, stringResource(if (confirmForget) R.string.pcr_pw_tap_again else R.string.pcr_forget_device),
+            destructive = true, keepOpen = !confirmForget) {
+            if (confirmForget) a.remove(card) else confirmForget = true
+        })
     }
-    @Composable fun identity(modifier: Modifier) {
-        Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(card.name, color = c.text, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (card.os.isNotEmpty()) Text(card.os, color = c.textDim, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                GlassIconButton(Icons.Rounded.MoreHoriz, stringResource(R.string.pcr_more), onMore)
-            }
-            Box(Modifier.widthIn(max = 320.dp).fillMaxWidth()) { PrimaryRow(card, a, unlock) }
-        }
-    }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        // DeX windows can be wide but shorter than a phone. Keep the preview and identity in
-        // the same bounded row for every connection state, without sizing either to window height.
-        val wide = maxWidth >= 560.dp
-        val previewWidth = (maxWidth * 0.34f).coerceIn(180.dp, 240.dp)
-        Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                if (wide) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                        preview(Modifier.width(previewWidth))
-                        identity(Modifier.weight(1f))
-                    }
-                } else {
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            preview(Modifier.widthIn(max = 360.dp).fillMaxWidth())
+    Box {
+    CardFrame {
+        CardTitle(card.name, card.os.substringBefore(' '), ComputerList.status(card), endPad = 36.dp)
+        BoxWithConstraints {
+            val wide = maxWidth >= 520.dp
+            val actions: @Composable ColumnScope.() -> Unit = {
+                if (card.online || card.primary == PrimaryAction.WAKE) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    when {
+                        card.online -> {
+                            PrimaryButton(stringResource(R.string.pcr_connect), { a.primary(card) })
+                            if (card.locked && card.canUnlock) GhostButton(stringResource(R.string.pcr_unlock), unlock, icon = R.drawable.lucide_fingerprint)
                         }
-                        identity(Modifier.fillMaxWidth())
+                        else -> PrimaryButton(stringResource(R.string.pcr_wake), { a.primary(card) })
                     }
                 }
-                if (card.online && modes.isNotEmpty()) {
-                    HorizontalDivider(color = c.border)
-                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        modes.chunked(if (wide) 3 else 2).forEach { row ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                row.forEach { m -> ModeTile(m, Modifier.weight(1f)) { a.open(card, m) } }
-                                repeat((if (wide) 3 else 2) - row.size) { Spacer(Modifier.weight(1f)) }
-                            }
-                        }
+                if (card.online && modes.isNotEmpty()) modes.chunked(if (wide) 3 else 2).forEach { group ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        group.forEach { m -> ModeTile(m, Modifier.weight(1f)) { a.open(card, m) } }
+                        repeat((if (wide) 3 else 2) - group.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }
+            if (wide && card.online && thumb != null) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Preview(thumb, Modifier.width(240.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), content = actions)
+            } else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (card.online && thumb != null) Preview(thumb, Modifier.widthIn(max = 360.dp).fillMaxWidth())
+                actions()
+            }
         }
+    }
+    // The 48dp touch target sits over the card's top right corner; the dots line up with the name row.
+    AnchoredMenu(stringResource(R.string.pcr_more), items, Modifier.align(Alignment.TopEnd).offset(y = (-2).dp))
     }
 }
 
+/** The computer's screen as a 16:9 preview. Shown only while a thumbnail exists. */
 @Composable
-private fun StatusChip(card: PcCardUi, modifier: Modifier) {
+private fun Preview(thumb: ImageBitmap, modifier: Modifier) {
     val c = LocalMidnight.current
-    val (col, label) = when {
-        card.locked -> c.warn to R.string.pcr_status_locked
-        card.streaming -> c.accent to R.string.pcr_status_streaming
-        card.online -> c.ok to R.string.pcr_status_online
-        card.primary == PrimaryAction.CHECKING -> c.warn to R.string.pcr_checking
-        else -> c.textDim to R.string.pcr_status_offline
-    }
-    Row(modifier.clip(MidnightShapes.pill).background(Color.Black.copy(alpha = 0.55f)).padding(start = 4.dp, end = 12.dp, top = 2.dp, bottom = 2.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        StatusDot(col, live = card.online, size = 7.dp)
-        Text(stringResource(label), color = Color.White, style = MaterialTheme.typography.labelMedium)
-    }
-}
-
-/** The one thing to do next, chosen from the PC's state. */
-@Composable
-private fun PrimaryRow(card: PcCardUi, a: HomeActions, unlock: () -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        when {
-            card.locked && card.canUnlock -> {
-                PrimaryButton(stringResource(R.string.pcr_unlock_fp), unlock, Modifier.weight(1f), icon = Icons.Rounded.Fingerprint)
-            }
-            card.primary == PrimaryAction.OPEN -> Unit // the preview opens the screen
-            card.primary == PrimaryAction.WAKE -> PrimaryButton(stringResource(R.string.pcr_wake), { a.primary(card) }, Modifier.weight(1f), icon = Icons.Rounded.PowerSettingsNew)
-            card.primary == PrimaryAction.OFFLINE_HELP -> GhostButton(stringResource(R.string.pcr_help), { a.primary(card) }, Modifier.weight(1f), icon = Icons.AutoMirrored.Rounded.HelpOutline)
-            else -> PrimaryButton(stringResource(R.string.pcr_checking), {}, Modifier.weight(1f), enabled = false)
-        }
-    }
+    Image(thumb, null, modifier.aspectRatio(16f / 9f).clip(MidnightShapes.control)
+        .border(1.dp, c.border, MidnightShapes.control), contentScale = ContentScale.Crop)
 }
 
 @Composable
 private fun ModeTile(m: Mode, modifier: Modifier, onClick: () -> Unit) {
     val c = LocalMidnight.current
-    val haptics = rememberHaptics()
-    Row(modifier.heightIn(min = 52.dp).glass(MidnightShapes.control)
-        .border(1.dp, c.border, MidnightShapes.control)
-        .clickable { haptics.tick(); onClick() }.padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(m.icon(), null, tint = c.accent, modifier = Modifier.size(24.dp))
-        Text(stringResource(m.label()), color = c.text, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PcSheet(card: PcCardUi, a: HomeActions, onDismiss: () -> Unit) {
-    val c = LocalMidnight.current
-    var renaming by remember { mutableStateOf(false) }
-    var name by remember { mutableStateOf(card.name) }
-    var confirmRemove by remember { mutableStateOf(false) }
-    var power by remember { mutableStateOf(false) }
-    if (power) { com.pcremote.modes.PowerSheet(card.name, { a.send(card, it) }) { power = false; onDismiss() }; return }
-    ModalBottomSheet(onDismiss, containerColor = c.surface) {
-        Column(Modifier.padding(24.dp, 0.dp, 24.dp, 32.dp)) {
-            Text(card.name, color = c.text, style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(16.dp))
-            if (renaming) {
-                OutlinedTextField(name, { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(12.dp))
-                PrimaryButton(stringResource(R.string.pcr_save), { a.rename(card, name.trim().ifEmpty { card.name }); onDismiss() })
-            } else {
-                if (card.canPower) SheetRow(Icons.Rounded.PowerSettingsNew, R.string.pcr_power) { power = true }
-                if (card.primary != PrimaryAction.OPEN) SheetRow(Icons.Rounded.Bolt, R.string.pcr_wake) { a.primary(card.copy(primary = PrimaryAction.WAKE)); onDismiss() }
-                SheetRow(Icons.Rounded.Edit, R.string.pcr_rename) { renaming = true }
-                SheetRow(Icons.Rounded.DeleteOutline, if (confirmRemove) R.string.pcr_remove_confirm else R.string.pcr_remove, danger = true) {
-                    if (confirmRemove) { a.remove(card); onDismiss() } else confirmRemove = true
-                }
-            }
-        }
+    val haptics = com.pcremote.ui.theme.rememberHaptics()
+    Row(modifier.heightIn(min = 40.dp).clip(MidnightShapes.control).background(c.surfaceHigh)
+        .border(1.dp, c.controlBorder, MidnightShapes.control)
+        .clickable { haptics.tick(); onClick() }.padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Icon(painterResource(m.iconRes()), null, tint = c.text, modifier = Modifier.size(20.dp))
+        Text(stringResource(m.label()), color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable
-private fun SheetRow(icon: ImageVector, label: Int, danger: Boolean = false, onClick: () -> Unit) {
-    val c = LocalMidnight.current
-    Row(
-        Modifier.fillMaxWidth().clip(MidnightShapes.control).clickable(onClick = onClick).padding(vertical = 14.dp, horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, null, tint = if (danger) c.bad else c.text)
-        Spacer(Modifier.width(16.dp))
-        Text(stringResource(label), color = if (danger) c.bad else c.text, style = MaterialTheme.typography.bodyLarge)
+private fun RenameDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf(current) }
+    FlatDialog(stringResource(R.string.pcr_rename), onDismiss, actions = {
+        GhostButton(stringResource(R.string.pcr_cancel), onDismiss, compact = true)
+        PrimaryButton(stringResource(R.string.pcr_save), { onSave(name.trim().ifEmpty { current }); onDismiss() }, compact = true)
+    }) {
+        FlatField(name, { name = it }, current, Modifier.fillMaxWidth())
     }
 }

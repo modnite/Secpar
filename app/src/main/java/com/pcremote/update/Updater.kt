@@ -31,7 +31,11 @@ import okhttp3.Request
 import java.io.File
 
 data class Release(val version: String, val apkUrl: String, val sha256: String = "", val size: Long = 0)
-data class UpdateState(val release: Release? = null, val message: String = "Checking for updates...", val busy: Boolean = false)
+const val CHECKING = "Checking for updates…"
+const val UP_TO_DATE = "You’re up to date."
+const val CHECK_FAILED = "Could not check for updates. Try again."
+
+data class UpdateState(val release: Release? = null, val message: String = CHECKING, val busy: Boolean = false)
 
 /** Automatic discovery; installation always requires an explicit user action. */
 object Updater {
@@ -99,17 +103,17 @@ object Updater {
 
     fun checkNow(ctx: Context, done: () -> Unit = {}) {
         if (!operation.compareAndSet(false, true)) return done()
-        mutableState.value = mutableState.value.copy(message = "Checking for updates...", busy = true)
+        mutableState.value = mutableState.value.copy(message = CHECKING, busy = true)
         scope.launch {
             try {
                 val body = http.newCall(Request.Builder().url(LATEST).header("Accept", "application/vnd.github+json").build()).execute()
                     .use { check(it.isSuccessful) { "Update service unavailable. Try again later." }; it.body.string() }
                 val r = select(body, BuildConfig.VERSION_NAME.contains("secpar"))
                 val newer = r?.takeIf { isNewer(it.version, BuildConfig.VERSION_NAME) }
-                mutableState.value = UpdateState(newer, if (newer == null) "You're up to date." else "Secpar ${newer.version} is available.")
+                mutableState.value = UpdateState(newer, if (newer == null) UP_TO_DATE else "Secpar ${newer.version} is available.")
                 if (newer != null) notify(ctx, "Secpar ${newer.version} is available. Tap to review.", Intent(ctx, UpdatesActivity::class.java))
             } catch (_: Exception) {
-                mutableState.value = mutableState.value.copy(message = "Could not check for updates. Try again.", busy = false)
+                mutableState.value = mutableState.value.copy(message = CHECK_FAILED, busy = false)
             } finally {
                 operation.set(false)
                 android.os.Handler(android.os.Looper.getMainLooper()).post { done() }
@@ -121,11 +125,11 @@ object Updater {
         val r = state.value.release ?: return
         if (Build.VERSION.SDK_INT >= 26 && !ctx.packageManager.canRequestPackageInstalls()) {
             ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + ctx.packageName)))
-            mutableState.value = state.value.copy(message = "Allow updates from Secpar, then tap Download & install again.")
+            mutableState.value = state.value.copy(message = "Allow updates from Secpar, then tap Download update again.")
             return
         }
         if (!operation.compareAndSet(false, true)) return
-        mutableState.value = state.value.copy(busy = true, message = "Downloading update...")
+        mutableState.value = state.value.copy(busy = true, message = "Downloading update…")
         scope.launch {
             val apk = File(ctx.cacheDir, "secpar-update.apk")
             try {

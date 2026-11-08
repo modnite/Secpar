@@ -17,28 +17,24 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.annotation.DrawableRes
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
@@ -59,32 +55,44 @@ fun Modifier.glass(shape: Shape = MidnightShapes.card, strong: Boolean = false):
     clip(shape).background(if (strong) c.surfaceHigh else c.surface)
 }
 
-/** The one solid accent button per screen: the thing to do next. */
+/** Visual button height and minimum width. The touch target stays 48dp around it. */
+private val ButtonHeight = 32.dp
+private val ButtonMinWidth = 144.dp
+
 @Composable
-fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, icon: ImageVector? = null) {
-    val c = LocalMidnight.current
-    val haptics = rememberHaptics()
-    Button(onClick = { haptics.click(); onClick() }, modifier = modifier.heightIn(min = 48.dp), enabled = enabled,
-        shape = MidnightShapes.control, colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.onAccent,
-            disabledContainerColor = c.surfaceHigh, disabledContentColor = c.textDim),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)) {
-        if (icon != null) { Icon(icon, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)) }
-        Text(text, style = MaterialTheme.typography.labelLarge)
+private fun ButtonFace(text: String, onClick: () -> Unit, modifier: Modifier, enabled: Boolean, @DrawableRes icon: Int?,
+    fill: Color, content: Color, border: Color?, compact: Boolean = false) {
+    val shape = MidnightShapes.control
+    Row(
+        modifier.minimumInteractiveComponentSize().defaultMinSize(minWidth = if (compact) 0.dp else ButtonMinWidth, minHeight = ButtonHeight)
+            .clip(shape).background(fill).then(if (border != null) Modifier.border(1.dp, border, shape) else Modifier)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) { Icon(painterResource(icon), null, tint = content, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)) }
+        Text(text, color = content, style = MaterialTheme.typography.labelLarge, maxLines = 1)
     }
 }
 
-/** A quiet glass pill for secondary actions. */
+/** The one solid accent button per screen: the thing to do next. 144 x 32, radius 5. */
 @Composable
-fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, tint: Color? = null) {
+fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, @DrawableRes icon: Int? = null,
+    compact: Boolean = false) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
-    OutlinedButton(onClick = { haptics.tick(); onClick() }, modifier = modifier.heightIn(min = 48.dp),
-        shape = MidnightShapes.control, border = BorderStroke(1.dp, c.border),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = tint ?: c.text),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)) {
-        if (icon != null) { Icon(icon, null, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(8.dp)) }
-        Text(text, style = MaterialTheme.typography.labelLarge)
-    }
+    ButtonFace(text, { haptics.click(); onClick() }, modifier, enabled, icon,
+        fill = if (enabled) c.accent else c.surfaceHigh, content = if (enabled) c.onAccent else c.textDim, border = null, compact = compact)
+}
+
+/** Secondary action: surface fill, 1dp stroke. */
+@Composable
+fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, @DrawableRes icon: Int? = null, tint: Color? = null,
+    compact: Boolean = false, enabled: Boolean = true) {
+    val c = LocalMidnight.current
+    val haptics = rememberHaptics()
+    ButtonFace(text, { haptics.tick(); onClick() }, modifier, enabled, icon,
+        fill = c.surfaceHigh, content = (tint ?: c.text).let { if (enabled) it else c.textDim }, border = c.controlBorder, compact = compact)
 }
 
 /** A glass panel. */
@@ -99,26 +107,20 @@ fun GlassCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, padd
 
 /** A round glass icon button. */
 @Composable
-fun GlassIconButton(icon: ImageVector, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, tint: Color? = null) {
+fun GlassIconButton(@DrawableRes icon: Int, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, tint: Color? = null) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
     IconButton(onClick = { haptics.tick(); onClick() }, modifier = modifier.size(48.dp),
         colors = IconButtonDefaults.iconButtonColors(containerColor = c.surface, contentColor = tint ?: c.text)) {
-        Icon(icon, label, modifier = Modifier.size(20.dp))
+        Icon(painterResource(icon), label, modifier = Modifier.size(20.dp))
     }
 }
 
-/** A status dot that breathes while [live]. */
+/** A flat status dot: no pulse, no halo. */
 @Composable
-fun StatusDot(color: Color, live: Boolean, size: Dp = 10.dp) {
-    val pulse by rememberInfiniteTransition(label = "dot").animateFloat(
-        1f, 2.4f, infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing)), label = "p",
-    )
+fun StatusDot(color: Color, size: Dp = 8.dp) {
     val col by animateColorAsState(color, label = "c")
-    Box(Modifier.size(size * 2.2f), contentAlignment = Alignment.Center) {
-        if (live) Box(Modifier.size(size).scale(pulse).clip(CircleShape).background(col.copy(alpha = (2.4f - pulse) / 3.5f)))
-        Box(Modifier.size(size).clip(CircleShape).background(col))
-    }
+    Box(Modifier.size(size).clip(CircleShape).background(col))
 }
 
 /** A small header for a group of settings or items. */
@@ -137,5 +139,109 @@ fun PagerDots(count: Int, current: Int) {
             val w by animateDpAsState(if (i == current) 24.dp else 8.dp, Springs.snappy(), label = "w")
             Box(Modifier.height(8.dp).width(w).clip(CircleShape).background(if (i == current) c.accent else c.surfaceHigh))
         }
+    }
+}
+
+
+/** Single-line text field: 34dp high, radius 5, 1dp stroke. Same look as the desktop field. */
+@Composable
+fun FlatField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier, masked: Boolean = false,
+    isError: Boolean = false, mono: Boolean = false) {
+    val c = LocalMidnight.current
+    val shape = MidnightShapes.control
+    androidx.compose.foundation.text.BasicTextField(
+        value, onChange, modifier.heightIn(min = 34.dp).clip(shape).background(c.bg)
+            .border(1.dp, if (isError) c.bad else c.controlBorder, shape),
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.text,
+            fontFamily = if (mono) androidx.compose.ui.text.font.FontFamily.Monospace else MaterialTheme.typography.bodyMedium.fontFamily),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(c.accent),
+        visualTransformation = if (masked) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        decorationBox = { inner ->
+            Box(Modifier.heightIn(min = 34.dp).padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) Text(hint, color = c.textDim, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                inner()
+            }
+        },
+    )
+}
+
+/** Checkbox: 20dp square, radius 3, accent fill with a Lucide check, label on the right. 48dp row for touch. */
+@Composable
+fun FlatCheckbox(checked: Boolean, label: String, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val c = LocalMidnight.current
+    val haptics = rememberHaptics()
+    val box = RoundedCornerShape(3.dp)
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Checkbox) { haptics.tick(); onChange(!checked) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(20.dp).clip(box).background(if (checked) c.accent else c.surfaceHigh)
+            .then(if (checked) Modifier else Modifier.border(1.dp, c.controlBorder, box)), contentAlignment = Alignment.Center) {
+            if (checked) Icon(painterResource(com.pcremote.R.drawable.lucide_check), null, tint = c.onAccent, modifier = Modifier.size(14.dp))
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(label, color = c.text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** A labelled drop-down: 12 MUTED label above a 32dp control, radius 5. */
+@Composable
+fun FlatDropdown(label: String, value: String, options: List<String>, onPick: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val c = LocalMidnight.current
+    var open by remember { mutableStateOf(false) }
+    Column(modifier) {
+        Text(label, color = c.textDim, style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(4.dp))
+        Box {
+            Row(
+                Modifier.fillMaxWidth().height(32.dp).clip(MidnightShapes.control).background(c.surfaceHigh)
+                    .border(1.dp, c.controlBorder, MidnightShapes.control).clickable(role = Role.DropdownList) { open = true }
+                    .padding(start = 10.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(value, color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, modifier = Modifier.weight(1f))
+                Icon(painterResource(com.pcremote.R.drawable.lucide_chevron_down), null, tint = c.textDim, modifier = Modifier.size(18.dp))
+            }
+            androidx.compose.material3.DropdownMenu(open, { open = false }, containerColor = c.surfaceHigh,
+                shape = MidnightShapes.control, tonalElevation = 0.dp, shadowElevation = 0.dp,
+                border = BorderStroke(1.dp, c.controlBorder)) {
+                options.forEachIndexed { i, text ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text(text, color = c.text, style = MaterialTheme.typography.bodyMedium) },
+                        onClick = { open = false; onPick(i) },
+                        trailingIcon = if (text == value) ({ Icon(painterResource(com.pcremote.R.drawable.lucide_check), null, tint = c.accent, modifier = Modifier.size(18.dp)) }) else null,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Flat dialog card: surface, radius 7, 1dp border, title 14 strong. */
+@Composable
+fun FlatDialog(title: String, onDismiss: () -> Unit, actions: @Composable RowScope.() -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val c = LocalMidnight.current
+    androidx.compose.ui.window.Dialog(onDismiss) {
+        Column(Modifier.fillMaxWidth().widthIn(max = 400.dp).clip(MidnightShapes.card).background(c.surface)
+            .border(1.dp, c.border, MidnightShapes.card).padding(16.dp)) {
+            Text(title, color = c.text, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(12.dp))
+            content()
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically, content = actions)
+        }
+    }
+}
+
+/** Page title: 20 heading, 32dp high, actions right-aligned. */
+@Composable
+fun PageHeader(title: String, modifier: Modifier = Modifier, actions: @Composable RowScope.() -> Unit = {}) {
+    val c = LocalMidnight.current
+    Row(modifier.fillMaxWidth().heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = c.text, style = MaterialTheme.typography.headlineMedium, maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
     }
 }

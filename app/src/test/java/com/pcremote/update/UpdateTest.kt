@@ -17,4 +17,12 @@ class UpdateTest {
         assertNull(Updater.parse(release("v3.0.3-secpar-preview.16",name="unrelated.apk")))
         assertNull(Updater.parse(release("v3.0.3-secpar-preview.16").replace("100", "200000001")))
     }
+
+    @Test fun messagesUseOneEllipsisCharacterAndTheCurlyApostrophe() {
+        assertEquals("Checking for updates\u2026", CHECKING)
+        assertEquals("You\u2019re up to date.", UP_TO_DATE)
+        assertEquals("Could not check for updates. Try again.", CHECK_FAILED)
+        assertEquals("Installing restarts Secpar and ends any active stream.", UPDATE_WARNING)
+        assertEquals(CHECKING, UpdateState().message)
+    }
 }

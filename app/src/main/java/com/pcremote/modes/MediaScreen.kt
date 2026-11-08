@@ -10,12 +10,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -24,7 +23,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -83,22 +81,22 @@ private fun ColumnScope.MediaBody(m: Msg.Media, send: (Msg) -> Unit) {
             }
             // Transport
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                RoundButton(Icons.Rounded.SkipPrevious, 64) { send(Msg.MediaCmd("prev")) }
-                RoundButton(if (m.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, 88, primary = true) { send(Msg.MediaCmd("play_pause")) }
-                RoundButton(Icons.Rounded.SkipNext, 64) { send(Msg.MediaCmd("next")) }
+                RoundButton(R.drawable.lucide_skip_back, 64) { send(Msg.MediaCmd("prev")) }
+                RoundButton(if (m.playing) R.drawable.lucide_pause else R.drawable.lucide_play, 88, primary = true) { send(Msg.MediaCmd("play_pause")) }
+                RoundButton(R.drawable.lucide_skip_forward, 64) { send(Msg.MediaCmd("next")) }
             }
             // Volume
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                RoundButton(Icons.Rounded.VolumeDown, 52) { send(Msg.MediaCmd("vol_down")) }
+                RoundButton(R.drawable.lucide_volume_1, 52) { send(Msg.MediaCmd("vol_down")) }
                 VolumeDialView(m.vol, m.muted) { send(Msg.MediaCmd("vol_set", it)) }
-                RoundButton(if (m.muted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp, 52) { send(Msg.MediaCmd("mute")) }
+                RoundButton(if (m.muted) R.drawable.lucide_volume_x else R.drawable.lucide_volume_2, 52) { send(Msg.MediaCmd("mute")) }
             }
         }
     }
 }
 
 @Composable
-private fun RoundButton(icon: ImageVector, size: Int, primary: Boolean = false, onClick: () -> Unit) {
+private fun RoundButton(@androidx.annotation.DrawableRes icon: Int, size: Int, primary: Boolean = false, onClick: () -> Unit) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
     Box(
@@ -106,7 +104,7 @@ private fun RoundButton(icon: ImageVector, size: Int, primary: Boolean = false, 
             .background(if (primary) c.accent else c.surfaceHigh)
             .clickable { haptics.click(); onClick() },
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, null, tint = if (primary) c.onAccent else c.text, modifier = Modifier.size((size * 0.45f).dp)) }
+    ) { Icon(painterResource(icon), null, tint = if (primary) c.onAccent else c.text, modifier = Modifier.size((size * 0.45f).dp)) }
 }
 
 /** Rotary volume control: drag around the ring; ticks every 5 %. */

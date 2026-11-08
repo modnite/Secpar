@@ -26,19 +26,17 @@ class LayoutReviewActivity : ComponentActivity() {
                         Text("Stream layout sample", color = LocalMidnight.current.textDim,
                             modifier = Modifier.align(Alignment.Center))
                         com.pcremote.stream.StreamOverlay(com.pcremote.stream.ToolbarState().apply {
-                            connected = true; canPip = true; pcName = "Studio PC"
+                            connected = true; canPip = true; pcName = "Studio computer"
                         }, object : com.pcremote.stream.ToolbarActions {
                             override fun shortcut(s: com.pcremote.stream.Shortcut) {}
                             override fun keyboard() {}
                             override fun setTrackpad(on: Boolean) {}
-                            override fun lowerQuality() {}
                             override fun disconnect() {}
                             override fun keys(events: List<com.pcremote.stream.KeyEvt>) {}
-                            override fun coachDone() {}
                             override fun selectDisplay(id: String) {}
                         })
                     } else HomeScreen(if (intent.getBooleanExtra("empty", false)) emptyList() else listOf(PcCardUi("fixture", "Studio PC", true, false, Mode.entries.toList(), PrimaryAction.OPEN, os = "Windows 11")), emptyMap(), Mode.entries.toSet(),
-                        HomeActions(open = { _, _ -> }, primary = {}, addPc = {}, settings = {}, refresh = {}, rename = { _, _ -> }, remove = {}))
+                        HomeActions(open = { _, _ -> }, primary = {}, addPc = {}, refresh = {}, rename = { _, _ -> }, remove = {}))
                     Text("Layout sample", color = LocalMidnight.current.textDim,
                         modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp).background(LocalMidnight.current.bg))
                 }

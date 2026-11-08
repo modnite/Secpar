@@ -10,11 +10,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,14 +66,14 @@ private fun Transfers(hub: TransferHub, onFiles: () -> Unit, onFolder: () -> Uni
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Column(Modifier.fillMaxWidth().glass().padding(22.dp)) {
-                Icon(Icons.Rounded.SwapVert, null, tint = c.accent, modifier = Modifier.size(32.dp))
+                Icon(painterResource(R.drawable.lucide_arrow_left_right), null, tint = c.accent, modifier = Modifier.size(32.dp))
                 Spacer(Modifier.height(12.dp))
                 Text(stringResource(R.string.pcr_files_send), color = c.text, style = MaterialTheme.typography.headlineSmall)
                 Text(stringResource(R.string.pcr_files_send_desc), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
                 Spacer(Modifier.height(18.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PrimaryButton(stringResource(R.string.pcr_files_pick), onFiles, Modifier.weight(1f), icon = Icons.Rounded.UploadFile)
-                    GhostButton(stringResource(R.string.pcr_files_pick_folder), onFolder, icon = Icons.Rounded.DriveFolderUpload)
+                    PrimaryButton(stringResource(R.string.pcr_files_pick), onFiles, Modifier.weight(1f), icon = R.drawable.lucide_upload)
+                    GhostButton(stringResource(R.string.pcr_files_pick_folder), onFolder, icon = R.drawable.lucide_folder_up)
                 }
             }
         }
@@ -103,11 +101,11 @@ private fun TransferRow(t: Transfer, hub: TransferHub) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(38.dp).clip(MidnightShapes.small).background(color.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
                 Icon(
-                    when (t.status) {
-                        Transfer.Status.DONE -> Icons.Rounded.Check
-                        Transfer.Status.FAILED -> Icons.Rounded.ErrorOutline
-                        else -> if (t.outgoing) Icons.Rounded.ArrowUpward else Icons.Rounded.ArrowDownward
-                    }, null, tint = color, modifier = Modifier.size(20.dp),
+                    painterResource(when (t.status) {
+                        Transfer.Status.DONE -> R.drawable.lucide_check
+                        Transfer.Status.FAILED -> R.drawable.lucide_circle_alert
+                        else -> if (t.outgoing) R.drawable.lucide_arrow_up else R.drawable.lucide_arrow_down
+                    }), null, tint = color, modifier = Modifier.size(20.dp),
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -115,9 +113,9 @@ private fun TransferRow(t: Transfer, hub: TransferHub) {
                 Text(t.name.substringAfterLast('/'), color = c.text, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(detail(t), color = c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
-            if (t.outgoing && t.status == Transfer.Status.ACTIVE) IconButton({ hub.pause(t.id) }) { Icon(Icons.Rounded.Pause, stringResource(R.string.pcr_files_pause), tint = c.text) }
-            if (t.outgoing && (t.status == Transfer.Status.PAUSED || t.status == Transfer.Status.FAILED)) IconButton({ hub.resume(t.id) }) { Icon(Icons.Rounded.PlayArrow, stringResource(R.string.pcr_files_resume), tint = c.text) }
-            if (!t.finished || t.status == Transfer.Status.FAILED) IconButton({ hub.cancel(t.id) }) { Icon(Icons.Rounded.Close, stringResource(R.string.pcr_cancel), tint = c.textDim) }
+            if (t.outgoing && t.status == Transfer.Status.ACTIVE) IconButton({ hub.pause(t.id) }) { Icon(painterResource(R.drawable.lucide_pause), stringResource(R.string.pcr_files_pause), tint = c.text) }
+            if (t.outgoing && (t.status == Transfer.Status.PAUSED || t.status == Transfer.Status.FAILED)) IconButton({ hub.resume(t.id) }) { Icon(painterResource(R.drawable.lucide_play), stringResource(R.string.pcr_files_resume), tint = c.text) }
+            if (!t.finished || t.status == Transfer.Status.FAILED) IconButton({ hub.cancel(t.id) }) { Icon(painterResource(R.drawable.lucide_x), stringResource(R.string.pcr_cancel), tint = c.textDim) }
         }
         if (!t.finished) {
             Spacer(Modifier.height(10.dp))
@@ -158,7 +156,7 @@ private fun Browser(hub: TransferHub) {
     BackHandler(enabled = stack.isNotEmpty()) { path = stack.removeAt(stack.lastIndex) }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (stack.isNotEmpty()) IconButton({ path = stack.removeAt(stack.lastIndex) }) { Icon(Icons.Rounded.ArrowUpward, stringResource(R.string.pcr_files_up), tint = c.text) }
+            if (stack.isNotEmpty()) IconButton({ path = stack.removeAt(stack.lastIndex) }) { Icon(painterResource(R.drawable.lucide_arrow_up), stringResource(R.string.pcr_files_up), tint = c.text) }
             Text(if (path.isEmpty()) stringResource(R.string.pcr_files_this_pc) else path, color = c.text, style = MaterialTheme.typography.titleMedium,
                 maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
         }
@@ -172,7 +170,7 @@ private fun Browser(hub: TransferHub) {
                 items(list, key = { it.path }) { e ->
                     Row(Modifier.fillMaxWidth().glass(MidnightShapes.control).clickable(enabled = e.dir) { stack.add(path); path = e.path }.padding(start = 14.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (e.dir) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile, null, tint = if (e.dir) c.accent else c.textDim)
+                        Icon(painterResource(if (e.dir) R.drawable.lucide_folder else R.drawable.lucide_file), null, tint = if (e.dir) c.accent else c.textDim)
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
                             Text(e.name, color = c.text, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -180,7 +178,7 @@ private fun Browser(hub: TransferHub) {
                                 e.mtime.takeIf { it > 0 }?.let { DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it * 1000)) }).joinToString("   "),
                                 color = c.textDim, style = MaterialTheme.typography.bodySmall)
                         }
-                        if (path.isNotEmpty()) IconButton({ hub.download(e.path) }) { Icon(Icons.Rounded.Download, stringResource(R.string.pcr_files_download), tint = c.text) }
+                        if (path.isNotEmpty()) IconButton({ hub.download(e.path) }) { Icon(painterResource(R.drawable.lucide_download), stringResource(R.string.pcr_files_download), tint = c.text) }
                     }
                 }
             }
