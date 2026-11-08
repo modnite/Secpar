@@ -78,6 +78,8 @@ pub struct Shared {
     via_relay: Mutex<std::collections::HashSet<SocketAddr>>,
     /// A display the phone asked to switch to (`stream.display`), picked up by the video thread.
     switch: Mutex<Option<String>>,
+    /// A size the client asked for (`stream.size`), picked up by the video thread.
+    resize: Mutex<Option<(u32, u32)>>,
 }
 
 fn hdr(typ: Type, frame_id: u32) -> Header {
@@ -102,6 +104,7 @@ impl Shared {
             turn: Mutex::default(),
             via_relay: Mutex::default(),
             switch: Mutex::default(),
+            resize: Mutex::default(),
         }
     }
 
@@ -417,11 +420,15 @@ impl Video {
         let (mut frame_id, mut cap_us) = (0u32, 0u64);
         let mut applied = *sh.target.lock().unwrap();
         let mut last_cursor = None;
+        let mut want = (p.w, p.h);
         while !sh.stopped() {
             let t = *sh.target.lock().unwrap();
-            if let Some(id) = sh.switch.lock().unwrap().take().filter(|id| *id != self.shown.id) {
-                // same codec (the phone's decoder is set up for it), then the current notch below
-                let p = Params { display: id, codecs: vec![codec_name(self.enc.codec()).into()], ..p.clone() };
+            let new_display = sh.switch.lock().unwrap().take().filter(|id| *id != self.shown.id);
+            let new_size = sh.resize.lock().unwrap().take().filter(|s| *s != want);
+            if new_display.is_some() || new_size.is_some() {
+                want = new_size.unwrap_or(want);
+                // same codec (the decoder is set up for it), then the current notch below
+                let p = Params { display: new_display.unwrap_or_else(|| self.shown.id.clone()), w: want.0, h: want.1, codecs: vec![codec_name(self.enc.codec()).into()], ..p.clone() };
                 if let Ok(v) = Video::open(&p, t.kbps) {
                     crate::log::line(&format!("stream: switched to {}", v.shown.id));
                     self = v;
@@ -673,6 +680,11 @@ impl StreamSession {
     /// `stream.display`: switch to another display without restarting the stream.
     pub fn switch_display(&self, id: String) {
         *self.sh.switch.lock().unwrap() = Some(id);
+    }
+
+    /// `stream.size`: change the stream's size without restarting it.
+    pub fn resize(&self, w: u32, h: u32) {
+        *self.sh.resize.lock().unwrap() = Some((w.min(7680), h.min(4320)));
     }
 
     pub fn alive(&self) -> bool {

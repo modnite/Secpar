@@ -7,6 +7,33 @@ pub fn fullscreen_shortcut(event: &Event) -> bool {
         if modifiers.alt && !modifiers.ctrl && !modifiers.shift && !modifiers.mac_cmd)
 }
 
+/// Client hotkeys, with Parsec's defaults where it has them: Ctrl+Shift+W windowed/fullscreen,
+/// Ctrl+Alt+` disconnect. Alt+F (windowed/fullscreen) stays, and Ctrl+Alt+S hides or shows the
+/// Secpar button.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Shortcut {
+    Fullscreen,
+    Disconnect,
+    MenuButton,
+}
+
+pub fn shortcut(event: &Event) -> Option<(Shortcut, Key)> {
+    let Event::Key { key, pressed: true, repeat: false, modifiers: m, .. } = event else { return None };
+    if m.mac_cmd {
+        return None;
+    }
+    let ctrl_alt = m.ctrl && m.alt && !m.shift;
+    let ctrl_shift = m.ctrl && m.shift && !m.alt;
+    let found = match key {
+        Key::F if m.alt && !m.ctrl && !m.shift => Shortcut::Fullscreen,
+        Key::W if ctrl_shift => Shortcut::Fullscreen,
+        Key::Backtick if ctrl_alt => Shortcut::Disconnect,
+        Key::S if ctrl_alt => Shortcut::MenuButton,
+        _ => return None,
+    };
+    Some((found, *key))
+}
+
 #[derive(Default)]
 pub struct Input {
     pub captured: bool,
@@ -313,6 +340,21 @@ mod tests {
         let mut input=Input::default();input.free();input.held.insert(65);input.buttons.insert("left");
         let events=input.release_buttons();assert_eq!(events.len(),1);assert_eq!(events[0]["b"],"left");
         assert!(input.held.contains(&65));assert!(input.enabled);assert!(input.release_buttons().is_empty());
+    }
+
+    #[test]
+    fn client_hotkeys_follow_parsec_and_need_the_exact_modifiers() {
+        let key=|key,modifiers,repeat| Event::Key{key,physical_key:Some(key),pressed:true,repeat,modifiers};
+        let ctrl_shift=Modifiers{ctrl:true,shift:true,..Default::default()};
+        let ctrl_alt=Modifiers{ctrl:true,alt:true,..Default::default()};
+        assert_eq!(shortcut(&key(Key::W,ctrl_shift,false)).map(|s|s.0),Some(Shortcut::Fullscreen));
+        assert_eq!(shortcut(&key(Key::Backtick,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::Disconnect));
+        assert_eq!(shortcut(&key(Key::S,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::MenuButton));
+        assert_eq!(shortcut(&key(Key::F,Modifiers{alt:true,..Default::default()},false)).map(|s|s.0),Some(Shortcut::Fullscreen));
+        assert!(shortcut(&key(Key::W,ctrl_shift,true)).is_none(), "no key repeat");
+        assert!(shortcut(&key(Key::W,Modifiers{ctrl:true,..Default::default()},false)).is_none());
+        assert!(shortcut(&key(Key::S,Modifiers{ctrl:true,alt:true,shift:true,..Default::default()},false)).is_none());
+        assert!(shortcut(&key(Key::Backtick,Modifiers{alt:true,..Default::default()},false)).is_none());
     }
 
     #[test]

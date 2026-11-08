@@ -104,6 +104,9 @@ pub enum ClientMsg {
     /// Switch the running stream to another display (an id from `stream.displays`).
     #[serde(rename = "stream.display")]
     StreamDisplay { id: String },
+    /// Resize the running stream (0×0 = the display's native size), without restarting it.
+    #[serde(rename = "stream.size")]
+    StreamSize { w: u32, h: u32 },
     #[serde(rename = "stream.stop")]
     StreamStop,
     #[serde(rename = "stream.cand")]
@@ -189,6 +192,7 @@ impl ClientMsg {
             ClientMsg::MousePos { .. } => "mouse.pos",
             ClientMsg::StreamStart { .. } => "stream.start",
             ClientMsg::StreamDisplay { .. } => "stream.display",
+            ClientMsg::StreamSize { .. } => "stream.size",
             ClientMsg::StreamStop => "stream.stop",
             ClientMsg::StreamCand { .. } => "stream.cand",
             ClientMsg::Unlock { .. } => "unlock",
@@ -701,6 +705,7 @@ mod tests {
             serde_json::json!({"t":"remote","url":"wss://w","dev":"d","ticket":"t"})
         );
         assert_eq!(c(r#"{"t":"stream.stop"}"#), ClientMsg::StreamStop);
+        assert_eq!(c(r#"{"t":"stream.size","w":1280,"h":720}"#), ClientMsg::StreamSize { w: 1280, h: 720 });
         assert_eq!(
             c(r#"{"t":"stream.display","id":"\\\\.\\DISPLAY2"}"#),
             ClientMsg::StreamDisplay {

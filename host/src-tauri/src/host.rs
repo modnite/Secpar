@@ -224,6 +224,12 @@ impl Session for HostSession {
                 }
                 None
             }
+            ClientMsg::StreamSize { w, h } => {
+                if let Some(s) = &self.stream {
+                    s.resize(w, h);
+                }
+                None
+            }
             ClientMsg::StreamCand { c } => {
                 if let (Some(s), Ok(a)) = (&self.stream, c.parse::<std::net::SocketAddr>()) {
                     crate::log::line(&format!("stream: phone candidate {a}"));

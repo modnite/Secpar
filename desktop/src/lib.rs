@@ -153,6 +153,7 @@ struct App {
     stream_menu_open: bool,
     menu_page: u8,
     show_stream_stats: bool,
+    menu_button_hidden: bool,
     stream_menu_bounds: Option<egui::Rect>,
     stream_menu_button_bounds: Option<egui::Rect>,
     brand_scale: f32,
@@ -239,6 +240,7 @@ impl App {
             stream_menu_open: false,
             menu_page: 0,
             show_stream_stats: false,
+            menu_button_hidden: false,
             stream_menu_bounds: None,
             stream_menu_button_bounds: None,
             brand_scale,
@@ -621,9 +623,22 @@ impl eframe::App for App {
             self.shortcut_key = None;
             return;
         }
-        if raw.events.iter().any(input::fullscreen_shortcut) {
-            self.shortcut_key = Some(Key::F);
-            self.set_fullscreen(ctx, !self.fullscreen);
+        if let Some((shortcut, key)) = raw.events.iter().find_map(input::shortcut) {
+            self.shortcut_key = Some(key);
+            match shortcut {
+                input::Shortcut::Fullscreen => self.set_fullscreen(ctx, !self.fullscreen),
+                input::Shortcut::Disconnect => {
+                    if self.command.is_some() {
+                        self.capture(ctx, false);
+                        self.send(Command::Stop);
+                        self.stream_menu_open = false;
+                    }
+                }
+                input::Shortcut::MenuButton => {
+                    self.menu_button_hidden = !self.menu_button_hidden;
+                    self.stream_menu_open = false;
+                }
+            }
         }
         if let Some(key) = self.shortcut_key {
             let released = raw.events.iter().any(|e| matches!(e,UiEvent::Key{key:k,pressed:false,..} if *k==key));

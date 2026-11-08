@@ -23,6 +23,8 @@ pub enum Command {
     Stop,
     Keyframe,
     Display(String),
+    /// Resize the running stream (0×0 = the host's native size).
+    Size(u32,u32),
     Clipboard(String),
     ClipboardSharing(bool),
 }
@@ -308,6 +310,7 @@ pub async fn run(
             command=commands.recv()=>match command{
                 None|Some(Command::Stop)=>break Ok(()),
                 Some(Command::Display(id))=>control::send(&mut conn.socket,json!({"t":"stream.display","id":id})).await?,
+                Some(Command::Size(w,h))=>control::send(&mut conn.socket,json!({"t":"stream.size","w":w,"h":h})).await?,
                 Some(Command::Keyframe)=>if let Some(r)=receiver.as_mut(){emit(r,&peer,Type::Idr,&[])?;},
                 Some(Command::Clipboard(text))=>if clipboard_enabled && text.len()<=1_000_000 {
                     control::send(&mut conn.socket,json!({"t":"clip","mime":"text/plain","data":text})).await?;

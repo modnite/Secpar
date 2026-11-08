@@ -22,32 +22,39 @@ fn row(ui:&mut egui::Ui,kind:Icon,label:&str,value:&str,arrow:bool,checked:bool,
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+const RESOLUTIONS:[(u32,u32);6]=[(0,0),(3840,2160),(2560,1440),(1920,1080),(1280,720),(854,480)];
+
+fn resolution_label(w:u32,h:u32)->String {
+    if w==0 {"Host native".into()} else {format!("{w} × {h}")}
+}
+
 impl App {
     pub(super) fn stream_menu(&mut self,ctx:&egui::Context) {
-        let button=egui::Area::new(egui::Id::new("stream-menu-button")).order(egui::Order::Foreground)
+        let button=(!self.menu_button_hidden).then(||egui::Area::new(egui::Id::new("stream-menu-button")).order(egui::Order::Foreground)
             .fixed_pos(egui::pos2(12.,12.)).show(ctx,|ui|{
                 ui.spacing_mut().button_padding=egui::vec2(8.,8.);
                 if ui.add_sized([40.,40.],egui::Button::image(egui::Image::new((self.mark.id(),egui::vec2(24.,24.))))
-                    .fill(Color32::from_rgba_unmultiplied(25,27,29,175)).stroke(Stroke::NONE).corner_radius(6))
+                    .fill(Color32::from_rgba_unmultiplied(25,27,29,135)).stroke(Stroke::NONE).corner_radius(6))
                     .on_hover_text("Stream menu").clicked(){self.stream_menu_open=!self.stream_menu_open;self.menu_page=0;}
-            });
-        self.stream_menu_button_bounds=Some(button.response.rect);
+            }));
+        // hidden (Ctrl+Alt+S): no button, and nothing on screen counts as hovering it
+        self.stream_menu_button_bounds=Some(button.map_or(Rect::NOTHING,|b|b.response.rect));
+        if self.show_stream_stats && self.texture.is_some() {
+            egui::Area::new(egui::Id::new("stream-stats")).order(egui::Order::Tooltip).interactable(false)
+                .anchor(egui::Align2::RIGHT_TOP,egui::vec2(-12.,12.)).show(ctx,|ui|{
+                    egui::Frame::new().fill(Color32::from_rgba_unmultiplied(15,17,19,200)).corner_radius(4).inner_margin(9).show(ui,|ui|{
+                        ui.set_max_width((ctx.content_rect().width()-90.).clamp(140.,430.));
+                        ui.small(format!("{} × {} · {} fps · {}",self.dimensions[0],self.dimensions[1],self.stream_fps,self.status));
+                        if let Some((rtt,mbps,fps))=self.stream_stats {
+                            let latency=rtt.map(|n|format!("RTT {n} ms · ")).unwrap_or_default();
+                            ui.small(format!("{latency}{mbps:.1} Mbps · {fps:.1} received fps"));
+                        }
+                        if let Some(decoder)=&self.client.active_decoder {ui.small(decoder);}
+                    });
+                });
+        }
         if !self.stream_menu_open {
             self.stream_menu_bounds=None;
-            if self.show_stream_stats && self.texture.is_some() {
-                egui::Area::new(egui::Id::new("stream-stats")).order(egui::Order::Tooltip).interactable(false)
-                    .anchor(egui::Align2::RIGHT_TOP,egui::vec2(-12.,12.)).show(ctx,|ui|{
-                        egui::Frame::new().fill(Color32::from_rgba_unmultiplied(15,17,19,200)).corner_radius(4).inner_margin(9).show(ui,|ui|{
-                            ui.set_max_width((ctx.content_rect().width()-90.).clamp(140.,430.));
-                            ui.small(format!("{} × {} · {} fps · {}",self.dimensions[0],self.dimensions[1],self.stream_fps,self.status));
-                            if let Some((rtt,mbps,fps))=self.stream_stats {
-                                let latency=rtt.map(|n|format!("RTT {n} ms · ")).unwrap_or_default();
-                                ui.small(format!("{latency}{mbps:.1} Mbps · {fps:.1} received fps"));
-                            }
-                            if let Some(decoder)=&self.client.active_decoder {ui.small(decoder);}
-                        });
-                    });
-            }
             return;
         }
         let panel=egui::Area::new(egui::Id::new("stream-menu-panel")).order(egui::Order::Foreground)
@@ -55,8 +62,9 @@ impl App {
                 egui::Frame::new().fill(Color32::from_rgba_unmultiplied(25,27,29,246)).corner_radius(5).inner_margin(6).show(ui,|ui|{
                     ui.set_width(250.);ui.spacing_mut().item_spacing.y=0.;
                     if self.menu_page==0 {
-                        if row(ui,if self.fullscreen {Icon::Windowed}else{Icon::Window},if self.fullscreen {"Window"}else{"Fullscreen"},"Alt+F",false,false,false).clicked(){self.set_fullscreen(ctx,!self.fullscreen);}
+                        if row(ui,if self.fullscreen {Icon::Windowed}else{Icon::Window},if self.fullscreen {"Window"}else{"Fullscreen"},"Ctrl+Shift+W",false,false,false).clicked(){self.set_fullscreen(ctx,!self.fullscreen);}
                         if row(ui,Icon::Decoder,"Decoder","",true,false,false).clicked(){self.menu_page=1;}
+                        if row(ui,Icon::Display,"Resolution",&resolution_label(self.options.width,self.options.height),true,false,false).clicked(){self.menu_page=4;}
                         if self.displays.len()>1 && row(ui,Icon::Display,"Switch display","",true,false,false).clicked(){self.menu_page=2;}
                         if row(ui,Icon::Clipboard,"Share clipboard","",false,self.client.clipboard,false).clicked(){
                             self.client.clipboard=!self.client.clipboard;self.client.save();self.options.clipboard=self.client.clipboard;
@@ -66,11 +74,11 @@ impl App {
                         if row(ui,Icon::Audio,"Audio","",true,false,false).clicked(){self.menu_page=3;}
                         if row(ui,Icon::Help,"Help","",false,false,false).clicked(){let _=open::that("https://secpar.win/help/#stream-menu");}
                         ui.add_space(5.);ui.separator();ui.add_space(5.);
-                        if row(ui,Icon::Exit,"Disconnect","",false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
+                        if row(ui,Icon::Exit,"Disconnect","Ctrl+Alt+`",false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
                         ui.add_space(5.);ui.horizontal(|ui|{ui.add_space(10.);ui.label(egui::RichText::new(concat!("Secpar ",env!("CARGO_PKG_VERSION"))).size(10.).color(MUTED));});
                     } else {
                         let page=self.menu_page;
-                        let title=match page {1=>"Decoder",2=>"Displays",_=>"Audio"};
+                        let title=match page {1=>"Decoder",2=>"Displays",4=>"Resolution",_=>"Audio"};
                         if row(ui,Icon::Back,title,"",false,false,false).clicked(){self.menu_page=0;}
                         ui.separator();
                         if page==1 {
@@ -82,6 +90,14 @@ impl App {
                                 }
                             }
                             if let Some(active)=&self.client.active_decoder {ui.add_space(8.);ui.label(egui::RichText::new(active).size(11.).color(MUTED));}
+                        } else if page==4 {
+                            for (w,h) in RESOLUTIONS {
+                                let current=self.options.width==w && self.options.height==h;
+                                if row(ui,Icon::Display,&resolution_label(w,h),"",false,current,false).clicked(){
+                                    if !current {self.options.width=w;self.options.height=h;self.send(Command::Size(w,h));}
+                                    self.menu_page=0;
+                                }
+                            }
                         } else if page==2 {
                             let mut selected=None;
                             egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-90.).max(80.)).show(ui,|ui|{
