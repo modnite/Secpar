@@ -7,15 +7,25 @@ pub mod backend;
 pub mod capture;
 #[cfg(target_os = "linux")]
 mod clipboard;
+#[cfg(target_os = "linux")]
+pub mod files;
 pub mod identity;
 #[cfg(target_os = "linux")]
 pub mod input;
 #[cfg(target_os = "linux")]
+pub mod media;
+#[cfg(target_os = "linux")]
 pub mod portal;
+#[cfg(target_os = "linux")]
+mod push;
 pub mod rendezvous;
 pub mod store;
 #[cfg(target_os = "linux")]
 pub mod stream;
+#[cfg(target_os = "linux")]
+pub mod thumb;
+#[cfg(target_os = "linux")]
+pub mod uinput;
 
 #[cfg(target_os = "linux")]
 pub fn now_us() -> u64 {

@@ -1,12 +1,18 @@
 //! Local application façade plus authenticated owner sessions.
 use crate::{
     identity::Identity,
+    media::Media,
     portal::Portal,
     store::{Config, Store},
-    stream::{self, Options, Stream},
+    stream::{self, Options, SharedPads, Stream},
+    thumb::{self, Thumbs},
+    uinput,
 };
 use secpar_host_core::{
     agent::{Agent, AgentHandle, BoxFut, Handlers, Outbox, Session},
+    files::{self, Incoming, Outgoing},
+    media::Cmd,
+    pad::{self, PadState, Pads},
     proto::{ClientMsg, PcInfo, ServerMsg},
 };
 use serde_json::{json, Value};
@@ -48,6 +54,12 @@ struct Backend {
     agent: Mutex<Option<AgentHandle>>,
     active: Arc<secpar_host_core::limits::StreamSlots>,
     account: Result<Arc<secpar_host_core::account::Account>, String>,
+    /// Files this PC offered to phones, by transfer id, until accepted or rejected.
+    outgoing: Outgoing,
+    /// Controllers kept for a few seconds after a phone drops, so a game does not lose them.
+    lingering: pad::Lingering,
+    media: Arc<Media>,
+    thumbs: Arc<Thumbs<Outbox>>,
 }
 impl Backend {
     async fn start(directory: PathBuf) -> Result<Arc<Self>, String> {
@@ -58,14 +70,7 @@ impl Backend {
         // An account failure must not interrupt existing manually paired devices.
         let account = crate::account::open(&directory, &identity.fingerprint());
         if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
-        let host = Arc::new(Self {
-            store: Arc::new(Mutex::new(store)),
-            identity,
-            name: machine_name(),
-            agent: Mutex::new(None),
-            active: Arc::default(),
-            account,
-        });
+        let host = Self::new(store, identity, account);
         let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),"0.0.0.0:48999".parse().unwrap(),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
         if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
         *host.agent.lock().unwrap() = Some(handle);
@@ -88,6 +93,23 @@ impl Backend {
             }
         });
         Ok(host)
+    }
+    fn new(store: Store, identity: Identity, account: Result<Arc<secpar_host_core::account::Account>, String>) -> Arc<Self> {
+        let store = Arc::new(Mutex::new(store));
+        let active: Arc<secpar_host_core::limits::StreamSlots> = Arc::default();
+        let busy = active.clone();
+        Arc::new(Self {
+            thumbs: Arc::new(Thumbs::new(Arc::new(thumb::PortalSource { store: store.clone() }), move || busy.count() > 0)),
+            store,
+            identity,
+            name: machine_name(),
+            agent: Mutex::new(None),
+            active,
+            account,
+            outgoing: Outgoing::default(),
+            lingering: Default::default(),
+            media: Arc::new(Media::system()),
+        })
     }
     fn sync_account_owner(&self, owner: Option<String>) {
         let revoked = self.store.lock().unwrap().set_account_owner(owner);
@@ -124,11 +146,15 @@ impl Backend {
                     json!({"name":self.name,"devices":store.devices().iter().map(|d|json!({"id":d.id,"name":d.name,"connected":connected.contains(&d.id)})).collect::<Vec<_>>(),"locked":false,"streaming":(self.active.count() > 0)}),
                 )
             }
-            "get_config" => Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[]})),
+            // `displays` stays empty: the portal picks the monitor, so there is nothing to switch here.
+            "get_config" => {
+                let pad = uinput::status();
+                Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[],"pad":{"ok":pad.ok,"text":pad.text}}))
+            }
             "set_config" => {
                 let config: Config = serde_json::from_value(args["config"].clone())
                     .map_err(|_| "Invalid hosting settings")?;
-                self.store.lock().unwrap().set_config(config).map_err(|_|"Remote hosting and file transfers are not enabled on Linux yet")?;
+                self.store.lock().unwrap().set_config(config).map_err(|_|"Remote hosting is not enabled on Linux yet")?;
                 Ok(Value::Null)
             }
             "new_qr" => {
@@ -187,11 +213,41 @@ impl Handlers for Backend {
         Box::pin(async move { pc })
     }
     fn caps(&self) -> Vec<String> {
-        vec!["stream".into(), "input".into(), "clip".into()]
+        let mut caps: Vec<String> = ["stream", "input", "clip", "media", "files", "fsbrowse"].map(String::from).to_vec();
+        if thumb::available() {
+            caps.push("thumb".into());
+        }
+        // Checked on every connection, so fixing the permission needs no restart.
+        if uinput::available() {
+            caps.push("pad".into());
+        }
+        caps
     }
-    fn session(&self, _device: &str, out: Outbox) -> Box<dyn Session> {
+    fn session(&self, device: &str, out: Outbox) -> Box<dyn Session> {
         let (cancel, _) = watch::channel(false);
+        let pads = if uinput::available() {
+            let rumble = out.clone();
+            Some(
+                Pads::new(
+                    Arc::new(uinput::UinputBus),
+                    Box::new(move |id, lo, hi| {
+                        rumble.send(ServerMsg::Rumble { id, lo, hi });
+                    }),
+                )
+                .for_device(device, self.lingering.clone()),
+            )
+        } else {
+            None
+        };
+        let incoming = crate::files::incoming(crate::files::files_dir(&self.store.lock().unwrap().config().files_dir));
         Box::new(OwnerSession {
+            pads: Arc::new(Mutex::new(pads)),
+            incoming,
+            outgoing: self.outgoing.clone(),
+            media: self.media.clone(),
+            media_task: None,
+            thumbs: self.thumbs.clone(),
+            thumb: None,
             store: self.store.clone(),
             active: self.active.clone(),
             state: Arc::new(Mutex::new(State::default())),
@@ -212,6 +268,14 @@ struct State {
     generation: u64,
 }
 struct OwnerSession {
+    /// None inside when /dev/uinput is not writable.
+    pads: SharedPads,
+    incoming: Incoming,
+    outgoing: Outgoing,
+    media: Arc<Media>,
+    media_task: Option<tokio::task::JoinHandle<()>>,
+    thumbs: Arc<Thumbs<Outbox>>,
+    thumb: Option<thumb::Subscription<Outbox>>,
     clipboard: Option<crate::clipboard::Sharing>,
     store: Arc<Mutex<Store>>,
     active: Arc<secpar_host_core::limits::StreamSlots>,
@@ -251,6 +315,7 @@ impl OwnerSession {
         let out = self.out.clone();
         let store = self.store.clone();
         let mut cancel = self.cancel.subscribe();
+        let thumbs = self.thumbs.clone();
         let generation = {
             let mut s = state.lock().unwrap();
             s.generation += 1;
@@ -258,6 +323,8 @@ impl OwnerSession {
             s.generation
         };
         tokio::spawn(async move {
+            // The preview holds its own screen-sharing session. Close it so the stream has the screen.
+            thumbs.release().await;
             let token = store.lock().unwrap().portal_token();
             let portal =
                 tokio::select! {r=Portal::open(token.as_deref())=>r,_=cancel.changed()=>return};
@@ -292,8 +359,98 @@ impl OwnerSession {
     }
 }
 impl Session for OwnerSession {
+    fn on_binary(&mut self, b: &[u8]) -> Option<ServerMsg> {
+        self.incoming.chunk(b)
+    }
     fn on_msg(&mut self, msg: ClientMsg) -> Option<ServerMsg> {
         match msg {
+            ClientMsg::MediaSub { on } => {
+                if let Some(task) = self.media_task.take() {
+                    task.abort();
+                }
+                if on {
+                    self.media_task = Some(crate::media::subscribe(self.media.clone(), self.out.clone()));
+                }
+                None
+            }
+            ClientMsg::MediaCmd { c, v } => match Cmd::parse(&c, v) {
+                Ok(cmd) => {
+                    let media = self.media.clone();
+                    tokio::spawn(async move { media.run(cmd).await });
+                    None
+                }
+                Err(code) => Some(ServerMsg::error(code, "unknown media command", Some("media.cmd"))),
+            },
+            ClientMsg::ThumbSub { on } => {
+                self.thumb = on.then(|| self.thumbs.subscribe(self.out.clone()));
+                None
+            }
+            ClientMsg::Pad { id, btn, lt, rt, lx, ly, rx, ry } => {
+                let mut pads = self.pads.lock().unwrap();
+                let Some(p) = pads.as_mut() else {
+                    return Some(ServerMsg::error("unsupported", &uinput::status().text, Some("pad")));
+                };
+                p.pad(id, &PadState { btn, lt, rt, lx, ly, rx, ry }).err().map(|code| ServerMsg::error(code, "gamepad error", Some("pad")))
+            }
+            ClientMsg::PadOff { id } => {
+                if let Some(p) = self.pads.lock().unwrap().as_mut() {
+                    p.off(id);
+                }
+                None
+            }
+            ClientMsg::FileBegin { id, name, size } => Some(if self.store.lock().unwrap().config().allow_files {
+                self.incoming.begin(&id, &name, size)
+            } else {
+                ServerMsg::FileError { id, code: "denied".into() }
+            }),
+            ClientMsg::FileEnd { id, sha256 } => Some(self.incoming.end(&id, &sha256)),
+            ClientMsg::FileAccept { id, offset } => {
+                let Some(path) = self.outgoing.lock().unwrap().remove(&id) else {
+                    return Some(ServerMsg::FileError { id, code: "denied".into() });
+                };
+                let out = self.out.clone();
+                tokio::task::spawn_blocking(move || {
+                    let Some(key) = files::parse_uuid(&id) else { return };
+                    match files::stream(&path, &key, offset, &mut |f| out.send_bin_blocking(f)) {
+                        Ok(sha256) => out.send(ServerMsg::FileEnd { id, sha256 }),
+                        Err(_) => out.send(ServerMsg::FileError { id, code: "denied".into() }),
+                    };
+                });
+                None
+            }
+            ClientMsg::FileReject { id } => {
+                self.outgoing.lock().unwrap().remove(&id);
+                None
+            }
+            ClientMsg::FileCancel { id } => {
+                self.incoming.cancel(&id);
+                self.outgoing.lock().unwrap().remove(&id);
+                None
+            }
+            ClientMsg::FsList { path } => {
+                if !self.store.lock().unwrap().config().allow_files {
+                    return Some(ServerMsg::error("unsupported", "File transfer is off in Hosting settings", Some("fs.list")));
+                }
+                match crate::files::list(&path) {
+                    Ok(entries) => Some(ServerMsg::FsList { path, entries }),
+                    Err(e) => Some(ServerMsg::error("denied", &e.to_string(), Some("fs.list"))),
+                }
+            }
+            ClientMsg::FsGet { path } => {
+                if !self.store.lock().unwrap().config().allow_files {
+                    return Some(ServerMsg::error("unsupported", "File transfer is off in Hosting settings", Some("fs.get")));
+                }
+                let (outgoing, out) = (self.outgoing.clone(), self.out.clone());
+                tokio::task::spawn_blocking(move || match files::offer_tree(&outgoing, std::path::Path::new(&path)) {
+                    Ok(offers) => offers.into_iter().for_each(|m| {
+                        out.send(m);
+                    }),
+                    Err(e) => {
+                        out.send(ServerMsg::error("denied", &e.to_string(), Some("fs.get")));
+                    }
+                });
+                None
+            }
             ClientMsg::ClipSub{on}=>{
                 if !on {self.clipboard=None;return None;}
                 if !self.store.lock().unwrap().config().allow_clip {
@@ -339,6 +496,7 @@ impl Session for OwnerSession {
                         .collect(),
                     audio,
                     relay: self.relay.clone(),
+                    pads: self.pads.clone(),
                 });
                 None
             }
@@ -383,7 +541,185 @@ impl Session for OwnerSession {
 }
 impl Drop for OwnerSession {
     fn drop(&mut self) {
+        if let Some(task) = self.media_task.take() {
+            task.abort();
+        }
+        if let Some(p) = self.pads.lock().unwrap().as_mut() {
+            p.linger(Duration::from_secs(5));
+        }
         let _ = self.cancel.send(true);
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use secpar_host_core::agent::OutboxRx;
+    use secpar_host_core::proto::parse_binary;
+
+    const ID: &str = "0123abcd-0000-4000-8000-00000000beef";
+
+    struct Rig {
+        host: Arc<Backend>,
+        dir: PathBuf,
+        session: Box<dyn Session>,
+        rx: OutboxRx,
+    }
+
+    fn rig(name: &str, allow_files: bool) -> Rig {
+        let dir = std::env::temp_dir().join(format!("secpar-backend-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = dir.join("config");
+        let mut store = Store::open(&config).unwrap();
+        let mut c = store.config();
+        c.allow_files = allow_files;
+        c.files_dir = dir.join("inbox").to_string_lossy().into_owned();
+        store.set_config(c).unwrap();
+        let identity = Identity::open(&config).unwrap();
+        let host = Backend::new(store, identity, Err("offline".into()));
+        let (out, rx) = Outbox::pair();
+        let session = host.session("phone", out);
+        Rig { host, dir, session, rx }
+    }
+
+    fn sha(b: &[u8]) -> String {
+        crate::store::hex(ring::digest::digest(&ring::digest::SHA256, b).as_ref())
+    }
+
+    #[tokio::test]
+    async fn welcome_caps_follow_what_this_machine_can_do() {
+        let r = rig("caps", false);
+        let caps = r.host.caps();
+        for c in ["stream", "input", "clip", "media", "files", "fsbrowse"] {
+            assert!(caps.iter().any(|x| x == c), "{c} in {caps:?}");
+        }
+        assert_eq!(caps.iter().any(|c| c == "pad"), uinput::available(), "pad only with /dev/uinput access");
+        assert_eq!(caps.iter().any(|c| c == "thumb"), thumb::available());
+        let config = r.host.command("get_config", Value::Null).await.unwrap();
+        assert_eq!(config["pad"]["ok"], json!(uinput::available()));
+        assert!(config["pad"]["text"].as_str().unwrap().starts_with("Gamepad"));
+        assert_eq!(config["config"]["allow_files"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn files_are_refused_until_the_setting_is_on() {
+        let mut r = rig("off", false);
+        let denied = ServerMsg::FileError { id: ID.into(), code: "denied".into() };
+        assert_eq!(r.session.on_msg(ClientMsg::FileBegin { id: ID.into(), name: "a.txt".into(), size: 1 }), Some(denied));
+        for m in [ClientMsg::FsList { path: String::new() }, ClientMsg::FsGet { path: "/".into() }] {
+            let of = m.t();
+            assert_eq!(r.session.on_msg(m), Some(ServerMsg::error("unsupported", "File transfer is off in Hosting settings", Some(of))));
+        }
+    }
+
+    #[tokio::test]
+    async fn phone_to_pc_transfer_lands_in_the_configured_folder_with_the_wire_messages() {
+        let mut r = rig("upload", true);
+        let data = b"hello from the phone".to_vec();
+        assert_eq!(
+            r.session.on_msg(ClientMsg::FileBegin { id: ID.into(), name: "Trip/a.txt".into(), size: data.len() as u64 }),
+            Some(ServerMsg::FileReady { id: ID.into(), offset: 0 })
+        );
+        let key = files::parse_uuid(ID).unwrap();
+        assert_eq!(r.session.on_binary(&secpar_host_core::proto::chunk_frame(&key, 0, &data)), None);
+        let Some(ServerMsg::FileDone { path, .. }) = r.session.on_msg(ClientMsg::FileEnd { id: ID.into(), sha256: sha(&data) }) else { panic!("file.done") };
+        assert_eq!(PathBuf::from(&path), r.dir.join("inbox").join("Trip").join("a.txt"));
+        assert_eq!(std::fs::read(path).unwrap(), data);
+        // a wrong hash is rejected and leaves nothing behind
+        r.session.on_msg(ClientMsg::FileBegin { id: ID.into(), name: "b.txt".into(), size: 1 });
+        r.session.on_binary(&secpar_host_core::proto::chunk_frame(&key, 0, b"x"));
+        assert_eq!(
+            r.session.on_msg(ClientMsg::FileEnd { id: ID.into(), sha256: sha(b"y") }),
+            Some(ServerMsg::FileError { id: ID.into(), code: "bad_hash".into() })
+        );
+        assert!(!r.dir.join("inbox").join("b.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn pc_to_phone_browse_offer_accept_and_stream() {
+        let mut r = rig("download", true);
+        let shared = r.dir.join("share");
+        std::fs::create_dir_all(shared.join("sub")).unwrap();
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i % 253) as u8).collect();
+        std::fs::write(shared.join("sub").join("big.bin"), &data).unwrap();
+        std::fs::write(shared.join(".hidden"), b"x").unwrap();
+        let Some(ServerMsg::FsList { entries, .. }) = r.session.on_msg(ClientMsg::FsList { path: shared.to_string_lossy().into() }) else { panic!("fs.list") };
+        assert_eq!(entries.iter().map(|e| (e.name.as_str(), e.dir)).collect::<Vec<_>>(), vec![("sub", true)], "dot-files are hidden");
+        let Some(ServerMsg::FsList { entries: roots, .. }) = r.session.on_msg(ClientMsg::FsList { path: String::new() }) else { panic!("roots") };
+        assert!(roots.iter().any(|e| e.name == "/") && roots.iter().any(|e| e.name == "Home"));
+        assert_eq!(r.session.on_msg(ClientMsg::FsGet { path: shared.to_string_lossy().into() }), None);
+        // a folder download offers every file inside, dot-files too, in directory order
+        let mut offers = vec![];
+        while offers.len() < 2 {
+            match r.rx.msg() {
+                Some(ServerMsg::FileOffer { id, name, size }) => offers.push((id, name, size)),
+                Some(other) => panic!("{other:?}"),
+                None => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+        offers.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(offers.iter().map(|o| (o.1.as_str(), o.2)).collect::<Vec<_>>(), vec![("share/.hidden", 1), ("share/sub/big.bin", data.len() as u64)]);
+        let id = offers[1].0.clone();
+        // accept from offset 1000: chunks continue there and file.end carries the whole-file hash
+        assert_eq!(r.session.on_msg(ClientMsg::FileAccept { id: id.clone(), offset: 1000 }), None);
+        let end = loop {
+            if let Some(m) = r.rx.msg() {
+                break m;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(end, ServerMsg::FileEnd { id: id.clone(), sha256: sha(&data) });
+        let mut got = vec![];
+        while let Some(frame) = r.rx.bin() {
+            let Some(secpar_host_core::proto::Binary::FileChunk { offset, data: chunk, .. }) = parse_binary(&frame) else { panic!() };
+            assert_eq!(offset, 1000 + got.len() as u64);
+            got.extend(chunk);
+        }
+        assert_eq!(got, &data[1000..]);
+        // an unknown or already used offer is refused
+        assert_eq!(r.session.on_msg(ClientMsg::FileAccept { id: id.clone(), offset: 0 }), Some(ServerMsg::FileError { id, code: "denied".into() }));
+    }
+
+    #[tokio::test]
+    async fn media_subscription_and_commands() {
+        let mut r = rig("media", false);
+        assert_eq!(r.session.on_msg(ClientMsg::MediaSub { on: true }), None);
+        let first = loop {
+            if let Some(m) = r.rx.msg() {
+                break m;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert!(matches!(first, ServerMsg::Media { .. }), "{first:?}");
+        for c in ["play_pause", "next", "prev", "vol_up", "vol_down", "mute"] {
+            assert_eq!(r.session.on_msg(ClientMsg::MediaCmd { c: c.into(), v: None }), None, "{c}");
+        }
+        assert_eq!(r.session.on_msg(ClientMsg::MediaCmd { c: "vol_set".into(), v: None }), Some(ServerMsg::error("bad_request", "unknown media command", Some("media.cmd"))));
+        assert_eq!(r.session.on_msg(ClientMsg::MediaCmd { c: "rewind".into(), v: None }), Some(ServerMsg::error("bad_request", "unknown media command", Some("media.cmd"))));
+        assert_eq!(r.session.on_msg(ClientMsg::MediaSub { on: false }), None);
+    }
+
+    #[tokio::test]
+    async fn preview_without_a_saved_screen_permission_stays_silent() {
+        let mut r = rig("thumb", false);
+        assert_eq!(r.session.on_msg(ClientMsg::ThumbSub { on: true }), None);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(r.rx.bin().is_none(), "no stored portal token: nothing sent, nothing asked");
+        assert_eq!(r.session.on_msg(ClientMsg::ThumbSub { on: false }), None);
+    }
+
+    #[tokio::test]
+    async fn gamepad_messages_are_answered_by_what_the_machine_allows() {
+        let mut r = rig("pad", false);
+        let reply = r.session.on_msg(ClientMsg::Pad { id: 0, btn: 0x1000, lt: 0, rt: 0, lx: 0, ly: 0, rx: 0, ry: 0 });
+        if uinput::available() {
+            assert_eq!(reply, None);
+            assert!(matches!(r.session.on_msg(ClientMsg::Pad { id: 4, btn: 0, lt: 0, rt: 0, lx: 0, ly: 0, rx: 0, ry: 0 }), Some(ServerMsg::Error { code, .. }) if code == "bad_request"));
+        } else {
+            assert!(matches!(reply, Some(ServerMsg::Error { code, msg, of: Some(of) }) if code == "unsupported" && msg.starts_with("Gamepad unavailable") && of == "pad"));
+        }
+        assert_eq!(r.session.on_msg(ClientMsg::PadOff { id: 0 }), None);
+        assert!(matches!(r.session.on_msg(ClientMsg::Power { a: "lock".into() }), Some(ServerMsg::Error { code, .. }) if code == "unsupported"), "unported actions still say so");
     }
 }
