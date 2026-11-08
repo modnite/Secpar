@@ -7,8 +7,7 @@ object FriendsModel {
     const val SIGN_IN_PROMPT = "Sign in to add friends."
     const val CREATE_ACCOUNT = "Create an account"
     const val CREATE_ACCOUNT_URL = "https://accounts.secpar.win/auth/register"
-    const val COPY_CODE = "Copy my friend code"
-    const val CODE_HINT = "Paste a friend code"
+    const val USERNAME_HINT = "Add by username"
     const val ADD = "Add"
     const val EMPTY = "No friends yet"
     const val BLOCKED_HEADING = "Blocked people"
@@ -38,6 +37,9 @@ object FriendsModel {
     /** The letter in the avatar. */
     fun initial(handle: String): String = handle.firstOrNull { !it.isWhitespace() }?.uppercase() ?: "?"
 
+    /** Tells people which name to give their friends. */
+    fun youAre(handle: String) = "You are @$handle"
+
     /** Add stays off until there is something to add. */
-    fun canAdd(code: String, working: Boolean) = !working && code.isNotBlank()
+    fun canAdd(username: String, working: Boolean) = !working && username.isNotBlank()
 }

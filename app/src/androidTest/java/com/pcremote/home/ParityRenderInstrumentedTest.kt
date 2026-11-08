@@ -64,7 +64,7 @@ class ParityRenderInstrumentedTest {
         Friend(fr + "000000000011", "river", "accepted", owner),
         Friend(fr + "000000000012", "sam", "pending", fr + "000000000012"),
         Friend(fr + "000000000013", "tess", "pending", owner)),
-        blocked = listOf(AccountUser(fr + "000000000021", "noisy-neighbour")), note = AccountText.FRIEND_CODE_COPIED)
+        blocked = listOf(AccountUser(fr + "000000000021", "noisy-neighbour")), note = AccountText.REQUEST_SENT)
 
     private val noop = HomeActions({ _, _ -> }, {}, {}, {}, { _, _ -> }, {})
     private fun home(tab: HomeTab, cards: List<PcCardUi>, acct: AccountUi, update: Boolean = false): @Composable () -> Unit = {

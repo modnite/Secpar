@@ -17,10 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,8 +47,7 @@ fun SignInPanel(approval: DeviceSignIn, acts: AccountActions, modifier: Modifier
 fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Modifier) {
     val c = LocalMidnight.current
     val ctx = LocalContext.current
-    val clipboard = LocalClipboardManager.current
-    var code by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
     val user = state.user
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -74,16 +71,15 @@ fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Mod
             }
             return@Column
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GhostButton(FriendsModel.COPY_CODE, {
-                clipboard.setText(AnnotatedString(user.id)); acts.note(AccountText.FRIEND_CODE_COPIED)
-            })
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(FriendsModel.youAre(user.handle), color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             GhostButton("Refresh", acts.refresh, compact = true, enabled = !state.working)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            FlatField(code, { code = it }, FriendsModel.CODE_HINT, Modifier.weight(1f))
-            PrimaryButton(FriendsModel.ADD, { acts.friend(FriendAction.INVITE, code); code = "" },
-                enabled = FriendsModel.canAdd(code, state.working), modifier = Modifier.width(72.dp), compact = true)
+            FlatField(username, { username = it }, FriendsModel.USERNAME_HINT, Modifier.weight(1f))
+            PrimaryButton(FriendsModel.ADD, { acts.friend(FriendAction.INVITE, username); username = "" },
+                enabled = FriendsModel.canAdd(username, state.working), modifier = Modifier.width(72.dp), compact = true)
         }
         if (state.friends.isEmpty()) Text(FriendsModel.EMPTY, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
         state.friends.forEachIndexed { index, friend ->

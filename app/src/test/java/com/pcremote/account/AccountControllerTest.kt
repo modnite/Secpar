@@ -226,32 +226,46 @@ class AccountControllerTest {
         assertEquals("noisy", c.state.value.blocked.single().handle)
     }
 
-    @Test fun `adding a friend sends the cleaned code and shows the sent note`() = runTest {
+    @Test fun `adding a friend sends the cleaned username and shows the sent note`() = runTest {
         val fake = Fake()
         val c = controller(store(), { fake })
         login(c)
-        c.friendAction(FriendAction.INVITE, "  " + friendCode.uppercase() + " "); runCurrent()
-        assertEquals(listOf(FriendAction.INVITE to friendCode), fake.actions)
+        c.friendAction(FriendAction.INVITE, "  @River_Two \n"); runCurrent()
+        assertEquals(listOf(FriendAction.INVITE to "river_two"), fake.actions)
         assertEquals("Friend request sent", c.state.value.note)
         assertEquals(1, c.state.value.friends.size)
         assertFalse(c.state.value.working)
     }
 
-    @Test fun `an incomplete friend code is refused without a request`() = runTest {
+    @Test fun `an invalid username is refused without a request`() = runTest {
         val fake = Fake()
         val c = controller(store(), { fake })
         login(c)
-        c.friendAction(FriendAction.INVITE, "not-a-code"); runCurrent()
+        for (bad in listOf("", "  ", "@", "ab", "not a name", "../me", "river-x", friendCode)) {
+            c.friendAction(FriendAction.INVITE, bad); runCurrent()
+            assertEquals("Enter a username of 3 to 30 letters, numbers or underscores.", c.state.value.error)
+            c.dismissError()
+        }
         assertTrue(fake.actions.isEmpty())
-        assertEquals("Paste your friend's complete friend code.", c.state.value.error)
+    }
+
+    @Test fun `accept and block still take account ids`() = runTest {
+        val fake = Fake()
+        val c = controller(store(), { fake })
+        login(c)
+        c.friendAction(FriendAction.ACCEPT, friendCode); runCurrent()
+        assertEquals(listOf(FriendAction.ACCEPT to friendCode), fake.actions)
+        c.friendAction(FriendAction.BLOCK, "river"); runCurrent()
+        assertEquals(1, fake.actions.size)
+        assertNotNull(c.state.value.error)
     }
 
     @Test fun `a friend error shows the shared wording and can be dismissed`() = runTest {
-        val fake = Fake().apply { actionFails = AccountError.OWN_CODE }
+        val fake = Fake().apply { actionFails = AccountError.FRIEND_UNAVAILABLE }
         val c = controller(store(), { fake })
         login(c)
-        c.friendAction(FriendAction.INVITE, friendCode); runCurrent()
-        assertEquals("That is your own friend code.", c.state.value.error)
+        c.friendAction(FriendAction.INVITE, "river"); runCurrent()
+        assertEquals("No one with that username can be added.", c.state.value.error)
         assertFalse(c.state.value.working)
         c.dismissError()
         assertNull(c.state.value.error)
