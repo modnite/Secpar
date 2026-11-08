@@ -12,6 +12,7 @@ use secpar_host_core::{
     proto::{ClientMsg, ServerMsg},
     Display,
 };
+use secpar_network::{link::Link, reach};
 use secpar_stream::{
     frame::{packetize, Codec, FrameHeader},
     Crypt, Dir, Header, Type,
@@ -45,14 +46,22 @@ struct Shared {
     seq: AtomicU32,
     stop: AtomicBool,
     idr: AtomicBool,
+    /// Phone candidates, punching window and our TURN allocation (shared with every host).
+    link: Arc<Link>,
 }
+/// How long a new candidate keeps the punching going (docs/remote-protocol.md).
+const PUNCH_FOR: Duration = Duration::from_secs(10);
+/// Credentials for a TURN relay of our own (`/v1/turn?role=host`); None when this host has no relay access.
+pub type RelayProvider = Arc<dyn Fn() -> Option<secpar_host_core::relay::TurnServer> + Send + Sync>;
 impl Shared {
     fn send(&self, mut h: Header, plain: &[u8]) {
-        if let Some(peer) = *self.peer.lock().unwrap() {
+        let peer = *self.peer.lock().unwrap();
+        if let Some(peer) = peer {
             h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
-            let _ = self
-                .socket
-                .send_to(&self.crypt.seal(Dir::HostToPhone, &h, plain), peer);
+            let pkt = self.crypt.seal(Dir::HostToPhone, &h, plain);
+            // through a relay at most RELAY_PPS packets a second, like every host
+            self.link.throttle(&peer);
+            self.link.transmit(&self.socket, peer, &pkt);
         }
     }
     fn probe_to(&self, peer: SocketAddr) {
@@ -60,15 +69,20 @@ impl Shared {
         h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
         let mut p = [0; 16];
         p[..8].copy_from_slice(&now_us().to_be_bytes());
-        let _ = self
-            .socket
-            .send_to(&self.crypt.seal(Dir::HostToPhone, &h, &p), peer);
+        let pkt = self.crypt.seal(Dir::HostToPhone, &h, &p);
+        self.link.transmit(&self.socket, peer, &pkt);
+        self.link.transmit_punch_copy(&self.socket, peer, &pkt);
     }
 }
 pub struct Stream {
     shared: Arc<Shared>,
     input: mpsc::Sender<ClientMsg>,
     portal: Arc<Portal>,
+    out: Outbox,
+    relay: Option<RelayProvider>,
+    mapped: Option<secpar_network::upnp::Mapped>,
+    /// A size the client asked for (`stream.size`), picked up by the video thread.
+    resize: Arc<Mutex<Option<(u32, u32)>>>,
 }
 pub struct Options {
     pub width: u32,
@@ -78,6 +92,8 @@ pub struct Options {
     pub codecs: Vec<String>,
     pub candidates: Vec<SocketAddr>,
     pub audio: bool,
+    /// Where to get TURN credentials for a relay of our own; None until this host has relay access.
+    pub relay: Option<RelayProvider>,
 }
 pub fn local_addresses() -> Vec<String> {
     get_if_addrs::get_if_addrs()
@@ -136,7 +152,21 @@ impl Stream {
             seq: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             idr: AtomicBool::new(true),
+            link: Arc::new(Link::new()),
         });
+        // Before the receive thread starts: STUN reads its answer from this socket. The router
+        // mapping and the reflexive address are found at once.
+        let gathered = {
+            let s = shared.clone();
+            tokio::task::spawn_blocking(move || reach::gather(&s.socket, port, true))
+                .await
+                .unwrap_or_default()
+        };
+        shared
+            .socket
+            .set_read_timeout(Some(Duration::from_millis(25)))
+            .map_err(|_| "Could not configure streaming socket")?;
+        shared.link.punch(options.candidates.iter().copied(), PUNCH_FOR);
         let (input, input_rx) = mpsc::channel::<ClientMsg>(128);
         let input_portal = portal.clone();
         let input_shared = shared.clone();
@@ -162,7 +192,6 @@ impl Stream {
         });
         let rx_shared = shared.clone();
         let rx_input = input.clone();
-        let cands = options.candidates;
         std::thread::spawn(move || {
             let mut buf = [0u8; 2048];
             let mut seen = None::<u64>;
@@ -170,26 +199,35 @@ impl Stream {
             let begun = Instant::now();
             let mut last_punch = Instant::now() - Duration::from_secs(1);
             while !rx_shared.stop.load(Ordering::Relaxed) {
-                if rx_shared.peer.lock().unwrap().is_none()
-                    && begun.elapsed() < Duration::from_secs(10)
-                    && last_punch.elapsed() > Duration::from_millis(100)
-                {
-                    for peer in cands.iter().take(16) {
-                        rx_shared.probe_to(*peer)
+                let known = rx_shared.peer.lock().unwrap().is_some();
+                let punching = rx_shared.link.punching(known);
+                if punching && last_punch.elapsed() > Duration::from_millis(100) {
+                    for peer in rx_shared.link.cands() {
+                        rx_shared.probe_to(peer)
                     }
                     last_punch = Instant::now();
                 }
                 if begun.elapsed() > Duration::from_secs(10)
                     && last_rx.elapsed() > Duration::from_secs(5)
+                    && !punching
                 {
                     break;
                 }
                 let Ok((n, from)) = rx_shared.socket.recv_from(&mut buf) else {
                     continue;
                 };
-                let Some((h, p)) = rx_shared.crypt.open(Dir::PhoneToHost, &buf[..n]) else {
+                // Packets from our TURN server: answers go to the waiting request, relayed data
+                // carries the phone's own address.
+                let Some((from, relayed)) = rx_shared.link.unwrap(from, &buf[..n]) else {
                     continue;
                 };
+                let pkt = relayed.as_deref().unwrap_or(&buf[..n]);
+                let Some((h, p)) = rx_shared.crypt.open(Dir::PhoneToHost, pkt) else {
+                    continue;
+                };
+                if relayed.is_some() {
+                    rx_shared.link.mark_relayed(from);
+                }
                 if h.typ != Type::Probe && *rx_shared.peer.lock().unwrap() != Some(from) {
                     continue;
                 }
@@ -219,6 +257,26 @@ impl Stream {
             }
             rx_shared.stop.store(true, Ordering::Relaxed);
         });
+        // `stream.ready` as sent now and again whenever the size changes mid-stream
+        let ready_template = ServerMsg::StreamReady {
+            codec: codec_name.clone(),
+            w: width,
+            h: height,
+            fps,
+            port,
+            session,
+            key: STANDARD.encode(key),
+            // LAN, router-mapped public, STUN-reflexive: the same order as the Windows host
+            cands: secpar_network::link::host_cands(
+                &local_addresses(),
+                port,
+                gathered.mapped.as_ref().map_or(0, |m| m.port),
+                gathered.mapped.as_ref().and_then(|m| m.public),
+                gathered.reflexive,
+            ),
+        };
+        let resize = Arc::new(Mutex::new(None::<(u32, u32)>));
+        let (video_resize, video_out, video_ready) = (resize.clone(), out.clone(), ready_template.clone());
         let video_shared = shared.clone();
         std::thread::spawn(move || {
             let _guard = guard;
@@ -227,6 +285,13 @@ impl Stream {
                 if video_shared.peer.lock().unwrap().is_none() {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
+                }
+                if let Some(wanted) = video_resize.lock().unwrap().take() {
+                    // the encoder renegotiates on the new size and opens with a keyframe
+                    if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
+                        video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
+                        video_shared.idr.store(true, Ordering::Relaxed);
+                    }
                 }
                 if video_shared.idr.swap(false, Ordering::Relaxed) {
                     capture.request_keyframe();
@@ -284,24 +349,16 @@ impl Stream {
             }],
             current: "portal".into(),
         });
-        let ready = ServerMsg::StreamReady {
-            codec: codec_name,
-            w: width,
-            h: height,
-            fps,
-            port,
-            session,
-            key: STANDARD.encode(key),
-            cands: local_addresses()
-                .into_iter()
-                .map(|ip| format!("{ip}:{port}"))
-                .collect(),
-        };
+        let ready = ready_template;
         Ok((
             Self {
                 shared,
                 input,
                 portal,
+                out,
+                relay: options.relay,
+                mapped: gathered.mapped,
+                resize,
             },
             ready,
         ))
@@ -311,17 +368,43 @@ impl Stream {
             self.shared.stop.store(true, Ordering::Relaxed);
         }
     }
+    /// `stream.size`: resize the running stream (0x0 = the display's own size).
+    pub fn resize(&self, w: u32, h: u32) {
+        *self.resize.lock().unwrap() = Some((w.min(7680), h.min(4320)));
+    }
     pub fn alive(&self) -> bool {
         !self.shared.stop.load(Ordering::Relaxed)
     }
+    /// A phone candidate from `stream.cand`: punch to it (restarting the window) and permit it on
+    /// our relay. When we have no relay yet, get one too so both ends talk relay-to-relay
+    /// (carrier NATs), and tell the phone our relayed address.
     pub fn add_candidate(&self, peer: SocketAddr) {
+        self.shared.link.punch([peer], PUNCH_FOR);
         self.shared.probe_to(peer);
+        self.shared.link.permit_in_background(&self.shared.socket, peer);
+        let Some(relay) = self.relay.clone() else { return };
+        if self.shared.link.turn().is_some() {
+            return;
+        }
+        let (shared, out) = (self.shared.clone(), self.out.clone());
+        std::thread::spawn(move || {
+            let Some(server) = relay() else { return };
+            let weak = Arc::downgrade(&shared);
+            let stopped = move || weak.upgrade().is_none_or(|s| s.stop.load(Ordering::Relaxed));
+            if let Some(relayed) = shared.link.start_turn(&shared.socket, stopped, server.addr, server.user, server.pass, None) {
+                shared.link.punch([], PUNCH_FOR);
+                out.send(ServerMsg::StreamCand { c: relayed.to_string() });
+            }
+        });
     }
 }
 impl Drop for Stream {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
         self.shared.send(header(Type::Bye, 0), &[]);
+        if let Some(m) = self.mapped.take() {
+            std::thread::spawn(move || reach::release(&m));
+        }
         let p = self.portal.clone();
         tokio::spawn(async move {
             let _ = p.close().await;
@@ -492,7 +575,97 @@ mod tests {
         assert!(dedup_inputs(p, &mut last).is_empty());
     }
     fn synthetic_shared()->Arc<Shared> {
-        Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false)})
+        Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false),link:Arc::new(Link::new())})
+    }
+    /// The receive loop's job for a relay: the TURN server's answers go to the link.
+    fn serve_relay_answers(shared: &Arc<Shared>) {
+        let (s, sock) = (shared.clone(), shared.socket.try_clone().unwrap());
+        sock.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 2048];
+            while !s.stop.load(Ordering::Relaxed) {
+                if let Ok((n, from)) = sock.recv_from(&mut buf) {
+                    let _ = s.link.unwrap(from, &buf[..n]);
+                }
+            }
+        });
+    }
+    #[test]
+    fn media_goes_through_the_relay_when_the_phone_came_in_through_it() {
+        use secpar_network::testing::FakeServer;
+        let server = FakeServer::start();
+        let shared = synthetic_shared();
+        serve_relay_answers(&shared);
+        let phone: SocketAddr = "203.0.113.9:4000".parse().unwrap();
+        shared.link.punch([phone], PUNCH_FOR);
+        let stop = shared.clone();
+        let weak = Arc::downgrade(&shared);
+        let relayed = shared.link.start_turn(&shared.socket, move || weak.upgrade().is_none_or(|s| s.stop.load(Ordering::Relaxed)), server.addr, "u".into(), "p".into(), None);
+        assert!(relayed.is_some(), "the relay answered the allocation");
+        assert!(server.log().contains(&"permit 203.0.113.9:4000".to_string()), "the phone's candidate is permitted: {:?}", server.log());
+
+        // the phone's first PROBE arrived as relayed data: replies go back the same way
+        *shared.peer.lock().unwrap() = Some(phone);
+        assert!(shared.link.mark_relayed(phone));
+        shared.send(header(Type::Video, 1), b"video through the relay");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while server.relayed().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let got = server.relayed();
+        assert_eq!(got.len(), 1, "{:?}", server.log());
+        let (h, p) = shared.crypt.open(Dir::HostToPhone, &got[0]).expect("the relay carries the sealed packet unchanged");
+        assert_eq!((h.typ, p.as_slice()), (Type::Video, &b"video through the relay"[..]));
+
+        // the same pacing rule as the Windows host: at most RELAY_PPS packets a second
+        let t0 = Instant::now();
+        for i in 0..300 {
+            shared.send(header(Type::Video, i), &[0u8; 8]);
+        }
+        let took = t0.elapsed();
+        assert!(took >= Duration::from_millis(80), "300 packets at 3000 pps take 100 ms, took {took:?}");
+        stop.stop.store(true, Ordering::Relaxed);
+    }
+    #[test]
+    fn direct_peers_are_not_paced_or_wrapped() {
+        let shared = synthetic_shared();
+        let phone = UdpSocket::bind("127.0.0.1:0").unwrap();
+        phone.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        *shared.peer.lock().unwrap() = Some(phone.local_addr().unwrap());
+        let t0 = Instant::now();
+        for i in 0..300 {
+            shared.send(header(Type::Video, i), &[1u8; 8]);
+        }
+        assert!(t0.elapsed() < Duration::from_millis(60));
+        let mut b = [0u8; 2048];
+        let n = phone.recv(&mut b).unwrap();
+        assert_eq!(shared.crypt.open(Dir::HostToPhone, &b[..n]).unwrap().0.typ, Type::Video, "plain sealed packet to the phone");
+    }
+    #[test]
+    fn stream_cand_punches_through_the_relay_and_restarts_the_window() {
+        use secpar_network::testing::FakeServer;
+        let server = FakeServer::start();
+        let shared = synthetic_shared();
+        serve_relay_answers(&shared);
+        let weak = Arc::downgrade(&shared);
+        shared.link.start_turn(&shared.socket, move || weak.upgrade().is_none_or(|s| s.stop.load(Ordering::Relaxed)), server.addr, "u".into(), "p".into(), None).unwrap();
+        let relayed_phone: SocketAddr = "198.51.100.5:6000".parse().unwrap();
+        shared.link.punch([relayed_phone], Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(!shared.link.punching(false), "window over");
+        // what Stream::add_candidate does
+        shared.link.punch([relayed_phone], PUNCH_FOR);
+        shared.probe_to(relayed_phone);
+        shared.link.permit_in_background(&shared.socket, relayed_phone);
+        assert!(shared.link.punching(false));
+        std::thread::sleep(Duration::from_millis(400));
+        let log = server.log();
+        assert!(log.contains(&"permit 198.51.100.5:6000".to_string()), "{log:?}");
+        let n = server.relayed().len();
+        assert!(n >= 1, "the PROBE also went out through our relay: {log:?}");
+        let probe = server.relayed().into_iter().find_map(|d| shared.crypt.open(Dir::HostToPhone, &d)).expect("a sealed PROBE");
+        assert_eq!(probe.0.typ, Type::Probe);
+        shared.stop.store(true, Ordering::Relaxed);
     }
     #[test]
     fn unavailable_audio_source_preserves_video_transport() {

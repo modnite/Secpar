@@ -66,7 +66,8 @@ impl Backend {
             active: Arc::default(),
             account,
         });
-        let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),"0.0.0.0:48999".parse().unwrap(),Duration::from_secs(60),None).await.map_err(|_|"Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
+        let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),"0.0.0.0:48999".parse().unwrap(),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
+        if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
         *host.agent.lock().unwrap() = Some(handle);
         let weak = Arc::downgrade(&host);
         tokio::spawn(async move {
@@ -94,12 +95,18 @@ impl Backend {
             for device in revoked { agent.revoke(&device); }
         }
     }
+    /// `pc` and a signed Worker address, so a phone outside the LAN can pair (once registered).
+    fn add_relay_bootstrap(&self, link: &mut url::Url) {
+        let params = crate::rendezvous::pairing_params(&self.store.lock().unwrap(), crate::rendezvous::url());
+        if let Some((pc, r)) = params { link.query_pairs_mut().append_pair("pc",&pc).append_pair("r",&r); }
+    }
     fn owner_pair_link(&self, id: &str, owner: &str) -> Result<String,String> {
         let addresses = stream::local_addresses();
         if addresses.is_empty() { return Err("Connect this computer to a network before pairing".into()); }
         let otp = self.store.lock().unwrap().owner_otp(id,owner)?;
         let mut link = url::Url::parse("secpar://pair").unwrap();
         link.query_pairs_mut().append_pair("n",&self.name).append_pair("h",&addresses.join(",")).append_pair("p","48999").append_pair("fp",&self.identity.fingerprint()).append_pair("t",&otp);
+        self.add_relay_bootstrap(&mut link);
         Ok(link.to_string())
     }
     async fn command(&self, command: &str, args: Value) -> Result<Value, String> {
@@ -137,6 +144,8 @@ impl Backend {
                     .append_pair("p", "48999")
                     .append_pair("fp", &self.identity.fingerprint())
                     .append_pair("t", &store.new_otp());
+                drop(store);
+                self.add_relay_bootstrap(&mut link);
                 Ok(json!({"link":link.as_str()}))
             }
             "revoke" => {
@@ -189,6 +198,10 @@ impl Handlers for Backend {
             out,
             cancel,
             clipboard: None,
+            relay: crate::rendezvous::url().map(|base| {
+                let store = self.store.clone();
+                Arc::new(move || crate::rendezvous::turn_server(&store, base)) as stream::RelayProvider
+            }),
         })
     }
 }
@@ -205,6 +218,8 @@ struct OwnerSession {
     state: Arc<Mutex<State>>,
     out: Outbox,
     cancel: watch::Sender<bool>,
+    /// TURN credentials from the rendezvous Worker, when remote access is built in.
+    relay: Option<stream::RelayProvider>,
 }
 impl OwnerSession {
     fn stop(&self) {
@@ -323,6 +338,7 @@ impl Session for OwnerSession {
                         .filter_map(|c| c.parse().ok())
                         .collect(),
                     audio,
+                    relay: self.relay.clone(),
                 });
                 None
             }
@@ -331,6 +347,12 @@ impl Session for OwnerSession {
                 Some(ServerMsg::Ok {
                     of: "stream.stop".into(),
                 })
+            }
+            ClientMsg::StreamSize { w, h } => {
+                if let Some(stream) = self.state.lock().unwrap().stream.as_ref() {
+                    stream.resize(w, h);
+                }
+                None
             }
             ClientMsg::StreamCand { c } => {
                 if let Ok(peer) = c.parse() {

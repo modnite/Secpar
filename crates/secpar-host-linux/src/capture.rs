@@ -128,22 +128,38 @@ fn description(
     } else {
         ("h264parse", "video/x-h264")
     };
-    format!("{source} ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! videoconvert ! videoscale ! videorate drop-only=true ! video/x-raw,format={},framerate={fps}/1{resolution} ! {} name=encoder {} ! {parser} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=output sync=false max-buffers=2 drop=false enable-last-sample=false",encoder.raw,encoder.factory,encoder.properties)
+    // GPU frames (DMA-BUF) are imported by OpenGL (EGL) and colour-converted on the GPU, then read back as
+    // the encoder's format, for any encoder. System-memory frames convert on the CPU. The last caps filter
+    // is named "size": changing its caps resizes the running stream (see `Capture::set_size`).
+    let convert = if source.contains("memory:DMABuf") { "glupload ! glcolorconvert ! gldownload" } else { "videoconvert" };
+    let convert = format!("{convert} ! videoscale ! videorate drop-only=true ! capsfilter name=size caps=video/x-raw,format={},framerate={fps}/1{resolution}",encoder.raw);
+    format!("{source} ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! {convert} ! {} name=encoder {} ! {parser} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=output sync=false max-buffers=2 drop=false enable-last-sample=false",encoder.factory,encoder.properties)
 }
 /// The portal's stream as plain system-memory frames. KDE offers GPU buffers with tiling modifiers that
 /// the GStreamer plugins can't always import ("error alloc buffers", "Invalid caps ... DMABuf"). On
 /// an X250 the VA import of its DMA-BUF frames also fails on a driver size mismatch, and converting
 /// system frames on the GPU measured slower than on the CPU, so frames are copied. `keepalive-time`
 /// resends the last frame while the screen is still: Wayland only sends frames when something changes.
-fn source_variants(base: &str, fps: u32) -> [String; 2] {
+fn source_variants(base: &str, fps: u32) -> Vec<String> {
     let keepalive = (2000 / fps.max(1)).max(10);
-    [format!("{base} always-copy=true keepalive-time={keepalive} ! video/x-raw"), format!("{base} keepalive-time={keepalive}")]
+    let mut all = vec![
+        ("dmabuf", format!("{base} keepalive-time={keepalive} ! video/x-raw(memory:DMABuf),format=DMA_DRM")),
+        ("copy", format!("{base} always-copy=true keepalive-time={keepalive} ! video/x-raw")),
+        ("plain", format!("{base} keepalive-time={keepalive}")),
+    ];
+    // SECPAR_CAPTURE=dmabuf|copy|plain forces one way of taking the frames (for comparing them)
+    if let Ok(only) = std::env::var("SECPAR_CAPTURE") {
+        all.retain(|(name, _)| *name == only);
+    }
+    all.into_iter().map(|(_, v)| v).collect()
 }
 pub struct Capture {
     pipeline: gst::Pipeline,
     sink: AppSink,
     encoder_name: &'static str,
     codec: &'static str,
+    raw: &'static str,
+    native: (u32, u32),
     size: (u32, u32),
     fps: u32,
     first: Option<EncodedFrame>,
@@ -204,6 +220,8 @@ impl Capture {
                 sink,
                 encoder_name: encoder.factory,
                 codec: encoder.codec,
+                raw: encoder.raw,
+                native,
                 size: fit(native, (options.width, options.height)),
                 fps: options.fps.clamp(1, 240),
                 first: None,
@@ -214,6 +232,7 @@ impl Capture {
             match capture.pull(Duration::from_secs(2)) {
                 Ok(Some(frame)) => {
                     capture.size = (frame.width, frame.height);
+                    capture.native = capture.size;
                     capture.first = Some(frame);
                     return Ok(capture);
                 }
@@ -234,6 +253,19 @@ impl Capture {
     }
     pub fn encoder_name(&self) -> &'static str {
         self.encoder_name
+    }
+    /// Resizes the running stream to fit `wanted` (0x0 = the display's own size) without restarting it:
+    /// the encoder renegotiates on the new caps and starts with a keyframe. Returns the new size.
+    pub fn set_size(&mut self, wanted: (u32, u32)) -> Option<(u32, u32)> {
+        let filter = self.pipeline.by_name("size")?;
+        let (w, h) = fit(self.native, wanted);
+        let mut caps = gst::Caps::builder("video/x-raw").field("format", self.raw).field("framerate", gst::Fraction::new(self.fps as i32, 1));
+        if wanted.0 != 0 && wanted.1 != 0 {
+            caps = caps.field("width", w as i32).field("height", h as i32);
+        }
+        filter.set_property("caps", caps.build());
+        self.size = (w, h);
+        Some((w, h))
     }
     pub fn request_keyframe(&self) {
         let event = gstreamer_video::UpstreamForceKeyUnitEvent::builder()
@@ -317,6 +349,44 @@ impl Drop for Capture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn sample_options() -> VideoOptions {
+        VideoOptions { width: 0, height: 0, fps: 60, kbps: 8000, codecs: vec!["h264".into()] }
+    }
+    #[test]
+    fn dmabuf_frames_convert_on_the_gpu_and_system_frames_on_the_cpu() {
+        let enc = &candidates(&sample_options())[1]; // vah264enc
+        let gpu = description("pipewiresrc ! video/x-raw(memory:DMABuf),format=DMA_DRM", enc, &sample_options(), (1366, 768));
+        assert!(gpu.contains("glupload ! glcolorconvert ! gldownload"), "{gpu}");
+        assert!(!gpu.contains("videoconvert"), "{gpu}");
+        let cpu = description("pipewiresrc ! video/x-raw", enc, &sample_options(), (1366, 768));
+        assert!(cpu.contains("videoconvert ! videoscale"), "{cpu}");
+        assert!(!cpu.contains("glupload"), "{cpu}");
+    }
+    #[test]
+    fn every_chain_ends_in_a_named_size_filter_and_variants_try_the_gpu_first() {
+        let enc = &candidates(&sample_options())[1];
+        for source in ["pipewiresrc ! video/x-raw(memory:DMABuf),format=DMA_DRM", "pipewiresrc ! video/x-raw"] {
+            let d = description(source, enc, &sample_options(), (1366, 768));
+            assert!(d.contains("capsfilter name=size caps=video/x-raw,format=NV12,framerate=60/1"), "{d}");
+        }
+        let v = source_variants("pipewiresrc fd=3 path=7", 60);
+        assert_eq!(v.len(), 3);
+        assert!(v[0].contains("memory:DMABuf") && v[1].contains("always-copy=true") && !v[2].contains("video/x-raw"));
+        assert!(v.iter().all(|s| s.contains("keepalive-time=33")), "{v:?}");
+    }
+    #[test]
+    fn a_requested_size_is_baked_into_the_filter_caps_and_stays_inside_the_request() {
+        let mut options = sample_options();
+        options.width = 1280;
+        options.height = 720;
+        let enc = &candidates(&options)[1];
+        let d = description("pipewiresrc ! video/x-raw", enc, &options, (1366, 768));
+        let (w, h) = fit((1366, 768), (1280, 720));
+        assert!(w <= 1280 && h <= 720 && w % 2 == 0 && h % 2 == 0, "{w}x{h}");
+        assert!(d.contains(&format!("width={w},height={h}")), "{d}");
+        assert_eq!(fit((1366, 768), (854, 480)), (852, 480));
+        assert_eq!(fit((1366, 768), (0, 0)), (1366, 768));
+    }
     /// The test's own saved screen-share permission (portal tokens rotate; the app's stays untouched).
     /// The first run asks on screen once and saves it to ~/secpar-engine-test/portal-token.
     fn test_portal(rt: &tokio::runtime::Runtime) -> Arc<crate::portal::Portal> {
@@ -327,6 +397,72 @@ mod tests {
             let _ = std::fs::write(&path, new);
         }
         portal
+    }
+    /// By hand with something moving on screen: the running stream changes size and goes back.
+    #[test]
+    #[ignore = "needs a desktop session and a saved screen-share permission"]
+    fn portal_resize_live() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let portal = test_portal(&rt);
+        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()] };
+        let mut capture = Capture::start(portal.clone(), options).expect("capture");
+        let native = capture.size();
+        let wait = |capture: &mut Capture, ok: &dyn Fn(u32, u32) -> bool| {
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_secs(6) {
+                if let Ok(Some(f)) = capture.next_frame(Duration::from_millis(200)) {
+                    if ok(f.width, f.height) {
+                        return Some((f.width, f.height, f.key));
+                    }
+                }
+            }
+            None
+        };
+        let small = capture.set_size((854, 480)).expect("size filter");
+        let got_small = wait(&mut capture, &|w, h| w <= 854 && h <= 480);
+        let back = capture.set_size((0, 0)).expect("size filter");
+        let got_back = wait(&mut capture, &|w, h| (w, h) == native);
+        eprintln!("RESIZE native {native:?} -> asked {small:?} got {got_small:?}; back to {back:?} got {got_back:?}");
+        assert!(got_small.is_some() && got_back.is_some());
+    }
+    /// By hand with something moving on screen: how many frames each stage of the pipeline can pass,
+    /// to find the one that limits the stream.
+    #[test]
+    #[ignore = "needs a desktop session and a saved screen-share permission"]
+    fn portal_stage_rates() {
+        use gstreamer::prelude::*;
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let portal = test_portal(&rt);
+        gst::init().unwrap();
+        let base = format!("pipewiresrc fd={} path={} do-timestamp=true", portal.fd(), portal.node_id);
+        let tail = |sink: &str| format!("! appsink name=output sync=false max-buffers=2 drop=true enable-last-sample=false {sink}");
+        let stages = [
+            ("capture only (copy)", format!("{base} always-copy=true keepalive-time=33 ! video/x-raw {}", tail(""))),
+            ("capture only (plain)", format!("{base} keepalive-time=33 {}", tail(""))),
+            ("capture + videoconvert NV12", format!("{base} always-copy=true keepalive-time=33 ! video/x-raw ! videoconvert ! video/x-raw,format=NV12 {}", tail(""))),
+            ("dmabuf capture only", format!("{base} keepalive-time=33 ! video/x-raw(memory:DMABuf),format=DMA_DRM {}", tail(""))),
+            ("dmabuf + vapostproc", format!("{base} keepalive-time=33 ! video/x-raw(memory:DMABuf),format=DMA_DRM ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12 {}", tail(""))),
+            ("dmabuf + glupload/glcolorconvert/gldownload", format!("{base} keepalive-time=33 ! video/x-raw(memory:DMABuf),format=DMA_DRM ! glupload ! glcolorconvert ! gldownload ! video/x-raw,format=NV12 {}", tail(""))),
+            ("capture + convert + vah264enc", format!("{base} always-copy=true keepalive-time=33 ! video/x-raw ! videoconvert ! video/x-raw,format=NV12 ! vah264enc bitrate=12000 key-int-max=120 rate-control=cbr ! h264parse {}", tail(""))),
+        ];
+        // one stage per run (SECPAR_STAGE=index): a second pipeline on the same portal stream won't start
+        let only = std::env::var("SECPAR_STAGE").ok().and_then(|v| v.parse::<usize>().ok());
+        for (index, (name, text)) in stages.into_iter().enumerate() {
+            if only.is_some_and(|o| o != index) {
+                continue;
+            }
+            let Ok(p) = gst::parse::launch(&text) else { eprintln!("STAGE {name}: pipeline did not parse"); continue };
+            let pipeline = p.downcast::<gst::Pipeline>().unwrap();
+            let sink = pipeline.by_name("output").unwrap().downcast::<AppSink>().unwrap();
+            if pipeline.set_state(gst::State::Playing).is_err() { eprintln!("STAGE {name}: would not start"); continue; }
+            let (mut n, start) = (0u32, std::time::Instant::now());
+            while start.elapsed() < Duration::from_secs(6) {
+                if sink.try_pull_sample(gst::ClockTime::from_mseconds(200)).is_some() { n += 1; }
+            }
+            eprintln!("STAGE {name}: {:.1} fps", n as f64 / start.elapsed().as_secs_f64());
+            let _ = pipeline.set_state(gst::State::Paused); // not Null: Intel's driver aborts on teardown
+            std::mem::forget(pipeline);
+        }
     }
     /// By hand with something moving on screen: frames per second and CPU use of the capture and
     /// encode pipeline (SECPAR_ENCODER picks the encoder).

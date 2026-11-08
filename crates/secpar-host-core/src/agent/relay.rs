@@ -172,7 +172,13 @@ pub async fn serve<E>(
                         });
                         peers.insert(cid,Peer {input:tx,abort,generation:current});
                     }
-                    Some(Incoming::Close(cid)) => { peers.remove(&cid); }
+                    Some(Incoming::Close(cid)) => {
+                        // The Worker closed this phone: end its session, then confirm.
+                        if peers.remove(&cid).is_some() {
+                            tokio::task::yield_now().await;
+                            if !write(&mut writer,close(cid)).await { break; }
+                        }
+                    }
                     Some(Incoming::Data(cid,message)) => {
                         let Some(peer) = peers.get(&cid) else { continue; };
                         let accepted = queued(message,&input_budget).is_some_and(|q|peer.input.try_send(q).is_ok());

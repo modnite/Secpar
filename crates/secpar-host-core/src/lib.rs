@@ -6,6 +6,8 @@ pub mod audio;
 pub mod limits;
 pub mod pairing_codes;
 pub mod proto;
+pub mod relay;
+pub mod rendezvous;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Display {

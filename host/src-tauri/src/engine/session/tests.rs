@@ -213,7 +213,12 @@ fn report_drives_bitrate_and_idr_is_rate_limited() {
         p.send(host_addr, Type::Report, &report);
     }
     p.send(host_addr, Type::Idr, &[]);
+    // the receive thread shares the machine with other tests: let every packet land, then wait for the target
     std::thread::sleep(Duration::from_millis(200));
+    let end = Instant::now() + Duration::from_secs(2);
+    while *sh.target.lock().unwrap() != (Target { kbps: 7500, fec: 25, notch: 0 }) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(*sh.target.lock().unwrap(), Target { kbps: 7500, fec: 25, notch: 0 });
     assert!(sh.idr.swap(false, Ordering::SeqCst));
     p.send(host_addr, Type::Idr, &[]);
@@ -221,7 +226,10 @@ fn report_drives_bitrate_and_idr_is_rate_limited() {
     assert!(!sh.idr.load(Ordering::SeqCst), "at most one keyframe per 250 ms");
     std::thread::sleep(Duration::from_millis(200));
     p.send(host_addr, Type::Idr, &[]);
-    std::thread::sleep(Duration::from_millis(100));
+    let end = Instant::now() + Duration::from_secs(2);
+    while !sh.idr.load(Ordering::SeqCst) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert!(sh.idr.load(Ordering::SeqCst));
     stop(&sh, t);
 }

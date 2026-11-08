@@ -977,6 +977,7 @@ dependencies = [
  "futures-util",
  "reqwest",
  "ring",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "tokio",

@@ -1,6 +1,11 @@
 //! Platform-independent STUN discovery and TURN relay, shared by hosts and clients.
+pub mod link;
+pub mod reach;
 pub mod stun;
 pub mod turn;
+pub mod upnp;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod relay_auth;
 fn random<const N: usize>() -> [u8; N] {
     use ring::rand::SecureRandom;

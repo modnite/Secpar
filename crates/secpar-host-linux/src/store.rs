@@ -23,6 +23,15 @@ fn hash(token: &str) -> String {
     hex(ring::digest::digest(&ring::digest::SHA256, token.as_bytes()).as_ref())
 }
 
+/// A new PC id, in the form the Windows host uses. Existing stores keep the id they have.
+fn uuid4() -> String {
+    let mut b = random::<16>();
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h = hex(&b);
+    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
+}
+
 pub fn private_directory(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -138,6 +147,10 @@ struct Data {
     clipboard_ready: bool,
     #[serde(default)]
     portal_restore: Option<String>,
+    /// The rendezvous Worker accepted `master` as this PC's relay key (trust on first use);
+    /// later connections leave out `register`.
+    #[serde(default)]
+    relay_registered: bool,
 }
 pub struct Store {
     path: PathBuf,
@@ -152,12 +165,13 @@ impl Store {
         let mut data: Data = match read_private(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other)?,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Data {
-                id: hex(&random::<16>()),
+                id: uuid4(),
                 devices: vec![],
                 config: Config::default(),
                 master: URL_SAFE_NO_PAD.encode(random::<32>()),
                 clipboard_ready: true,
                 portal_restore: None,
+                relay_registered: false,
             },
             Err(e) => return Err(e),
         };
@@ -273,14 +287,56 @@ impl PairingStore for Store {
         let key = URL_SAFE_NO_PAD
             .decode(&self.data.master)
             .expect("valid master key");
-        // Linux has not exported relay access yet. Use the Worker contract before
-        // enabling it; keep the master key and all existing device auth tokens.
+        // `master` is the docs/remote-protocol.md relayKey.
         secpar_network::relay_auth::device_ticket(&key, self.id(), id)
+    }
+}
+impl secpar_host_core::rendezvous::RelaySource for Store {
+    fn pc_id(&self) -> String {
+        self.data.id.clone()
+    }
+    fn relay_key(&self) -> Vec<u8> {
+        URL_SAFE_NO_PAD.decode(&self.data.master).expect("valid master key")
+    }
+    fn relay_registered(&self) -> bool {
+        self.data.relay_registered
+    }
+    fn set_relay_registered(&mut self) -> io::Result<()> {
+        if self.data.relay_registered {
+            return Ok(());
+        }
+        self.data.relay_registered = true;
+        if let Err(e) = self.save() {
+            self.data.relay_registered = false;
+            return Err(e);
+        }
+        Ok(())
+    }
+    fn revoked(&self) -> Vec<String> {
+        self.data.devices.iter().filter(|d| d.revoked).map(|d| d.id.clone()).collect()
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secpar_host_core::rendezvous::RelaySource;
+    #[test]
+    fn relay_key_is_the_private_master_key_and_registration_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = Store::open(dir.path()).unwrap();
+        let (pc, key) = (RelaySource::pc_id(&s), s.relay_key());
+        assert_eq!((pc.len(), pc.matches('-').count(), key.len()), (36, 4, 32));
+        assert!(!RelaySource::relay_registered(&s));
+        let (id, _) = s.add_device("Phone").unwrap();
+        assert!(RelaySource::revoked(&s).is_empty());
+        s.revoke(&id).unwrap();
+        s.set_relay_registered().unwrap();
+        drop(s);
+        let s = Store::open(dir.path()).unwrap();
+        assert_eq!((RelaySource::pc_id(&s), s.relay_key()), (pc, key), "created once");
+        assert!(RelaySource::relay_registered(&s));
+        assert_eq!(RelaySource::revoked(&s), vec![id]);
+    }
     #[test]
     fn clipboard_support_migration_runs_once_and_preserves_later_opt_out() {
         let directory=tempfile::tempdir().unwrap();

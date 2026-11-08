@@ -8,7 +8,7 @@ use super::encode::{codec_name, codecs_available, parse_codec, Encoder};
 use super::input::Dedup;
 use super::{audio, cursor, now_us, Com};
 use crate::proto::{ClientMsg, ServerMsg};
-use crate::remote::turn::{self, Turn};
+use secpar_network::link::{self, Link};
 use crate::prs::frame::{packetize, Codec, FrameHeader};
 use crate::prs::{Crypt, Dir, Header, Type};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -30,7 +30,6 @@ const IDR_EVERY: Duration = Duration::from_millis(250);
 /// Hole punching (docs/remote-protocol.md): PROBE every phone candidate this often, for this long.
 const PUNCH_EVERY: Duration = Duration::from_millis(100);
 const PUNCH_FOR: Duration = Duration::from_secs(10);
-const MAX_CANDS: usize = 16;
 
 #[derive(Debug, Clone)]
 pub struct Params {
@@ -47,9 +46,6 @@ pub struct Params {
     /// Windows device name of the display to stream; empty = primary.
     pub display: String,
 }
-
-/// Packet rate through a TURN relay (see `Shared::send_paced`).
-const RELAY_PPS: u64 = 3_000;
 
 /// The UDP port streams use when it's free (mapped on the router by `net`).
 pub const STREAM_PORT: u16 = 48998;
@@ -68,14 +64,10 @@ pub struct Shared {
     stop: AtomicBool,
     idr: AtomicBool,
     target: Mutex<Target>,
-    cands: Mutex<Vec<SocketAddr>>,
-    punch_until: Mutex<Option<Instant>>,
     punch_every: Duration,
     punch_for: Duration,
-    /// Our own TURN allocation, when NATs need relay-to-relay (docs/remote-protocol.md).
-    turn: Mutex<Option<Arc<Turn>>>,
-    /// Peers whose packets arrived through `turn`: replies go back the same way.
-    via_relay: Mutex<std::collections::HashSet<SocketAddr>>,
+    /// Phone candidates, the punching window and our own TURN allocation (shared with every host).
+    link: Arc<Link>,
     /// A display the phone asked to switch to (`stream.display`), picked up by the video thread.
     switch: Mutex<Option<String>>,
     /// A size the client asked for (`stream.size`), picked up by the video thread.
@@ -97,12 +89,9 @@ impl Shared {
             stop: AtomicBool::new(false),
             idr: AtomicBool::new(false),
             target: Mutex::new(target),
-            cands: Mutex::default(),
-            punch_until: Mutex::default(),
             punch_every: PUNCH_EVERY,
             punch_for: PUNCH_FOR,
-            turn: Mutex::default(),
-            via_relay: Mutex::default(),
+            link: Arc::new(Link::new()),
             switch: Mutex::default(),
             resize: Mutex::default(),
         }
@@ -110,20 +99,12 @@ impl Shared {
 
     /// Adds phone candidates and (re)starts the punching window.
     pub fn punch(&self, add: impl IntoIterator<Item = SocketAddr>) {
-        let mut c = self.cands.lock().unwrap();
-        for a in add {
-            if c.len() < MAX_CANDS && !c.contains(&a) {
-                c.push(a);
-            }
-        }
-        if !c.is_empty() {
-            *self.punch_until.lock().unwrap() = Some(Instant::now() + self.punch_for);
-        }
+        self.link.punch(add, self.punch_for);
     }
 
     /// Still looking for the phone: no authenticated PROBE yet and inside the window.
     fn punching(&self) -> bool {
-        self.peer().is_none() && self.punch_until.lock().unwrap().is_some_and(|t| Instant::now() < t)
+        self.link.punching(self.peer().is_some())
     }
 
     pub fn peer(&self) -> Option<SocketAddr> {
@@ -142,62 +123,24 @@ impl Shared {
     fn send_to(&self, to: SocketAddr, mut h: Header, plain: &[u8]) -> bool {
         h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
         let pkt = self.crypt.seal(Dir::HostToPhone, &h, plain);
-        if let (Some(t), SocketAddr::V4(v4)) = (self.turn(), to) {
-            if self.via_relay.lock().unwrap().contains(&to) {
-                return self.sock.send_to(&t.wrap(v4, &pkt), t.server).is_ok();
-            }
-        }
-        self.sock.send_to(&pkt, to).is_ok()
-    }
-
-    fn turn(&self) -> Option<Arc<Turn>> {
-        self.turn.lock().unwrap().clone()
+        self.link.transmit(&self.sock, to, &pkt)
     }
 
     /// Punching PROBE to one candidate: direct, and through our relay when we have one.
     fn punch_one(&self, to: SocketAddr) {
         self.send_to(to, hdr(Type::Probe, 0), &probe(0));
-        if let (Some(t), SocketAddr::V4(v4)) = (self.turn(), to) {
-            if turn::is_public(&v4) && !self.via_relay.lock().unwrap().contains(&to) {
-                let mut h = hdr(Type::Probe, 0);
-                h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
-                let _ = self.sock.send_to(&t.wrap(v4, &self.crypt.seal(Dir::HostToPhone, &h, &probe(0))), t.server);
-            }
+        if self.link.turn().is_some() {
+            let mut h = hdr(Type::Probe, 0);
+            h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
+            self.link.transmit_punch_copy(&self.sock, to, &self.crypt.seal(Dir::HostToPhone, &h, &probe(0)));
         }
     }
 
     /// Allocates our own relay (blocking, ~100 ms), permits the phone's candidates and keeps the
     /// allocation alive until the stream stops. Returns the relayed address to tell the phone.
     pub fn start_turn(self: &Arc<Self>, server: SocketAddr, user: String, pass: String) -> Option<std::net::SocketAddrV4> {
-        if self.turn().is_some() {
-            return None;
-        }
-        let t = Arc::new(Turn::new(server, user, pass).with_diagnostics(crate::log::line));
-        *self.turn.lock().unwrap() = Some(t.clone()); // the receive loop now routes the server's answers to it
-        let Some(relayed) = t.allocate(&self.sock) else {
-            *self.turn.lock().unwrap() = None;
-            crate::log::line("turn: allocation failed");
-            return None;
-        };
-        let v4 = |c: &Vec<SocketAddr>| c.iter().filter_map(|a| if let SocketAddr::V4(v) = a { Some(*v) } else { None }).collect::<Vec<_>>();
-        let cands = self.cands.lock().unwrap().clone();
-        t.permit(&self.sock, &v4(&cands));
-        crate::log::line(&format!("turn: relaying at {relayed}"));
         let weak = Arc::downgrade(self);
-        std::thread::spawn(move || loop {
-            for _ in 0..240 {
-                std::thread::sleep(Duration::from_secs(1));
-                let Some(sh) = weak.upgrade() else { return };
-                if sh.stopped() {
-                    t.refresh(&sh.sock, 0); // free the allocation now
-                    return;
-                }
-            }
-            let Some(sh) = weak.upgrade() else { return };
-            t.refresh(&sh.sock, 600);
-            let cands = sh.cands.lock().unwrap().clone();
-            t.permit(&sh.sock, &v4(&cands));
-        });
+        let relayed = self.link.start_turn(&self.sock, move || weak.upgrade().is_none_or(|sh| sh.stopped()), server, user, pass, Some(crate::log::line))?;
         self.punch(std::iter::empty());
         Some(relayed)
     }
@@ -205,27 +148,17 @@ impl Shared {
     /// A new phone candidate: punch to it, and permit it on our relay if we have one.
     pub fn add_cand(self: &Arc<Self>, a: SocketAddr) {
         self.punch([a]);
-        if let (Some(t), SocketAddr::V4(v4)) = (self.turn(), a) {
-            let sh = self.clone();
-            std::thread::spawn(move || t.permit(&sh.sock, &[v4]));
-        }
+        self.link.permit_in_background(&self.sock, a);
     }
 
     /// One frame's packets, spread over at most ~4 ms so a burst doesn't overflow Wi-Fi queues.
-    /// Through a TURN relay, at most [`RELAY_PPS`] packets a second instead: relays drop bursts
+    /// Through a TURN relay, at most [`link::RELAY_PPS`] packets a second instead: relays drop bursts
     /// above their packet-rate limit (Cloudflare: 5–10 kpps per allocation), which keyframes hit.
     fn send_paced(&self, pkts: &[(Header, Vec<u8>)]) {
-        if self.peer().is_some_and(|p| self.via_relay.lock().unwrap().contains(&p)) {
-            let t0 = Instant::now();
-            for (i, (h, p)) in pkts.iter().enumerate() {
-                let due = t0 + Duration::from_micros(i as u64 * 1_000_000 / RELAY_PPS);
-                if let Some(wait) = due.checked_duration_since(Instant::now()) {
-                    if wait > Duration::from_micros(500) {
-                        std::thread::sleep(wait);
-                    }
-                }
+        if self.peer().is_some_and(|p| self.link.is_relayed(&p)) {
+            link::send_relay_paced(pkts, |(h, p)| {
                 self.send(*h, p);
-            }
+            });
             return;
         }
         let groups = if pkts.len() <= 8 { 1 } else { 4 };
@@ -268,8 +201,7 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
         }
         let now = Instant::now();
         if punching && now >= next_punch {
-            let cands = sh.cands.lock().unwrap().clone();
-            for to in cands {
+            for to in sh.link.cands() {
                 sh.punch_one(to);
             }
             next_punch = now + sh.punch_every;
@@ -281,22 +213,14 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
         }
         // Errors include Windows' WSAECONNRESET after an ICMP "port unreachable": keep going.
         let Ok((n, mut from)) = sh.sock.recv_from(&mut buf) else { continue };
-        let relayed = match sh.turn() {
-            Some(t) if from == t.server => match t.on_packet(&buf[..n]) {
-                Some((peer, data)) => {
-                    from = SocketAddr::V4(peer);
-                    Some(data)
-                }
-                None => continue, // a TURN answer, delivered to the waiting request
-            },
-            _ => None,
-        };
+        let Some((peer, relayed)) = sh.link.unwrap(from, &buf[..n]) else { continue }; // else a TURN answer, delivered to the waiting request
+        from = peer;
         let pkt = relayed.as_deref().unwrap_or(&buf[..n]);
         if crate::remote::stun::is_stun(pkt) {
             continue; // a late STUN answer
         }
         let Some((h, p)) = sh.crypt.open(Dir::PhoneToHost, pkt) else { continue };
-        if relayed.is_some() && sh.via_relay.lock().unwrap().insert(from) {
+        if relayed.is_some() && sh.link.mark_relayed(from) {
             crate::log::line(&format!("turn: phone {from} reached us through the relay"));
         }
         last_rx = Instant::now();
@@ -574,13 +498,7 @@ fn poll(cap: &mut SharedCapture, until: Instant, sh: &Shared) -> Option<capture:
 
 /// `stream.ready` candidates: LAN addresses, the UPnP-mapped public one, the STUN-reflexive one.
 fn host_cands(lan: &[String], port: u16, public: Option<IpAddr>, reflexive: Option<SocketAddr>) -> Vec<String> {
-    let mut v: Vec<String> = lan.iter().map(|ip| format!("{ip}:{port}")).collect();
-    // UPnP maps only the fixed port
-    v.extend(public.filter(|_| port == STREAM_PORT).map(|ip| SocketAddr::new(ip, port).to_string()));
-    v.extend(reflexive.map(|a| a.to_string()));
-    let mut seen = std::collections::HashSet::new();
-    v.retain(|c| seen.insert(c.clone()));
-    v
+    link::host_cands(lan, port, STREAM_PORT, public, reflexive) // UPnP maps only the fixed port
 }
 
 static ACTIVE: OnceLock<Arc<secpar_host_core::limits::StreamSlots>> = OnceLock::new();

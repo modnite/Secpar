@@ -12,6 +12,7 @@ pub mod identity;
 pub mod input;
 #[cfg(target_os = "linux")]
 pub mod portal;
+pub mod rendezvous;
 pub mod store;
 #[cfg(target_os = "linux")]
 pub mod stream;

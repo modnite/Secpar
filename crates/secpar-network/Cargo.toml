@@ -8,3 +8,7 @@ publish = false
 [dependencies]
 ring = "0.17.14"
 log = "0.4"
+
+[features]
+# FakeServer for hosts testing their transport
+testing = []
