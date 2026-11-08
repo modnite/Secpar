@@ -148,3 +148,10 @@ usedPercent, not goal/context budget. Around90% used, checkpoint/push code and
 update docs/claude-handover.md with exact current state and a startup prompt.
 Keep that handover current at milestones; do not burn agents or repeat completed
 work. At latest check71% was used (29% remaining), threshold not yet reached.
+
+2026-11-07 usage handover: user requests FULL-project Claude handover near10%
+remaining in the five-hour window. Read docs/claude-handover.md FIRST. Active
+implementation is sibling secpar-upstream-engine, branch feat/upstream-streaming-migration.
+Latest usage87% used /13% remaining. Checkpoint pushed at2cd50eb. Do not restart
+completed investigations or resume the parked bespoke renderer. Preserve all
+installed hosts/connections and keep debug builds local.

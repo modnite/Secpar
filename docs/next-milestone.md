@@ -3,7 +3,8 @@
 ## UPSTREAM MIGRATION FOUNDATION —2026-11-07
 
 New worktree work/secpar-upstream-engine, branch feat/upstream-streaming-migration
-at e5b7fec (pushed).
+at42db09b (pushed), draft PR https://github.com/modnite/Secpar/pull/1.
+Foundation e5b7fec; fc6f614 merges Android3.12.1;42db09b adds actual interop.
 Pinned Moonlight Qt6.2.0, Moonlight Android12.2, Sunshine2026.914.233613; Artemis
 20.2.6/Apollo0.4.6 retained as references. Prefer mature upstream media paths as
 whole components. User says choose whichever is better, not a mandated fork.
@@ -13,6 +14,17 @@ runtime libraries still need packaging. Small patches
 only Secpar executable/settings identity and Alt+F. Actual isolated --version and
 stream --help pass; settings under temporary .config/Secpar/SecparStream.conf.
 No installed Moonlight/Secpar state touched. This is NOT yet product integration.
+Real upstream host/client interoperability PASS: pinned official Sunshine AppImage
+SHA6f80297a853bcf8cda114ff131b5c0a8c9a4d96a2a9c3dee1f04c39c54206846,
+custom-named Moonlight Qt worker, two private X displays, separate Pulse sinks.
+Incorrect PIN rejected, correct separate client authenticated, actual frames
+received/decoded/rendered, generated500Hz tone verified at client output monitor.
+640x360/30 software fixture; NOT hardware/1080p/X250 performance evidence.511 source
+files audited after both integration patches; media/crypto implementations unchanged.
+Managed pairing flag exits Qt CLI after success/failure; standard settings flush.
+Same rejected client identity can hit pending-session409 on immediate retry; broker
+must handle bounded cleanup/retry, never silently rotate identities. Next code is
+host supervision/ownership authorization/product wiring, not more custom PRS tuning.
 Android original native core/JNI and audio renderer build as a private optional
 library for ARM64/x86-64; actual JNI initialization passes on owned5556. Complete
 upstream decoder/input/activity integration and ownership/pairing bridge remain.
@@ -23,7 +35,20 @@ User adds: slowdown correlates with received bitrate falling below1Mbps. Compare
 actual received rate, target bitrate, loss and received FPS; no custom PRS tuning.
 Do not call comparison/compilation/JNI smoke a hardware performance acceptance.
 
-## CURRENT — 3.12.0 DESKTOP PUBLISHED, 2026-11-07
+## CURRENT — Android3.12.1, desktop3.12.0,2026-11-07
+
+Android https://github.com/modnite/Secpar/releases/tag/v3.12.1, source/tag5babf27.
+Footer below Disconnect now uses explicit11sp font,16sp line height, zero letter
+spacing and no font padding. Actual debug menu mouse gate/render reviewed; final
+R8/non-debuggable APK code529 cold-launches on owned5556 with unchanged certificate.
+APK24,128,404 bytes SHA845ed484b2ca622fa373431d8748ce553e6e02e627c7c85b94c86863328981d8.
+No streaming/audio/PiP code changed in this patch. Stream-only PiP and all-OS
+keep-awake are pending integration gates, not claimed delivered in3.12.1.
+Website deployment42406886847 PASS; live releases.json verified Android3.12.1,
+Windows/Linux3.12.0 with correct digests. Debug/core harness artifacts stay LOCAL.
+Windows installed host remains3.11.0; no service restart during this work.
+
+## PREVIOUS — 3.12.0 DESKTOP PUBLISHED,2026-11-07
 
 https://github.com/modnite/Secpar/releases/tag/v3.12.0, source/tag66a75c4.
 Windows/Linux3.12.0; Android stays3.11.1 (unchanged engines). All four portable
@@ -68,8 +93,8 @@ whole components rather than reimplementing their scheduling. Preserve accounts,
 owned pairing, LAN-first/remote access, compact UI, three remote viewers and one
 installed app per desktop OS. Android stays client-only. Do not change installed
 services or publish migration as complete based only on compilation.
-Android footer explicit11sp/16sp/zero letter-spacing fix implemented; real emulator
-mouse open/close/disconnect gate PASS. Not yet released. Software BT.601 conversion
+Android footer explicit11sp/16sp/zero letter-spacing fix published in3.12.1; real
+emulator mouse open/close/disconnect gate PASS. Software BT.601 conversion
 mismatch with Windows BT.709 identified; no rushed converter patch added.
 
 ## PARKED — native Linux GPU presentation (isolated, NOT ACTIVE)
