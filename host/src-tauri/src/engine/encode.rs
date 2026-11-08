@@ -122,6 +122,11 @@ pub struct Encoder {
     _mf: Mf,
 }
 
+/// Rate-control buffer in bits: one frame at the target rate (floor 20 kbit for tiny rates).
+fn vbv_bits(kbps: u32, fps: u32) -> u32 {
+    (kbps * 1000 / fps.max(1)).max(20_000)
+}
+
 fn set(api: &ICodecAPI, key: &GUID, v: VARIANT) -> windows::core::Result<()> {
     // SAFETY: valid GUID and VARIANT pointers for the call.
     unsafe { api.SetValue(key, &v) }
@@ -146,6 +151,9 @@ impl Encoder {
             let api: ICodecAPI = mft.cast()?;
             let _ = set(&api, &CODECAPI_AVEncCommonRateControlMode, VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32));
             set(&api, &CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(kbps * 1000))?;
+            // Sunshine's VBV: about one frame of bits, so a busy frame can't burst past the link.
+            let _ = set(&api, &CODECAPI_AVEncCommonBufferSize, VARIANT::from(vbv_bits(kbps, fps)));
+            let _ = set(&api, &CODECAPI_AVEncCommonQualityVsSpeed, VARIANT::from(0u32));
             let _ = set(&api, &CODECAPI_AVLowLatencyMode, VARIANT::from(true));
             let _ = set(&api, &CODECAPI_AVEncMPVDefaultBPictureCount, VARIANT::from(0u32));
             // No periodic keyframes: the phone asks for one after a loss.
@@ -213,6 +221,7 @@ impl Encoder {
 
     /// Takes effect on the next frame, without restarting the encoder.
     pub fn set_bitrate(&self, kbps: u32) -> windows::core::Result<()> {
+        let _ = set(&self.api, &CODECAPI_AVEncCommonBufferSize, VARIANT::from(vbv_bits(kbps, self.fps)));
         set(&self.api, &CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(kbps * 1000))
     }
 

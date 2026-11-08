@@ -519,6 +519,41 @@ impl Video {
     }
 }
 
+/// Frame-pacing scheduling for the video thread, as Sunshine does it: a 1 ms system timer so
+/// sleeps land on the frame deadline (the default tick is 15.6 ms), and the "Games" MMCSS class
+/// so a busy desktop doesn't delay capture and encode.
+struct Realtime(Option<usize>);
+
+impl Realtime {
+    fn enter() -> Realtime {
+        use windows::core::w;
+        use windows::Win32::Media::timeBeginPeriod;
+        use windows::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
+        let mut task = 0u32;
+        // SAFETY: plain calls with a valid out pointer; undone in Drop.
+        unsafe {
+            timeBeginPeriod(1);
+            let h = AvSetMmThreadCharacteristicsW(w!("Games"), &mut task).ok();
+            Realtime(h.map(|h| h.0 as usize))
+        }
+    }
+}
+
+impl Drop for Realtime {
+    fn drop(&mut self) {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::Media::timeEndPeriod;
+        use windows::Win32::System::Threading::AvRevertMmThreadCharacteristics;
+        // SAFETY: balances the calls in enter.
+        unsafe {
+            if let Some(h) = self.0.take() {
+                let _ = AvRevertMmThreadCharacteristics(HANDLE(h as *mut _));
+            }
+            timeEndPeriod(1);
+        }
+    }
+}
+
 /// The next capture event, or None at `until`.
 fn poll(cap: &mut SharedCapture, until: Instant, sh: &Shared) -> Option<capture::GpuFrame> {
     loop {
@@ -576,6 +611,7 @@ impl StreamSession {
         let (vsh, vp, vn) = (sh.clone(), p.clone(), notify.clone());
         let video = std::thread::spawn(move || {
             let _com = Com::init();
+            let _prio = Realtime::enter();
             let kbps = vsh.target.lock().unwrap().kbps;
             match Video::open(&vp, kbps) {
                 Ok(v) => {
