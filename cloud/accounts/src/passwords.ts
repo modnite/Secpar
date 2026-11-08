@@ -19,13 +19,15 @@ class Failure extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
   }
 }
-function fail(status: number, message: string): never {
-  throw new Failure(status, message);
+function fail(status: number, message: string, code?: string): never {
+  throw new Failure(status, message, code);
 }
+const taken = () => fail(409, "That username is taken. Choose another.", "username_taken");
 const sessionCookie = (token: string) =>
   `__Host-secpar-session=${token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`;
 
@@ -273,7 +275,11 @@ export async function passwordRoutes(
           typeof b.handle !== "string" ||
           !/^[a-zA-Z0-9_]{3,30}$/.test(b.handle)
         )
-          fail(400, "Use a username of 3 to 30 letters, numbers or underscores.");
+          fail(400, "Use a username of 3 to 30 letters, numbers or underscores. Capitals do not matter.");
+        const lower = b.handle.toLowerCase();
+        // The answer depends only on the username, so it says nothing about any email.
+        if (await q(env, "SELECT 1 FROM accounts WHERE handle_lower=?", lower).first())
+          taken();
         const encoded = await passwordHash(pass); // Also performed for an existing email.
         if (!account) {
           const id = crypto.randomUUID();
@@ -281,10 +287,11 @@ export async function passwordRoutes(
             await env.DB.batch([
               q(
                 env,
-                "INSERT INTO accounts(id,github_id,handle,name) VALUES(?,?,?,?)",
+                "INSERT INTO accounts(id,github_id,handle,handle_lower,name) VALUES(?,?,?,?,?)",
                 id,
                 `password:${id}`,
                 b.handle,
+                lower,
                 b.handle,
               ),
               q(
@@ -304,7 +311,12 @@ export async function passwordRoutes(
               "SELECT user_id FROM password_accounts WHERE email=?",
               address,
             ).first();
-            if (!existing) throw new Error("Account creation failed");
+            if (!existing) {
+              // A competing signup may have taken the username first.
+              if (await q(env, "SELECT 1 FROM accounts WHERE handle_lower=?", lower).first())
+                taken();
+              throw new Error("Account creation failed");
+            }
           }
         } else account = null; // Do not resend another person's signup verification.
       }
@@ -449,7 +461,7 @@ export async function passwordRoutes(
     if (error instanceof Failure)
       return page(
         "Cannot continue",
-        `${heading("Cannot continue")}<p class="notice" role="alert">${escapeHtml(error.message)}</p><p class="links"><a href="/auth/sign-in">Back to sign in</a></p>`,
+        `${heading("Cannot continue")}<p class="notice" role="alert"${error.code ? ` data-error="${error.code}"` : ""}>${escapeHtml(error.message)}</p><p class="links">${error.code === "username_taken" ? '<a href="/auth/register">Back to sign up</a>' : '<a href="/auth/sign-in">Back to sign in</a>'}</p>`,
         error.status,
       );
     return page(

@@ -41,6 +41,7 @@ class Database {
     );
     this.db.exec(readFileSync(new URL("../migrations/0003_hosts.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0004_owner_pairings.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0005_usernames.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -118,8 +119,8 @@ beforeEach(async () => {
   };
   for (const [id, token] of Object.entries(tokens)) {
     await db
-      .prepare("INSERT INTO accounts(id,github_id,handle,name) VALUES(?,?,?,?)")
-      .bind(id, id, id, id)
+      .prepare("INSERT INTO accounts(id,github_id,handle,handle_lower,name) VALUES(?,?,?,?,?)")
+      .bind(id, id, id, id, id)
       .run();
     await db
       .prepare("INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)")
@@ -517,7 +518,7 @@ describe("email and password accounts", () => {
     ).toBe(200);
     // Existing signup cannot overwrite an account's credentials.
     expect(
-      (await form("/auth/register", { ...fields, password: nextPass }, send))
+      (await form("/auth/register", { ...fields, handle: "other_name", password: nextPass }, send))
         .status,
     ).toBe(200);
     expect(messages).toHaveLength(1);
@@ -923,5 +924,205 @@ describe("same-account owner pairing", () => {
     expect((await call("/auth/logout", "alice", "POST")).status).toBe(204);
     expect(await (await machine("/v1/host/owner-pairings", host.credential)).json()).toEqual([]);
     expect((await machine(`/v1/host/owner-pairings/${pair.id}`, host.credential, "POST", { link: link(host) })).status).toBe(404);
+  });
+});
+
+describe("usernames", () => {
+  const add = (name: string, actor: keyof typeof tokens = "alice", method = "PUT") =>
+    call("/v1/friends/by-username/" + name, actor, method);
+  const pending = (id: string) =>
+    db.db.prepare("SELECT requester,state FROM friends WHERE a=? OR b=?").all(id, id);
+  it("adds a friend by username without regard to case, a leading @ or spaces", async () => {
+    for (const name of ["bob", "BOB", "BoB", "%40bob", "%40Bob", "%20bob%20"]) {
+      db.db.exec("DELETE FROM friends");
+      const r = await add(name);
+      expect(r.status, name).toBe(202);
+      expect(await r.json()).toEqual({ state: "pending" });
+      expect(pending("bob")).toEqual([{ requester: "alice", state: "pending" }]);
+    }
+    expect((await call("/v1/friends/alice/accept", "bob", "POST")).status).toBe(200);
+    const list = await (await call("/v1/friends", "bob")).json();
+    expect(list).toEqual([
+      expect.objectContaining({ id: "alice", handle: "alice", state: "accepted" }),
+    ]);
+  });
+  it("answers unknown, blocked, self and malformed names the same way", async () => {
+    expect((await call("/v1/blocks/mallory", "alice", "PUT")).status).toBe(200);
+    const answers = [];
+    for (const name of ["nobody", "alice", "ALICE", "mallory", "a", "x".repeat(31), "a-b", "%ZZ", "%00"]) {
+      const r = await add(name);
+      answers.push([r.status, await r.json()]);
+    }
+    expect((await call("/v1/blocks/alice", "bob", "PUT")).status).toBe(200);
+    const blockedByTarget = await add("bob");
+    answers.push([blockedByTarget.status, await blockedByTarget.json()]);
+    for (const a of answers) expect(a).toEqual([404, { error: "account_unavailable" }]);
+    expect(db.db.prepare("SELECT count(*) AS n FROM friends").get()?.n).toBe(0);
+  });
+  it("needs a session, only accepts PUT and is rate limited", async () => {
+    expect((await call("/v1/friends/by-username/bob", null, "PUT")).status).toBe(401);
+    expect((await add("bob", "alice", "GET")).status).toBe(404);
+    let last = 0;
+    for (let i = 0; i < 21; i++) last = (await add("nobody")).status;
+    expect(last).toBe(429);
+  });
+  it("offers no way to list or search usernames", async () => {
+    expect((await call("/v1/friends/by-username/", "alice", "GET")).status).toBe(404);
+    expect((await call("/v1/users?q=b", "alice")).status).toBe(404);
+    expect((await call("/v1/friends/by-username", "alice", "PUT")).status).toBe(404);
+  });
+  it("keeps the account id route working for older apps", async () => {
+    expect((await call("/v1/friends/bob", "alice", "PUT")).status).toBe(202);
+    expect((await call("/v1/friends/alice", "alice", "PUT")).status).toBe(400);
+    expect((await call("/v1/friends/nobody", "alice", "PUT")).status).toBe(404);
+    expect((await call("/v1/friends/alice/accept", "bob", "POST")).status).toBe(200);
+    expect((await call("/v1/friends/alice", "bob", "DELETE")).status).toBe(200);
+  });
+
+  describe("sign-up", () => {
+    const pass = "correct horse battery staple";
+    const submit = (email: string, name: string) =>
+      handle(
+        new Request(base + "/auth/register", {
+          method: "POST",
+          headers: {
+            origin: base,
+            "content-type": "application/x-www-form-urlencoded",
+            "cf-connecting-ip": "ip-" + email,
+          },
+          body: new URLSearchParams({ email, handle: name, password: pass }),
+        }),
+        env,
+        async () => Response.json({ id: "mail" }),
+      );
+    beforeEach(() => {
+      env.RESEND_API_KEY = "test-mail-key";
+      env.EMAIL_FROM = "Secpar <accounts@secpar.win>";
+    });
+    it("refuses a taken username in any letter case with 409", async () => {
+      expect((await submit("one@example.com", "Casey_K")).status).toBe(200);
+      for (const name of ["Casey_K", "casey_k", "CASEY_K", "cAsEy_K"]) {
+        const r = await submit("two@example.com", name);
+        expect(r.status, name).toBe(409);
+        const page = await r.text();
+        expect(page).toContain('data-error="username_taken"');
+        expect(page).toContain("That username is taken");
+      }
+      expect(db.db.prepare("SELECT count(*) AS n FROM password_accounts").get()?.n).toBe(1);
+      expect(
+        db.db.prepare("SELECT handle,handle_lower FROM accounts WHERE github_id LIKE 'password:%'").all(),
+      ).toEqual([{ handle: "Casey_K", handle_lower: "casey_k" }]);
+      // Existing accounts count too.
+      expect((await submit("three@example.com", "ALICE")).status).toBe(409);
+    });
+    it("gives a taken username the same answer for a known and an unknown email", async () => {
+      expect((await submit("one@example.com", "Casey_K")).status).toBe(200);
+      const known = await submit("one@example.com", "casey_k");
+      const unknown = await submit("new@example.com", "casey_k");
+      expect(known.status).toBe(409);
+      expect(await known.text()).toBe(await unknown.text());
+    });
+  });
+
+  describe("GitHub sign-in", () => {
+    async function login(id: number, name: string) {
+      const begin = await handle(new Request(base + "/auth/github"), env);
+      const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
+      const provider: typeof fetch = async (input) =>
+        String(input).includes("access_token")
+          ? Response.json({ access_token: "t" })
+          : Response.json({ id, login: name, name: "Name " + name });
+      const result = await handle(
+        new Request(base + `/auth/callback?code=c&state=${state}`, {
+          headers: { cookie: `__Host-secpar-oauth=${state}` },
+        }),
+        env,
+        provider,
+      );
+      expect(result.status).toBe(302);
+      const session = result.headers.getSetCookie().find((c) => c.startsWith("__Host-secpar-session="))!;
+      const me = await handle(
+        new Request(base + "/v1/me", { headers: { cookie: session.split(";")[0] } }),
+        env,
+      );
+      return (await me.json()) as { id: string; handle: string };
+    }
+    it("turns hyphens into underscores and finds the account by either spelling", async () => {
+      const me = await login(1, "Octo-Cat");
+      expect(me.handle).toBe("Octo_Cat");
+      expect((await add("octo_cat")).status).toBe(202);
+      expect(pending(me.id)).toHaveLength(1);
+      expect((await add("OCTO_CAT")).status).toBe(202);
+    });
+    it("picks a free suffix when the name is taken, in any case, and pads short names", async () => {
+      expect((await login(1, "bob-x")).handle).toBe("bob_x");
+      expect((await login(2, "BOB-X")).handle).toBe("BOB_X_2");
+      expect((await login(3, "bob_x")).handle).toBe("bob_x_3");
+      expect((await login(4, "ab")).handle).toBe("ab_");
+      const long = "a".repeat(30);
+      expect((await login(5, long)).handle).toBe(long);
+      expect((await login(6, long)).handle).toBe("a".repeat(28) + "_2");
+    });
+    it("keeps the first username when the GitHub login changes", async () => {
+      const first = await login(7, "first-name");
+      const again = await login(7, "renamed");
+      expect(again.id).toBe(first.id);
+      expect(again.handle).toBe("first_name");
+      expect(db.db.prepare("SELECT name FROM accounts WHERE id=?").get(first.id)?.name).toBe("Name renamed");
+      expect((await add("renamed")).status).toBe(404);
+    });
+  });
+
+  describe("migration 0005", () => {
+    it("lowercases, fixes the charset and renames later duplicates", () => {
+      const old = new DatabaseSync(":memory:");
+      for (const f of ["0001_accounts", "0002_passwords", "0003_hosts", "0004_owner_pairings"])
+        old.exec(readFileSync(new URL(`../migrations/${f}.sql`, import.meta.url), "utf8"));
+      const long = "a".repeat(30);
+      const seed = [
+        ["id-1", "Alice"],
+        ["id-2", "alice"],
+        ["id-3", "ALICE"],
+        ["id-4", "alice_2"],
+        ["id-5", "octo-cat"],
+        ["id-6", "Octo_Cat"],
+        ["id-7", "x"],
+        ["id-8", long],
+        ["id-9", long.toUpperCase()],
+        ["id-10", "z".repeat(80)],
+        ["id-11", "unique-Name"],
+      ];
+      for (const [id, h] of seed)
+        old.prepare("INSERT INTO accounts(id,github_id,handle,name) VALUES(?,?,?,?)").run(id, id, h, h);
+      old.exec("INSERT INTO friends(a,b,requester,state) VALUES('id-1','id-5','id-1','pending')");
+      old.exec(readFileSync(new URL("../migrations/0005_usernames.sql", import.meta.url), "utf8"));
+      const rows = old.prepare("SELECT id,handle,handle_lower FROM accounts ORDER BY rowid").all() as {
+        id: string; handle: string; handle_lower: string;
+      }[];
+      const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+      expect(byId["id-1"]).toMatchObject({ handle: "Alice", handle_lower: "alice" });
+      expect(byId["id-3"]).toMatchObject({ handle: "alice_3", handle_lower: "alice_3" });
+      // alice_2 already exists, so the second Alice gets an id based name.
+      expect(byId["id-2"].handle_lower).toBe("alice_id2");
+      expect(byId["id-4"]).toMatchObject({ handle: "alice_2", handle_lower: "alice_2" });
+      expect(byId["id-5"]).toMatchObject({ handle: "octo_cat", handle_lower: "octo_cat" });
+      expect(byId["id-6"]).toMatchObject({ handle_lower: "octo_cat_2" });
+      expect(byId["id-7"]).toMatchObject({ handle: "x__", handle_lower: "x__" });
+      expect(byId["id-8"].handle_lower).toBe(long);
+      expect(byId["id-9"].handle_lower).toBe("a".repeat(28) + "_2");
+      expect(byId["id-10"].handle).toBe("z".repeat(30));
+      expect(byId["id-11"]).toMatchObject({ handle: "unique_Name", handle_lower: "unique_name" });
+      const lowers = rows.map((r) => r.handle_lower);
+      expect(new Set(lowers).size).toBe(rows.length);
+      for (const r of rows) expect(r.handle_lower).toMatch(/^[a-z0-9_]{3,30}$/);
+      // Friendships stay and the scratch table is gone.
+      expect(old.prepare("SELECT count(*) AS n FROM friends").get()?.n).toBe(1);
+      expect(old.prepare("SELECT name FROM sqlite_master WHERE name='handle_fix'").get()).toBeUndefined();
+      expect(() =>
+        old.prepare("INSERT INTO accounts(id,github_id,handle,handle_lower,name) VALUES('n','n','ALICE','alice','n')").run(),
+      ).toThrow();
+      // A row from an older Worker without handle_lower is still accepted.
+      old.prepare("INSERT INTO accounts(id,github_id,handle,name) VALUES('late','late','Late','Late')").run();
+    });
   });
 });

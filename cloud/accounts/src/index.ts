@@ -226,6 +226,58 @@ async function signing(env: Env) {
     kid,
   };
 }
+// Usernames are 3 to 30 letters, digits or underscores and are unique without regard to case.
+const USERNAME = /^[a-z0-9_]{3,30}$/;
+// GitHub logins may contain hyphens. A hyphen becomes an underscore.
+function githubUsername(login: string): string {
+  let name = login.replaceAll(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
+  if (name.length < 3) name = name.padEnd(3, "_");
+  return name;
+}
+function withSuffix(name: string, n: number): string {
+  if (n < 2) return name;
+  const tail = "_" + n;
+  return name.slice(0, 30 - tail.length) + tail;
+}
+// The username is chosen once, when the account is created. Later logins keep it.
+async function upsertGithubAccount(
+  env: Env,
+  githubId: string,
+  login: string,
+  fullName: string | undefined,
+) {
+  const name = (fullName || login).slice(0, 80);
+  const changed = await q(
+    env,
+    "UPDATE accounts SET name=? WHERE github_id=?",
+    name,
+    githubId,
+  ).run();
+  if (changed.meta.changes) return;
+  const base = githubUsername(login);
+  for (let n = 1; n <= 40; n++) {
+    const id = crypto.randomUUID();
+    const handle =
+      n < 40 ? withSuffix(base, n) : base.slice(0, 21) + "_" + id.slice(0, 8);
+    try {
+      await q(
+        env,
+        "INSERT INTO accounts(id,github_id,handle,handle_lower,name) VALUES(?,?,?,?,?)",
+        id,
+        githubId,
+        handle,
+        handle.toLowerCase(),
+        name,
+      ).run();
+      return;
+    } catch {
+      // The name is taken, or a parallel login created this account first.
+      if (await q(env, "SELECT 1 FROM accounts WHERE github_id=?", githubId).first())
+        return;
+    }
+  }
+  deny(500, "account_creation_failed");
+}
 async function limit(
   request: Request,
   env: Env,
@@ -389,14 +441,7 @@ export async function handle(
       };
       if (!Number.isSafeInteger(profile.id) || !profile.login)
         deny(502, "invalid_profile");
-      await q(
-        env,
-        "INSERT INTO accounts(id,github_id,handle,name) VALUES(?,?,?,?) ON CONFLICT(github_id) DO UPDATE SET handle=excluded.handle,name=excluded.name",
-        crypto.randomUUID(),
-        String(profile.id),
-        profile.login.slice(0, 80),
-        (profile.name || profile.login).slice(0, 80),
-      ).run();
+      await upsertGithubAccount(env, String(profile.id), profile.login, profile.name);
       const account = await q(
         env,
         "SELECT id FROM accounts WHERE github_id=?",
@@ -586,6 +631,35 @@ export async function handle(
         me.id,
       ).all();
       return response(rows.results);
+    }
+    const byName = path.match(/^\/v1\/friends\/by-username\/([^/]+)$/);
+    if (byName && method === "PUT") {
+      await limit(request, env, "friend", 20);
+      let name = "";
+      try {
+        name = decodeURIComponent(byName[1]).trim().replace(/^@/, "").toLowerCase();
+      } catch {
+        // An undecodable name matches nobody.
+      }
+      // Unknown, blocked, self and malformed names all answer the same way.
+      const other = USERNAME.test(name)
+        ? await q(
+            env,
+            "SELECT id FROM accounts WHERE handle_lower=?",
+            name,
+          ).first<{ id: string }>()
+        : null;
+      if (!other || other.id === me.id || (await blocked(env, me.id, other.id)))
+        deny(404, "account_unavailable");
+      const [a, b] = pair(me.id, other.id);
+      await q(
+        env,
+        "INSERT INTO friends(a,b,requester,state) VALUES(?,?,?,'pending') ON CONFLICT(a,b) DO NOTHING",
+        a,
+        b,
+        me.id,
+      ).run();
+      return response({ state: "pending" }, 202);
     }
     const friend = path.match(/^\/v1\/friends\/([^/]+)(?:\/(accept))?$/);
     if (friend) {
