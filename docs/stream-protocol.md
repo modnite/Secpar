@@ -31,6 +31,7 @@ All integers are big-endian.
   - `stream.start` may carry `display` (an `id`; absent or empty = the display set on the PC).
   - The host sends `stream.displays` once streaming starts and after every switch.
   - `stream.display` switches the running stream: same `session`, `port`, `key` and codec, a new `stream.ready` with the new size, then a keyframe. The PC's pointer moves to the centre of the new display. `mouse.pos` maps onto the streamed display.
+  - `stream.size` (`{"t":"stream.size","w":1280,"h":720}`) resizes the running stream the same way: a new `stream.ready`, then a keyframe. `w`=`h`=0 is the display's native size. A host that predates it ignores it.
 - `stream.stop`, or closing the agent connection, ends the session. The host also ends it after 5 s without any packet from the phone.
 
 ## UDP packets
