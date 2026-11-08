@@ -256,6 +256,13 @@ mod tests {
         assert_eq!(args[split + 1], "--hint");
     }
     #[test]
+    #[ignore = "Shows a real toast and writes the alert key to the credential store"]
+    fn shows_a_real_toast() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        show(alert(), tx);
+        std::thread::sleep(std::time::Duration::from_secs(25));
+    }
+    #[test]
     fn answers_have_stable_codes() {
         for a in [Answer::AllowConnection, Answer::DenyConnection, Answer::AcceptFriend, Answer::DeclineFriend] {
             assert_eq!(Answer::parse(a.code()), Some(a));

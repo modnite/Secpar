@@ -35,3 +35,7 @@ Validation must include signed wrong-host/expired/unsupported grants, replay rac
 revocation during both TCP control and UDP input, audio/view denial, secure-desktop
 transitions, held-input cleanup, and owner/guest stream contention. Compilation or
 signature tests alone are not end-to-end guest admission evidence.
+
+## Friend settings
+
+`crate::guest_policy` in `secpar-host-core` decides what a friend may do. It strips keyboard and mouse from a view only friend and says whether the host may start without asking. It is built and tested, and both hosts can call `Account::admit_guest`. No host transport accepts friend sessions yet, so the checks above still apply before it is wired in. See `docs/friends.md`.
