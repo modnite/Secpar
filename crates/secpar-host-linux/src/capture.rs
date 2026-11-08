@@ -126,6 +126,10 @@ fn description(
     };
     format!("{source} ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! videoconvert ! videoscale ! videorate drop-only=true ! video/x-raw,format={},framerate={fps}/1{resolution} ! {} name=encoder {} ! {parser} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=output sync=false max-buffers=2 drop=false enable-last-sample=false",encoder.raw,encoder.factory,encoder.properties)
 }
+/// The portal's stream as system-memory frames first (copied by PipeWire, no DMA-BUF), then as offered.
+fn source_variants(base: &str) -> [String; 3] {
+    [format!("{base} always-copy=true ! video/x-raw"), format!("{base} ! video/x-raw"), base.to_string()]
+}
 pub struct Capture {
     pipeline: gst::Pipeline,
     sink: AppSink,
@@ -144,12 +148,17 @@ impl Capture {
             portal.fd(),
             portal.node_id
         );
-        Self::from_source(
-            &source,
-            (portal.width, portal.height),
-            options,
-            Some(portal),
-        )
+        // PipeWire may offer DMA-BUF buffers (with GPU-specific modifiers) that this pipeline then
+        // can't allocate: "error alloc buffers: Invalid argument". System-memory copies always work,
+        // so they come first; the plain source is the last resort.
+        let mut failures = Vec::new();
+        for variant in source_variants(&source) {
+            match Self::from_source(&variant, (portal.width, portal.height), options.clone(), Some(portal.clone())) {
+                Ok(capture) => return Ok(capture),
+                Err(error) => failures.push(error),
+            }
+        }
+        Err(failures.into_iter().next().unwrap_or_else(|| "Could not start desktop capture.".into()))
     }
     fn from_source(
         source: &str,
@@ -280,14 +289,50 @@ fn pipeline_error(pipeline: &gst::Pipeline) -> Option<String> {
         _=>"Desktop capture ended before another frame was available".into(),
     })
 }
+/// Pipelines of VA encoders that were stopped but not torn down; see `Drop for Capture`.
+static PARKED: std::sync::Mutex<Vec<gst::Pipeline>> = std::sync::Mutex::new(Vec::new());
 impl Drop for Capture {
     fn drop(&mut self) {
+        if self.encoder_name.starts_with("va") {
+            // Tearing down a VA encoder aborts the process on Intel's iHD driver ("free(): invalid
+            // pointer" in vaDestroyContext), so one disconnect would end the whole app. Pause it and
+            // park it instead: one idle pipeline per connection, freed when the host exits.
+            let _ = self.pipeline.set_state(gst::State::Paused);
+            if let Ok(mut parked) = PARKED.lock() {
+                parked.push(self.pipeline.clone());
+            }
+            return;
+        }
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// By hand on a Plasma session with a saved screen-share permission: which source variants
+    /// capture here. Prints one line per variant.
+    #[test]
+    #[ignore = "needs a desktop session and a saved screen-share permission"]
+    fn portal_stream_captures_with_each_source_variant() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let home = std::env::var("HOME").unwrap();
+        let token = std::fs::read_to_string(format!("{home}/.config/secpar/owner-devices.json")).ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v["portal_restore"].as_str().map(str::to_owned));
+        let portal = rt.block_on(crate::portal::Portal::open(token.as_deref())).expect("portal");
+        gst::init().unwrap();
+        let base = format!("pipewiresrc fd={} path={} do-timestamp=true", portal.fd(), portal.node_id);
+        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 6000, codecs: vec!["h264".into()] };
+        let mut worked = 0;
+        for variant in source_variants(&base) {
+            let label = variant.split(" ! ").skip(1).collect::<Vec<_>>().join(" ! ");
+            match Capture::from_source(&variant, (portal.width, portal.height), options.clone(), Some(portal.clone())) {
+                Ok(c) => { worked += 1; eprintln!("OK   [{}] {}x{} via {}", label, c.size().0, c.size().1, c.encoder_name()); break; }
+                Err(e) => eprintln!("FAIL [{label}] {e}"),
+            }
+        }
+        assert!(worked > 0, "no variant captured");
+    }
     #[test]
     fn aspect_ratio_and_native_request_are_preserved() {
         assert_eq!(fit((1920, 1200), (1280, 720)), (1152, 720));
