@@ -56,7 +56,7 @@ impl Portal {
                 SelectSourcesOptions::default()
                     .set_sources(ashpd::enumflags2::BitFlags::from(SourceType::Monitor))
                     .set_multiple(false)
-                    .set_cursor_mode(CursorMode::Embedded),
+                    .set_cursor_mode(CursorMode::Hidden),
             )
             .await
             .map_err(|_| "Could not request a monitor.")?

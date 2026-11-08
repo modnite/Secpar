@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
+pub(crate) const INSTALL_WARNING: &str = "Installing restarts Secpar and ends any active stream.";
 const FEED: &str = "https://api.github.com/repos/modnite/Secpar/releases?per_page=100";
 pub const CURRENT: &str = env!("SECPAR_RELEASE_TAG");
 #[derive(Clone, Debug)]
@@ -231,7 +232,7 @@ impl Panel {
         {
             panel.open = true;
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p == "updates-none-sample") {
-                panel.message = "You're up to date.".into();
+                panel.message = "You’re up to date.".into();
             } else {
                 panel.message = "Development 8 is available.".into();
                 panel.release = Some(Release {
@@ -320,7 +321,7 @@ impl Panel {
                 if self.busy { ui.spinner(); }
                 if self.release.is_some() {
                     ui.add_space(8.);
-                    ui.label("Installing restarts Secpar and its hosting service. Any connected devices will disconnect. Make sure you have another way back to this PC.");
+                    ui.label(INSTALL_WARNING);
                     if streaming { ui.label("Disconnect your current stream before installing."); }
                 }
                 ui.add_space(8.);
@@ -331,7 +332,7 @@ impl Panel {
                     let can_download = !self.busy && self.release.is_some() && self.ready.is_none();
                     if ui.add_enabled(can_download, egui::Button::new("Download update")).clicked() {
                         self.busy = true;
-                        self.message = "Downloading update...".into();
+                        self.message = "Downloading update…".into();
                         let r = self.release.clone().unwrap();
                         let tx = self.tx.clone();
                         let ctx = ctx.clone();
@@ -345,7 +346,7 @@ impl Panel {
                 });
                 if let Some(path) = self.ready.clone() {
                     ui.add_space(8.);
-                    if ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update...")).clicked() {
+                    if ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update…")).clicked() {
                         self.message = match launch_installer(&path) {
                             Ok(()) => {
                                 #[cfg(target_os = "linux")]
@@ -365,6 +366,11 @@ impl Panel {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn messages_use_one_ellipsis_character() {
+        assert_eq!(INSTALL_WARNING, "Installing restarts Secpar and ends any active stream.");
+        assert!(!include_str!("updates.rs").contains(concat!("update", "...")));
+    }
     fn release(tag: &str, name: &str) -> Value {
         json!({"tag_name":tag,"assets":[{"name":name,"browser_download_url":format!("https://github.com/modnite/Secpar/releases/download/{tag}/{name}"),"digest":format!("sha256:{}","a".repeat(64)),"size":100}]})
     }

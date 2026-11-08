@@ -92,6 +92,10 @@ fn candidates(options: &VideoOptions) -> Vec<Encoder> {
             ),
         });
     }
+    // SECPAR_ENCODER=<gstreamer element> forces one encoder (for comparing them on a machine).
+    if let Ok(only) = std::env::var("SECPAR_ENCODER") {
+        result.retain(|e| e.factory == only);
+    }
     result
 }
 fn fit(native: (u32, u32), wanted: (u32, u32)) -> (u32, u32) {
@@ -126,9 +130,14 @@ fn description(
     };
     format!("{source} ! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! videoconvert ! videoscale ! videorate drop-only=true ! video/x-raw,format={},framerate={fps}/1{resolution} ! {} name=encoder {} ! {parser} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=output sync=false max-buffers=2 drop=false enable-last-sample=false",encoder.raw,encoder.factory,encoder.properties)
 }
-/// The portal's stream as system-memory frames first (copied by PipeWire, no DMA-BUF), then as offered.
-fn source_variants(base: &str) -> [String; 3] {
-    [format!("{base} always-copy=true ! video/x-raw"), format!("{base} ! video/x-raw"), base.to_string()]
+/// The portal's stream as plain system-memory frames. KDE offers GPU buffers with tiling modifiers that
+/// the GStreamer plugins can't always import ("error alloc buffers", "Invalid caps ... DMABuf"). On
+/// an X250 the VA import of its DMA-BUF frames also fails on a driver size mismatch, and converting
+/// system frames on the GPU measured slower than on the CPU, so frames are copied. `keepalive-time`
+/// resends the last frame while the screen is still: Wayland only sends frames when something changes.
+fn source_variants(base: &str, fps: u32) -> [String; 2] {
+    let keepalive = (2000 / fps.max(1)).max(10);
+    [format!("{base} always-copy=true keepalive-time={keepalive} ! video/x-raw"), format!("{base} keepalive-time={keepalive}")]
 }
 pub struct Capture {
     pipeline: gst::Pipeline,
@@ -148,17 +157,16 @@ impl Capture {
             portal.fd(),
             portal.node_id
         );
-        // PipeWire may offer DMA-BUF buffers (with GPU-specific modifiers) that this pipeline then
-        // can't allocate: "error alloc buffers: Invalid argument". System-memory copies always work,
-        // so they come first; the plain source is the last resort.
+        // PipeWire may offer DMA-BUF buffers (with GPU-specific modifiers) that this pipeline can't
+        // allocate: "error alloc buffers: Invalid argument". The next variant asks for copies instead.
         let mut failures = Vec::new();
-        for variant in source_variants(&source) {
+        for variant in source_variants(&source, options.fps.clamp(1, 240)) {
             match Self::from_source(&variant, (portal.width, portal.height), options.clone(), Some(portal.clone())) {
                 Ok(capture) => return Ok(capture),
                 Err(error) => failures.push(error),
             }
         }
-        Err(failures.into_iter().next().unwrap_or_else(|| "Could not start desktop capture.".into()))
+        Err(if failures.is_empty() { "Could not start desktop capture.".into() } else { failures.join(" / ") })
     }
     fn from_source(
         source: &str,
@@ -309,22 +317,58 @@ impl Drop for Capture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The test's own saved screen-share permission (portal tokens rotate; the app's stays untouched).
+    /// The first run asks on screen once and saves it to ~/secpar-engine-test/portal-token.
+    fn test_portal(rt: &tokio::runtime::Runtime) -> Arc<crate::portal::Portal> {
+        let path = format!("{}/secpar-engine-test/portal-token", std::env::var("HOME").unwrap());
+        let token = std::fs::read_to_string(&path).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let portal = rt.block_on(crate::portal::Portal::open(token.as_deref())).expect("portal");
+        if let Some(new) = &portal.restore_token {
+            let _ = std::fs::write(&path, new);
+        }
+        portal
+    }
+    /// By hand with something moving on screen: frames per second and CPU use of the capture and
+    /// encode pipeline (SECPAR_ENCODER picks the encoder).
+    #[test]
+    #[ignore = "needs a desktop session and a saved screen-share permission"]
+    fn portal_stream_throughput() {
+        fn cpu_ticks() -> u64 {
+            let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+            let rest: Vec<&str> = stat.rsplit_once(')').unwrap().1.split_whitespace().collect();
+            rest[11].parse::<u64>().unwrap() + rest[12].parse::<u64>().unwrap()
+        }
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let portal = test_portal(&rt);
+        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()] };
+        let mut capture = Capture::start(portal.clone(), options).expect("capture");
+        let (name, size) = (capture.encoder_name(), capture.size());
+        let (mut frames, mut bytes, mut worst) = (0u32, 0usize, Duration::ZERO);
+        let (start, cpu0) = (std::time::Instant::now(), cpu_ticks());
+        let mut last = start;
+        while start.elapsed() < Duration::from_secs(8) {
+            if let Ok(Some(f)) = capture.next_frame(Duration::from_millis(200)) {
+                frames += 1;
+                bytes += f.data.len();
+                worst = worst.max(last.elapsed());
+                last = std::time::Instant::now();
+            }
+        }
+        let secs = start.elapsed().as_secs_f64();
+        eprintln!("BENCH {name} {}x{}: {:.1} fps, {:.1} Mbps, worst gap {} ms, cpu {:.0}%", size.0, size.1, frames as f64 / secs, bytes as f64 * 8.0 / secs / 1e6, worst.as_millis(), (cpu_ticks() - cpu0) as f64 / 100.0 / secs * 100.0);
+    }
     /// By hand on a Plasma session with a saved screen-share permission: which source variants
     /// capture here. Prints one line per variant.
     #[test]
     #[ignore = "needs a desktop session and a saved screen-share permission"]
     fn portal_stream_captures_with_each_source_variant() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let home = std::env::var("HOME").unwrap();
-        let token = std::fs::read_to_string(format!("{home}/.config/secpar/owner-devices.json")).ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| v["portal_restore"].as_str().map(str::to_owned));
-        let portal = rt.block_on(crate::portal::Portal::open(token.as_deref())).expect("portal");
+        let portal = test_portal(&rt);
         gst::init().unwrap();
         let base = format!("pipewiresrc fd={} path={} do-timestamp=true", portal.fd(), portal.node_id);
         let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 6000, codecs: vec!["h264".into()] };
         let mut worked = 0;
-        for variant in source_variants(&base) {
+        for variant in source_variants(&base, options.fps) {
             let label = variant.split(" ! ").skip(1).collect::<Vec<_>>().join(" ! ");
             match Capture::from_source(&variant, (portal.width, portal.height), options.clone(), Some(portal.clone())) {
                 Ok(c) => { worked += 1; eprintln!("OK   [{}] {}x{} via {}", label, c.size().0, c.size().1, c.encoder_name()); break; }

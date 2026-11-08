@@ -8,6 +8,9 @@ pub struct Input {
     portal: Arc<Portal>,
     keys: BTreeSet<i32>,
     buttons: BTreeSet<i32>,
+    /// Where the remote pointer is, in stream pixels, and whether it moved since the last `take_pos`.
+    pos: (f64, f64),
+    moved: bool,
 }
 impl Input {
     pub fn new(portal: Arc<Portal>) -> Self {
@@ -15,7 +18,14 @@ impl Input {
             portal,
             keys: BTreeSet::new(),
             buttons: BTreeSet::new(),
+            pos: (0.0, 0.0),
+            moved: false,
         }
+    }
+    /// The pointer position once after it moved: the client draws the cursor itself (the portal
+    /// hides it in the video, so it can't trail the real pointer by the video latency).
+    pub fn take_pos(&mut self) -> Option<(i32, i32)> {
+        std::mem::take(&mut self.moved).then(|| (self.pos.0.round() as i32, self.pos.1.round() as i32))
     }
     pub async fn apply(&mut self, message: ClientMsg) -> Result<(), String> {
         if self.portal.is_closed() {
@@ -32,11 +42,16 @@ impl Input {
         };
         let result = match message.sanitize() {
             ClientMsg::MouseMove { dx, dy } => {
+                let (w, h) = (p.width.saturating_sub(1) as f64, p.height.saturating_sub(1) as f64);
+                self.pos = ((self.pos.0 + dx as f64).clamp(0.0, w), (self.pos.1 + dy as f64).clamp(0.0, h));
+                self.moved = true;
                 p.remote
                     .notify_pointer_motion(s, dx as f64, dy as f64, Default::default())
                     .await
             }
             ClientMsg::MousePos { x, y } => {
+                self.pos = (x as f64 * p.width.saturating_sub(1) as f64, y as f64 * p.height.saturating_sub(1) as f64);
+                self.moved = true;
                 p.remote
                     .notify_pointer_motion_absolute(
                         s,

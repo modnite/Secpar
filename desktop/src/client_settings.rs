@@ -18,6 +18,11 @@ pub struct Settings {
 impl Default for Settings {
     fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),active_decoder:None,note:String::new()}}
 }
+/// Host native first, then largest to smallest. The stream menu uses the same list.
+pub(crate) const RESOLUTIONS:[(u32,u32);6]=[(0,0),(3840,2160),(2560,1440),(1920,1080),(1280,720),(854,480)];
+pub(crate) fn resolution_label(w:u32,h:u32)->String {
+    if w==0 {"Host native".into()} else {format!("{w} × {h}")}
+}
 fn path()->Option<PathBuf> {
     #[cfg(windows)]
     { return std::env::var_os("APPDATA").map(|p|PathBuf::from(p).join("Secpar/client.json")); }
@@ -33,7 +38,7 @@ impl Settings {
         #[cfg(feature="ui-review")]
         if std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO").is_some() {return Self::default()}
         let mut value=path().and_then(|p|std::fs::read(p).ok()).filter(|b|b.len()<=8192).and_then(|b|serde_json::from_slice::<Self>(&b).ok()).unwrap_or_default();
-        if ![(0,0),(1280,720),(1920,1080),(2560,1440),(3840,2160)].contains(&(value.width,value.height)) {(value.width,value.height)=(1280,720);}
+        if !RESOLUTIONS.contains(&(value.width,value.height)) {(value.width,value.height)=(1280,720);}
         if ![30,60,90,120].contains(&value.fps) {value.fps=60;}
         value.kbps=value.kbps.clamp(1000,150000);value
     }
@@ -48,16 +53,16 @@ impl Settings {
     }
     pub fn ui(&mut self,ui:&mut egui::Ui)->bool {
         let old=self.clone();
-        ui.heading("Client settings");ui.add_space(8.);
+        design::page_header(ui,"Settings",|_|{});ui.add_space(8.);
         design::surface().inner_margin(10).show(ui,|ui| {
             ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
             ui.label(egui::RichText::new("Video").strong());
             ui.columns(2,|c| {
                 c[0].label("Resolution");
-                let text=if self.width==0 {"Host native".into()}else{format!("{} × {}",self.width,self.height)};
+                let text=resolution_label(self.width,self.height);
                 egui::ComboBox::from_id_salt("client-resolution").width(c[0].available_width()).selected_text(text).show_ui(&mut c[0],|ui| {
-                    for (w,h,label) in [(0,0,"Host native"),(1280,720,"1280 × 720"),(1920,1080,"1920 × 1080"),(2560,1440,"2560 × 1440"),(3840,2160,"3840 × 2160")] {
-                        if ui.selectable_label(self.width==w,label).clicked(){self.width=w;self.height=h;}
+                    for (w,h) in RESOLUTIONS {
+                        if ui.selectable_label(self.width==w,resolution_label(w,h)).clicked(){self.width=w;self.height=h;}
                     }
                 });
                 c[1].label("Frame rate");
@@ -85,14 +90,31 @@ impl Settings {
         ui.add_space(4.);
         design::surface().inner_margin(10).show(ui,|ui| {
             ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
-            ui.columns(2,|c| {
-                c[0].label("Fullscreen");
-                c[0].label("Ctrl+Alt+W");
-                c[1].label("Audio");c[1].checkbox(&mut self.audio,"Play host audio");
-                c[0].checkbox(&mut self.clipboard,"Share text clipboard");
-            });
+            ui.label(egui::RichText::new("Audio").strong());
+            ui.checkbox(&mut self.audio,"Play host audio");
+            ui.label(egui::RichText::new("Clipboard").strong());
+            ui.checkbox(&mut self.clipboard,"Share clipboard");
+        });
+        ui.add_space(4.);
+        design::surface().inner_margin(10).show(ui,|ui| {
+            ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
+            ui.label(egui::RichText::new("Keyboard").strong());
+            ui.columns(2,|c| {c[0].label("Fullscreen");c[1].label("Ctrl+Alt+W");});
         });
         if !self.note.is_empty(){ui.label(&self.note);}
         *self!=old
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resolutions_descend_after_native() {
+        assert_eq!(RESOLUTIONS[0],(0,0));
+        assert!(RESOLUTIONS[1..].windows(2).all(|p|p[0].0>p[1].0));
+        assert!(RESOLUTIONS.contains(&(854,480)));
+        assert_eq!(resolution_label(0,0),"Host native");
+        assert_eq!(resolution_label(854,480),"854 × 480");
     }
 }

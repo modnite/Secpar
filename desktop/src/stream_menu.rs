@@ -22,11 +22,38 @@ fn row(ui:&mut egui::Ui,kind:Icon,label:&str,value:&str,arrow:bool,checked:bool,
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-const RESOLUTIONS:[(u32,u32);6]=[(0,0),(3840,2160),(2560,1440),(1920,1080),(1280,720),(854,480)];
+pub(crate) const RESIZE_NOTICE_SHOW:std::time::Duration=std::time::Duration::from_millis(2500);
+pub(crate) const RESIZE_NOTICE_HIDE:std::time::Duration=std::time::Duration::from_millis(8500);
+pub(crate) const STRIP_HEIGHT:f32=28.;
+pub(crate) const FOOTER_LEFT:f32=9.;
+pub(crate) const AUDIO_OFF:&str="Host audio is off in settings";
+const WAITING:&str="Waiting for stream stats";
 
-fn resolution_label(w:u32,h:u32)->String {
-    if w==0 {"Host native".into()} else {format!("{w} × {h}")}
+/// Which part of the resize notice window an age falls in: hidden before 2.5 s, shown until 8.5 s, then cleared.
+pub(crate) fn resize_notice_state(age:std::time::Duration)->(bool,bool) {
+    (age>RESIZE_NOTICE_SHOW,age>RESIZE_NOTICE_HIDE)
 }
+
+/// The strip text. Before the first stats sample it only says it is waiting.
+pub(crate) fn strip_text(size:[usize;2],fps:u32,status:&str,stats:Option<(Option<u16>,f32,f32)>,decoder:Option<&str>)->String {
+    let Some((rtt,mbps,received))=stats else {return WAITING.into()};
+    let mut parts=vec![format!("{} × {}",size[0],size[1]),format!("{fps} fps"),status.to_string()];
+    if let Some(n)=rtt {parts.push(format!("RTT {n} ms"));}
+    parts.push(format!("{mbps:.1} Mbps"));
+    parts.push(format!("{received:.1} received fps"));
+    if let Some(decoder)=decoder {parts.push(decoder.to_string());}
+    parts.join("   ·   ")
+}
+
+/// 1px white line at alpha 23 across the inner width, 5px clear above and below.
+fn divider(ui:&mut egui::Ui) {
+    ui.add_space(5.);
+    let (rect,_)=ui.allocate_exact_size(Vec2::new(ui.available_width(),1.),Sense::hover());
+    ui.painter().rect_filled(rect,0.,Color32::from_white_alpha(23));
+    ui.add_space(5.);
+}
+
+use crate::client_settings::{RESOLUTIONS,resolution_label};
 
 impl App {
     pub(super) fn stream_menu(&mut self,ctx:&egui::Context) {
@@ -40,29 +67,24 @@ impl App {
         // hidden (Ctrl+Alt+S): no button, and nothing on screen counts as hovering it
         self.stream_menu_button_bounds=Some(button.map_or(Rect::NOTHING,|b|b.response.rect));
         // A strip across the top, like Parsec's: stream stats, or the resize notice for an old host.
-        let waiting=self.resize_wait.filter(|(at,_)|at.elapsed()>std::time::Duration::from_millis(2500));
-        if waiting.is_some() && self.resize_wait.is_some_and(|(at,_)|at.elapsed()>std::time::Duration::from_secs(8)) {self.resize_wait=None;}
+        let waiting=self.resize_wait.filter(|(at,_)|resize_notice_state(at.elapsed()).0);
+        if waiting.is_some() && self.resize_wait.is_some_and(|(at,_)|resize_notice_state(at.elapsed()).1) {self.resize_wait=None;}
         let strip=self.texture.is_some() && (self.show_stream_stats || waiting.is_some());
         if strip {
             let left=if self.menu_button_hidden {12.} else {60.};
             egui::Area::new(egui::Id::new("stream-stats")).order(egui::Order::Middle).interactable(false)
                 .fixed_pos(egui::pos2(0.,0.)).show(ctx,|ui|{
                     let width=ctx.content_rect().width();
-                    egui::Frame::new().fill(Color32::from_rgba_unmultiplied(15,17,19,215)).inner_margin(egui::Margin{left:left as i8,right:12,top:6,bottom:6}).show(ui,|ui|{
-                        ui.set_min_width(width-left-12.);ui.set_max_width(width-left-12.);
+                    egui::Frame::new().fill(Color32::from_rgba_unmultiplied(15,17,19,215)).inner_margin(egui::Margin{left:left as i8,right:left as i8,top:0,bottom:0}).show(ui,|ui|{
+                        let inner=width-2.*left;
                         let text=if waiting.is_some() {
                             "This computer's Secpar can't resize a live stream yet. Update it there, then pick the resolution again.".to_string()
                         } else {
-                            let mut parts=vec![format!("{} × {}",self.dimensions[0],self.dimensions[1]),format!("{} fps",self.stream_fps),self.status.clone()];
-                            if let Some((rtt,mbps,fps))=self.stream_stats {
-                                if let Some(n)=rtt {parts.push(format!("RTT {n} ms"));}
-                                parts.push(format!("{mbps:.1} Mbps"));
-                                parts.push(format!("{fps:.1} received fps"));
-                            }
-                            if let Some(decoder)=&self.client.active_decoder {parts.push(decoder.clone());}
-                            parts.join("   ·   ")
+                            strip_text(self.dimensions,self.stream_fps,&self.status,self.stream_stats,self.client.active_decoder.as_deref())
                         };
-                        ui.add(egui::Label::new(egui::RichText::new(text).size(13.).color(TEXT)).truncate());
+                        ui.allocate_ui_with_layout(Vec2::new(inner,STRIP_HEIGHT),egui::Layout::centered_and_justified(egui::Direction::LeftToRight),|ui|{
+                            ui.add(egui::Label::new(egui::RichText::new(text).size(13.).color(TEXT)).truncate());
+                        });
                     });
                 });
         }
@@ -86,14 +108,14 @@ impl App {
                         if row(ui,Icon::Stats,"Stream stats","",false,self.show_stream_stats,false).clicked(){self.show_stream_stats=!self.show_stream_stats;self.stream_menu_open=false;}
                         if row(ui,Icon::Audio,"Audio","",true,false,false).clicked(){self.menu_page=3;}
                         if row(ui,Icon::Help,"Help","",false,false,false).clicked(){let _=open::that("https://secpar.win/help/#stream-menu");}
-                        ui.add_space(5.);ui.separator();ui.add_space(5.);
+                        divider(ui);
                         if row(ui,Icon::Exit,"Disconnect","Ctrl+Alt+Q",false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
-                        ui.add_space(5.);ui.horizontal(|ui|{ui.add_space(10.);ui.label(egui::RichText::new(concat!("Secpar ",env!("CARGO_PKG_VERSION"))).size(10.).color(MUTED));});
+                        ui.add_space(5.);ui.horizontal(|ui|{ui.add_space(FOOTER_LEFT);ui.label(egui::RichText::new(concat!("Secpar ",env!("CARGO_PKG_VERSION"))).size(10.).color(MUTED));});
                     } else {
                         let page=self.menu_page;
                         let title=match page {1=>"Decoder",2=>"Displays",4=>"Resolution",_=>"Audio"};
                         if row(ui,Icon::Back,title,"",false,false,false).clicked(){self.menu_page=0;}
-                        ui.separator();
+                        divider(ui);
                         if page==1 {
                             for (preference,label) in [(video::Preference::Automatic,"Automatic"),(video::Preference::Software,"Software"),(video::Preference::Vaapi,"VA-API")] {
                                 if preference==video::Preference::Vaapi && video::hardware_available(ctx)!=Some(true){continue;}
@@ -122,7 +144,7 @@ impl App {
                                 ui.add_space(8.);
                                 if let Some(note)=&self.notice {ui.label(egui::RichText::new(note).size(12.).color(RED));}
                                 if let Some(error)=&self.audio_error {ui.label(error);}
-                                if self.audio.is_none() && self.audio_error.is_none() {ui.label(egui::RichText::new("Host audio is off in client settings").size(12.).color(MUTED));}
+                                if self.audio.is_none() && self.audio_error.is_none() {ui.label(egui::RichText::new(AUDIO_OFF).size(12.).color(MUTED));}
                                 if let Some(audio)=&self.audio {let details=audio.details();ui.label(egui::RichText::new(&details).size(12.).color(TEXT));if row(ui,Icon::Clipboard,"Copy details","",false,false,false).clicked(){ui.ctx().copy_text(details);}}
                                 if self.client.audio && row(ui,Icon::Audio,"Reopen output","",false,false,false).clicked(){self.open_audio();}
                             });
@@ -131,5 +153,35 @@ impl App {
                 });
             });
         self.stream_menu_bounds=Some(panel.response.rect);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    #[test]
+    fn resize_notice_window() {
+        assert_eq!(resize_notice_state(Duration::from_millis(2500)),(false,false));
+        assert_eq!(resize_notice_state(Duration::from_millis(2501)),(true,false));
+        assert_eq!(resize_notice_state(Duration::from_millis(8500)),(true,false));
+        assert_eq!(resize_notice_state(Duration::from_millis(8501)),(true,true));
+    }
+    #[test]
+    fn strip_waits_for_first_sample() {
+        assert_eq!(strip_text([1280,720],60,"Connected",None,None),"Waiting for stream stats");
+    }
+    #[test]
+    fn strip_joins_parts() {
+        let t=strip_text([1280,720],60,"Connected",Some((Some(2),18.44,59.96)),Some("H.264 · software"));
+        assert_eq!(t,"1280 × 720   ·   60 fps   ·   Connected   ·   RTT 2 ms   ·   18.4 Mbps   ·   60.0 received fps   ·   H.264 · software");
+        let t=strip_text([1280,720],60,"Connected",Some((None,1.,2.)),None);
+        assert!(!t.contains("RTT") && t.ends_with("2.0 received fps"));
+    }
+    #[test]
+    fn menu_strings() {
+        assert_eq!(AUDIO_OFF,"Host audio is off in settings");
+        assert_eq!(STRIP_HEIGHT,28.);
+        assert_eq!(6.+FOOTER_LEFT,15.);
     }
 }

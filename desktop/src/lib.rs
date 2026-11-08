@@ -46,6 +46,55 @@ fn device_name() -> String {
     if name.is_empty() { "Secpar Desktop".into() } else { name }
 }
 
+pub(crate) const START_FAILED_TITLE: &str = "Could not start the screen";
+
+/// Plain-language text for the host's stream errors. The desktop only receives the host's message text,
+/// so this matches on it. Unknown messages stay as they are.
+pub(crate) fn friendly_error(raw: &str) -> Option<&'static str> {
+    let text = raw.to_ascii_lowercase();
+    if text.contains("connection limit") {
+        Some("Connection limit reached. Three devices are already streaming. Disconnect a device and try again.")
+    } else if text.contains("encoder") {
+        Some("This computer has no hardware video encoder available. Update its graphics driver and try again.")
+    } else if text.contains("capture") {
+        Some("This computer could not capture its screen. If a login or admin prompt is showing, answer it there and retry.")
+    } else if text.contains("busy") || text.contains("already streaming") {
+        Some("The computer is busy. Try again or update Secpar on it.")
+    } else if text.contains("decoder") {
+        Some("This computer could not decode the video from the other computer.")
+    } else {
+        None
+    }
+}
+
+fn connecting_text(name: Option<&str>) -> String {
+    format!("Connecting to {}…", name.filter(|n| !n.is_empty()).unwrap_or("the computer"))
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::*;
+    #[test]
+    fn maps_host_errors_to_plain_text() {
+        assert!(friendly_error("Connection limit reached: 3 devices are already streaming. Disconnect a device and try again.").unwrap().starts_with("Connection limit reached."));
+        assert!(friendly_error("No hardware encoder").unwrap().contains("video encoder"));
+        assert!(friendly_error("Screen capture failed").unwrap().contains("capture its screen"));
+        assert!(friendly_error("This device is already streaming").unwrap().contains("busy"));
+        assert!(friendly_error("no decoder").unwrap().contains("decode"));
+        assert_eq!(friendly_error("Host ended the stream"), None);
+        for t in ["Connection limit","encoder","capture","busy","decoder"] {
+            let m = friendly_error(t).unwrap();
+            assert!(!m.contains("PC") && !m.contains("Couldn't"));
+        }
+    }
+    #[test]
+    fn connecting_names_the_computer() {
+        assert_eq!(connecting_text(Some("Office")), "Connecting to Office…");
+        assert_eq!(connecting_text(None), "Connecting to the computer…");
+        assert_eq!(connecting_text(Some("")), "Connecting to the computer…");
+    }
+}
+
 /// Explorer file offers use the same hosting service without opening a second UI.
 pub fn offer_file(path: String) -> Result<(), String> {
     tokio::runtime::Builder::new_current_thread()
@@ -281,13 +330,16 @@ impl App {
             }
             app.stream_menu_open=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("menu"));
             app.show_stream_stats=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("stats"));
+            if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("resolution")) {app.menu_page=4;}
+            if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("audio")) {app.menu_page=3;}
+            if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("waiting")) {app.stream_stats=None;}
         }
         app
     }
     fn pairing_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         design::surface().show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("Pair a computer").size(15.).strong());
+            ui.label(egui::RichText::new("Pair a computer").size(14.).strong());
             ui.add_sized(
                 [ui.available_width(), 34.],
                 egui::TextEdit::singleline(&mut self.pair_link)
@@ -295,52 +347,16 @@ impl App {
                     .password(true)
                     .margin(egui::vec2(10., 8.)),
             );
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Resolution")
-                        .size(12.)
-                        .color(design::MUTED),
-                );
-                egui::ComboBox::from_id_salt("resolution")
-                    .width(142.)
-                    .selected_text(if self.options.width == 0 {
-                        "Host native".into()
-                    } else {
-                        format!("{} × {}", self.options.width, self.options.height)
-                    })
-                    .show_ui(ui, |ui| {
-                        for (w, h) in [
-                            (0, 0),
-                            (1280, 720),
-                            (1920, 1080),
-                            (2560, 1440),
-                            (3840, 2160),
-                        ] {
-                            let label = if w == 0 {
-                                "Host native".into()
-                            } else {
-                                format!("{w} × {h}")
-                            };
-                            if ui
-                                .selectable_label(self.options.width == w, label)
-                                .clicked()
-                            {
-                                self.options.width = w;
-                                self.options.height = h;
-                            }
-                        }
-                    });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(
-                            !self.pair_link.trim().is_empty(),
-                            design::primary("Pair and connect"),
-                        )
-                        .clicked()
-                    {
-                        self.start(ctx, false);
-                    }
-                });
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), design::CONTROL), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        !self.pair_link.trim().is_empty(),
+                        design::primary("Pair and connect"),
+                    )
+                    .clicked()
+                {
+                    self.start(ctx, false);
+                }
             });
         });
     }
@@ -741,6 +757,14 @@ impl eframe::App for App {
         raw.events=local;
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if let Some(tray) = &self.tray {
+            tray.set_connected(self.command.is_some());
+            if tray.take_disconnect() && self.command.is_some() {
+                self.capture(ctx, false);
+                self.send(Command::Stop);
+                self.stream_menu_open = false;
+            }
+        }
         if self.command.is_some() {
             if self.awake.is_none() && !self.awake_tried {
                 self.awake_tried = true;
@@ -929,7 +953,14 @@ impl eframe::App for App {
             if let Some(error)=self.connection_error.clone() {
                 egui::TopBottomPanel::top("connection-error").show(ctx,|ui|{
                     ui.horizontal_wrapped(|ui|{
-                        ui.colored_label(Color32::from_rgb(255,160,140),&error);
+                        let friendly=friendly_error(&error);
+                        if friendly.is_some() {ui.label(egui::RichText::new(START_FAILED_TITLE).strong().color(design::BAD));}
+                        ui.colored_label(design::BAD,friendly.unwrap_or(&error));
+                        if ui.small_button("Retry").clicked() {
+                            self.connection_error=None;
+                            if !self.pair_link.trim().is_empty() {self.start(ctx,false);}
+                            else if self.computer.is_some() {self.start(ctx,true);}
+                        }
                         if ui.small_button("Copy error").clicked(){ui.ctx().copy_text(error);}
                         if ui.small_button("Dismiss").clicked(){self.connection_error=None;}
                     });
@@ -1036,17 +1067,17 @@ impl eframe::App for App {
                                 });
                             });
                             ui.add_space(8.);
-                            egui::CollapsingHeader::new("Pair another computer")
+                            egui::CollapsingHeader::new("Add computer")
                                 .show(ui, |ui| self.pairing_ui(ui, ctx));
                         } else if self.account.user.is_some() {
-                            egui::CollapsingHeader::new("Pair with a code").show(ui,|ui|self.pairing_ui(ui,ctx));
+                            egui::CollapsingHeader::new("Add computer").show(ui,|ui|self.pairing_ui(ui,ctx));
                         } else {
                             self.pairing_ui(ui, ctx);
                         }
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label("Connecting to the remote desktop…");
+                        ui.label(connecting_text(self.computer.as_ref().map(|c|c.name.as_str())));
                     });
                 }
             });

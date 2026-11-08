@@ -667,6 +667,53 @@ describe("browser form regression", () => {
   });
 });
 
+describe("account pages", () => {
+  const dash = String.fromCharCode(0x2014);
+  it("states the purpose of the app account on the sign-in and sign-up pages", async () => {
+    env.RESEND_API_KEY = "test-key";
+    env.EMAIL_FROM = "accounts@mail.secpar.win";
+    for (const path of ["/auth/sign-in", "/auth/register"]) {
+      const markup = await (await handle(new Request(base + path), env)).text();
+      expect(markup).toContain("only used inside the Secpar app");
+      expect(markup).toContain("nothing to log in to on the website");
+      expect(markup).toContain('rel="stylesheet" href="/assets/account.css"');
+      expect(markup).toContain('<label for="email">');
+      expect(markup).not.toContain(dash);
+    }
+  });
+  it("keeps the native flow URLs and tells the user what the code is for", async () => {
+    const start = await call("/auth/device", null, "POST", { name: "Desk PC" });
+    const device = await start.json();
+    const redirect = await handle(new Request(device.verification_uri_complete), env);
+    const location = redirect.headers.get("location")!;
+    expect(location).toContain("/auth/start?activate_code=");
+    const code = device.user_code as string;
+    const signIn = await handle(new Request(base + "/auth/sign-in?activate_code=" + code), env);
+    const markup = await signIn.text();
+    expect(markup).toContain('name="activate_code" value="' + code + '"');
+    expect(markup).toContain("waiting in the Secpar app");
+  });
+  it("serves the stylesheet, fonts and wordmark from this origin only", async () => {
+    for (const [path, type] of [
+      ["/assets/account.css", "text/css"],
+      ["/assets/rubik-400.woff", "font/woff"],
+      ["/assets/rubik-500.woff", "font/woff"],
+      ["/assets/secpar-wordmark.svg", "image/svg+xml"],
+    ]) {
+      const res = await handle(new Request(base + path), env);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain(type);
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    }
+    expect((await handle(new Request(base + "/assets/other.css"), env)).status).toBe(401);
+    expect((await handle(new Request(base + "/assets/account.css", { method: "POST" }), env)).status).toBe(405);
+    const page = await handle(new Request(base + "/auth/sign-in"), env);
+    expect(page.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    );
+  });
+});
+
 describe("blocked people", () => {
   it("lists only the current account's blocks and supports unblocking", async () => {
     expect((await call("/v1/blocks/bob", "alice", "PUT")).status).toBe(200);

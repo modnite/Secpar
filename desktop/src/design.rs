@@ -2,7 +2,11 @@ use eframe::egui::{self, Color32, RichText, Stroke};
 
 pub const ACCENT: Color32 = Color32::from_rgb(10, 255, 182);
 pub const BG: Color32 = Color32::from_rgb(17, 21, 28);
-pub const MUTED: Color32 = Color32::from_rgb(150, 162, 181);
+pub const MUTED: Color32 = Color32::from_rgb(152, 162, 184);
+pub const BAD: Color32 = Color32::from_rgb(248, 113, 113);
+pub const OK: Color32 = Color32::from_rgb(52, 211, 153);
+pub const WARN: Color32 = Color32::from_rgb(251, 191, 36);
+pub const TEXT: Color32 = Color32::from_rgb(230, 234, 242);
 pub const LINE: Color32 = Color32::from_rgb(49, 59, 73);
 pub const CONTROL: f32 = 32.;
 
@@ -16,11 +20,11 @@ pub fn configure(ctx: &egui::Context) {
     style.visuals.selection.bg_fill = Color32::from_rgb(24, 90, 75);
     style.visuals.selection.stroke = Stroke::new(1_f32, ACCENT);
     style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1_f32, LINE);
-    style.visuals.widgets.noninteractive.fg_stroke.color = Color32::from_rgb(224, 230, 239);
+    style.visuals.widgets.noninteractive.fg_stroke.color = TEXT;
     style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(31, 39, 51);
     style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(31, 39, 51);
     style.visuals.widgets.inactive.bg_stroke = Stroke::new(1_f32, Color32::from_rgb(65, 77, 94));
-    style.visuals.widgets.inactive.fg_stroke.color = Color32::from_rgb(221, 228, 238);
+    style.visuals.widgets.inactive.fg_stroke.color = TEXT;
     style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(40, 52, 67);
     style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(40, 52, 67);
     style.visuals.widgets.hovered.bg_stroke = Stroke::new(1_f32, Color32::from_rgb(105, 128, 150));

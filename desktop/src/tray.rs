@@ -11,6 +11,9 @@ pub struct Tray {
     _icon: TrayIcon,
     quitting: Arc<AtomicBool>,
     opener: Opener,
+    disconnect: MenuItem,
+    disconnect_asked: Arc<AtomicBool>,
+    enabled: std::cell::Cell<bool>,
 }
 impl Tray {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Option<Self> {
@@ -28,9 +31,10 @@ impl Tray {
                 .ok()?;
         let menu = Menu::new();
         let open = MenuItem::new("Open Secpar", true, None);
+        let disconnect = MenuItem::new("Disconnect", false, None);
         let restart = MenuItem::new("Restart Secpar", true, None);
         let quit = MenuItem::new("Quit Secpar", true, None);
-        menu.append_items(&[&open, &restart, &PredefinedMenuItem::separator(), &quit])
+        menu.append_items(&[&open, &disconnect, &restart, &PredefinedMenuItem::separator(), &quit])
             .ok()?;
         let tray = TrayIconBuilder::new()
             .with_tooltip("Secpar")
@@ -45,6 +49,10 @@ impl Tray {
         let menu_opener = opener.clone();
         let quit_id = quit.id().clone();
         let restart_id = restart.id().clone();
+        let disconnect_id = disconnect.id().clone();
+        let disconnect_asked = Arc::new(AtomicBool::new(false));
+        let asked = disconnect_asked.clone();
+        let ctx_disconnect = ctx.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if event.id == quit_id || event.id == restart_id {
                 let restart = event.id == restart_id;
@@ -57,6 +65,9 @@ impl Tray {
                     opener.open();
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                 });
+            } else if event.id == disconnect_id {
+                asked.store(true, Ordering::Relaxed);
+                ctx_disconnect.request_repaint();
             } else if event.id == open_id {
                 menu_opener.open();
             }
@@ -78,10 +89,23 @@ impl Tray {
             _icon: tray,
             quitting,
             opener,
+            disconnect,
+            disconnect_asked,
+            enabled: std::cell::Cell::new(false),
         })
     }
     #[cfg(feature="tray-review")]
     pub fn opener(&self) -> Opener {self.opener.clone()}
+    /// Greys out Disconnect while no stream is connected.
+    pub fn set_connected(&self, connected: bool) {
+        if self.enabled.replace(connected) != connected {
+            self.disconnect.set_enabled(connected);
+        }
+    }
+    /// True once after Disconnect was picked in the tray menu.
+    pub fn take_disconnect(&self) -> bool {
+        self.disconnect_asked.swap(false, Ordering::Relaxed)
+    }
     pub fn hide_on_close(&self, ctx: &Context) -> bool {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting.load(Ordering::Relaxed) {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);

@@ -32,6 +32,24 @@ pub struct OwnedComputer {
     pub linked: u8,
     pub online: u8,
 }
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Presence { Online, Offline, Streaming, Locked }
+/// Status text and dot colour for a computer card. Online is OK, streaming is ACCENT, locked and
+/// "Host update required" are WARN, offline is MUTED.
+pub fn computer_status(is_local: bool, linked: bool, presence: Presence) -> (&'static str, eframe::egui::Color32) {
+    use crate::design::{ACCENT, MUTED, OK, WARN};
+    if is_local { return ("This computer", OK); }
+    if !linked { return ("Host update required", WARN); }
+    match presence {
+        Presence::Streaming => ("Streaming", ACCENT),
+        Presence::Locked => ("Locked", WARN),
+        Presence::Online => ("Online", OK),
+        Presence::Offline => ("Offline", MUTED),
+    }
+}
+pub const SIGN_IN_CONFIRM: &str = "Confirm this code in your browser";
+pub const NO_COMPUTERS: &str = "No computers yet";
+pub fn pairing_with(name: &str) -> String { format!("Pairing with {name}…") }
 pub enum OwnedConnection {
     Cached { owner: String, computer: Computer },
     Pair { owner: String, id: String, pairing: Pairing },
@@ -209,6 +227,7 @@ impl Panel {
         design::page_header(ui,"Computers",|ui| {
             if let Some(user) = self.user.clone() {
                 if ui.add_enabled(!self.busy,egui::Button::new("Sign out")).clicked() { self.send(Command::SignOut); }
+                if ui.add_enabled(!self.busy,egui::Button::new("Refresh")).clicked() { self.send(Command::Refresh); }
                 ui.add(egui::Label::new(user.handle).truncate());
             } else if ui.add_enabled(!self.busy && self.waiting.is_none(),egui::Button::new("Sign in")).clicked() {
                 self.send(Command::SignIn);
@@ -218,7 +237,7 @@ impl Panel {
         if let Some((code,url)) = self.waiting.clone() {
             design::surface().show(ui,|ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Confirm in your browser:"); ui.strong(code);
+                    ui.label(SIGN_IN_CONFIRM); ui.strong(code);
                     if ui.button("Open browser").clicked() { std::thread::spawn(move || { let _=open::that(url); }); }
                     if ui.button("Cancel").clicked() { self.send(Command::Cancel); }
                 });
@@ -233,11 +252,13 @@ impl Panel {
                     design::surface().inner_margin(8).show(ui,|ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            design::dot(ui,if computer.online==1 || is_local {design::ACCENT} else {design::MUTED});
+                            let presence=if computer.online==1 {Presence::Online}else{Presence::Offline};
+                            let (status,color)=computer_status(is_local,computer.linked==1,presence);
+                            design::dot(ui,color);
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y=2.;
                                 ui.add(egui::Label::new(egui::RichText::new(&computer.name).strong()).truncate());
-                                ui.label(egui::RichText::new(if is_local {"This computer"} else if computer.online==1 {"Online"} else {"Offline"}).size(12.).color(design::MUTED));
+                                ui.label(egui::RichText::new(status).size(12.).color(design::MUTED));
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                                 if !is_local && ui.add_enabled(!self.busy && computer.linked==1,design::primary("Connect")).clicked() { connect=Some(computer.id.clone()); }
@@ -247,7 +268,7 @@ impl Panel {
                         });
                     });
                 }
-                if self.computers.is_empty() { ui.label(egui::RichText::new("No computers linked yet").color(design::MUTED)); }
+                if self.computers.is_empty() { ui.label(egui::RichText::new(NO_COMPUTERS).color(design::MUTED)); }
             });
             if let Some(id)=connect { self.connect_owned(id); }
             if !self.note.is_empty() { ui.label(&self.note); }
@@ -429,7 +450,7 @@ impl Panel {
         ui.add_space(8.);
         if self.user.is_none() {
             if let Some((code, url)) = self.waiting.clone() {
-                ui.label("Confirm this code in your browser");
+                ui.label(SIGN_IN_CONFIRM);
                 ui.heading(code);
                 ui.horizontal(|ui| {
                     if ui.button("Open browser").clicked() {
@@ -581,7 +602,7 @@ impl Panel {
                                                 )));
                                             }
                                         } else {
-                                            ui.weak("Request sent");
+                                            ui.label(egui::RichText::new("Request sent").size(12.).color(crate::design::MUTED));
                                         }
                                     }
                                 },
@@ -932,7 +953,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                                                         Ok(value)=>{
                                                             if let Some(request)=value["id"].as_str().filter(|id|path_id(id).is_ok()) {
                                                                 pending_pair=Some(PendingPair{id:request.into(),owner,computer:id,fingerprint,expires:Instant::now()+Duration::from_secs(120),next:Instant::now()+Duration::from_secs(2)});
-                                                                let _=events.send(Event::Message(format!("Waiting for {}…",computer.name))).await;
+                                                                let _=events.send(Event::Message(pairing_with(&computer.name))).await;
                                                                 Ok(String::new())
                                                             }else{Err((StatusCode::BAD_GATEWAY,"Invalid pairing response".into()))}
                                                         }
@@ -1239,5 +1260,26 @@ mod tests {
             assert!(error.1.contains("could not save"));
         });
         server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use crate::design::{ACCENT, MUTED, OK, WARN};
+    #[test]
+    fn status_text_and_colour() {
+        assert_eq!(computer_status(true, true, Presence::Offline), ("This computer", OK));
+        assert_eq!(computer_status(false, true, Presence::Online), ("Online", OK));
+        assert_eq!(computer_status(false, true, Presence::Offline), ("Offline", MUTED));
+        assert_eq!(computer_status(false, true, Presence::Streaming), ("Streaming", ACCENT));
+        assert_eq!(computer_status(false, true, Presence::Locked), ("Locked", WARN));
+        assert_eq!(computer_status(false, false, Presence::Online), ("Host update required", WARN));
+    }
+    #[test]
+    fn strings() {
+        assert_eq!(pairing_with("Office"), "Pairing with Office…");
+        assert_eq!(NO_COMPUTERS, "No computers yet");
+        assert_eq!(SIGN_IN_CONFIRM, "Confirm this code in your browser");
     }
 }

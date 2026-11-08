@@ -107,7 +107,7 @@ impl Panel {
                 name: "Studio PC".into(),
                 devices: vec![Device {
                     id: "sample".into(),
-                    name: "Android phone".into(),
+                    name: "Pixel 8".into(),
                     connected: false,
                 }],
                 locked: false,
@@ -236,7 +236,6 @@ impl Panel {
         ui.add_space(if self.settings_open { 0. } else { 10. });
         if cfg!(target_os = "linux") {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Local network hosting").color(design::MUTED));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Account").clicked() { self.account_open = true; }
                 });
@@ -341,8 +340,6 @@ impl Panel {
                     });
                     ui.vertical(|ui| {
                         ui.set_width(176.);
-                        ui.label("Scan in Secpar on Android.");
-                        ui.add_space(12.);
                         if ui
                             .add_enabled(
                                 !self.link.is_empty(),
@@ -384,7 +381,6 @@ impl Panel {
             egui::Modal::new(egui::Id::new("remove-host-device")).show(ctx, |ui| {
                 ui.heading("Remove paired device?");
                 ui.label(&device.name);
-                ui.label("Its connection will close and it will need to pair again.");
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
                         self.revoke = None;
@@ -444,7 +440,7 @@ impl Panel {
                     ui.set_width(ui.available_width());
                     ui.label(egui::RichText::new("Device access").strong());
                     self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
-                    self.setting_toggle(ui,&config,"allow_clip","Share clipboard","Allow clipboard exchange with paired devices.");
+                    self.setting_toggle(ui,&config,"allow_clip","Allow clipboard sharing","Allow clipboard exchange with paired devices.");
                 });
                 design::surface().inner_margin(10).show(&mut columns[1], |ui| {
                     ui.set_width(ui.available_width());

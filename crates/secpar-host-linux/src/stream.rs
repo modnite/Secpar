@@ -147,7 +147,16 @@ impl Stream {
                 if input_shared.stop.load(Ordering::Relaxed) {
                     break;
                 }
-                tokio::select! {msg=input_rx.recv()=>match msg {Some(msg)=>if target.apply(msg).await.is_err(){break},None=>break},_=tokio::time::sleep(Duration::from_millis(20))=>{}}
+                tokio::select! {msg=input_rx.recv()=>match msg {Some(msg)=>{
+                    if target.apply(msg).await.is_err(){break}
+                    if let Some((x,y))=target.take_pos() {
+                        let mut packet=[0u8;5];
+                        packet[..2].copy_from_slice(&(x.clamp(i16::MIN as i32,i16::MAX as i32) as i16).to_be_bytes());
+                        packet[2..4].copy_from_slice(&(y.clamp(i16::MIN as i32,i16::MAX as i32) as i16).to_be_bytes());
+                        packet[4]=1;
+                        input_shared.send(header(Type::Cursor,0),&packet);
+                    }
+                },None=>break},_=tokio::time::sleep(Duration::from_millis(20))=>{}}
             }
             let _ = target.release_all().await;
         });
@@ -264,6 +273,8 @@ impl Stream {
                 }
             });
         }
+        // The portal hides the pointer in the video; clients draw this one at the position we send.
+        out.send(ServerMsg::CursorShape { png: STANDARD.encode(include_bytes!("arrow.png")), hx: 1, hy: 1 });
         out.send(ServerMsg::StreamDisplays {
             list: vec![Display {
                 id: "portal".into(),
