@@ -169,7 +169,7 @@ impl Account {
             .await
             .map_err(|_| (status, "Incomplete host response".into()))?
         {
-            if bytes.len() + chunk.len() > 8192 {
+            if bytes.len() + chunk.len() > 32768 {
                 return Err((status, "Invalid host response".into()));
             }
             bytes.extend_from_slice(&chunk);
@@ -197,6 +197,29 @@ impl Account {
                 Err((_, note)) => inner.state = view(Some(registration), false, &note),
             }
         }
+    }
+    /// Friends of the owner and what each may do. Read fresh on every admission.
+    pub async fn roster(&self) -> Result<crate::guest_policy::Roster, String> {
+        let registration = self.inner.lock().await.registration.clone().ok_or("Host is not linked")?;
+        let rows = self.request(&registration, Method::GET, "/v1/host/friends").await.map_err(|(_, note)| note)?;
+        crate::guest_policy::Roster::parse(&rows).map_err(Into::into)
+    }
+    /// The online lease of one claimed guest request.
+    pub async fn lease(&self, request: &str) -> Result<crate::guest_policy::Lease, String> {
+        if !valid_id(request) { return Err("Invalid request".into()); }
+        let registration = self.inner.lock().await.registration.clone().ok_or("Host is not linked")?;
+        let row = self.request(&registration, Method::GET, &format!("/v1/host/requests/{request}")).await.map_err(|(_, note)| note)?;
+        serde_json::from_value(row).map_err(|_| "Invalid request response".into())
+    }
+    /// Ask the Worker and the owner's friend list, then decide. Nothing is cached.
+    pub async fn admit_guest(
+        &self,
+        request: &str,
+        guest: &str,
+        signed: &std::collections::BTreeSet<String>,
+    ) -> Result<crate::guest_policy::Admission, String> {
+        let (roster, lease) = tokio::try_join!(self.roster(), self.lease(request))?;
+        crate::guest_policy::admit(&roster, &lease, signed, guest).map_err(|d| d.message().into())
     }
     pub async fn poll_pairings<F, Fut>(&self, mut make_link: F) -> Result<usize, String>
     where F: FnMut(String) -> Fut, Fut: std::future::Future<Output = Result<String, String>> {

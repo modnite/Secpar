@@ -4,6 +4,7 @@ pub mod account;
 pub mod account_link;
 pub mod audio;
 pub mod files;
+pub mod guest_policy;
 pub mod limits;
 pub mod media;
 pub mod pad;
