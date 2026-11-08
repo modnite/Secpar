@@ -2,13 +2,8 @@ use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, PointerButton};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-pub fn fullscreen_shortcut(event: &Event) -> bool {
-    matches!(event,Event::Key{key:Key::F,pressed:true,repeat:false,modifiers,..}
-        if modifiers.alt && !modifiers.ctrl && !modifiers.shift && !modifiers.mac_cmd)
-}
-
 /// Client hotkeys: Ctrl+Alt+W windowed/fullscreen, Ctrl+Alt+Q disconnect, Ctrl+Alt+S hide or show
-/// the Secpar button. Alt+F (windowed/fullscreen) stays.
+/// the Secpar button.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Shortcut {
     Fullscreen,
@@ -23,7 +18,6 @@ pub fn shortcut(event: &Event) -> Option<(Shortcut, Key)> {
     }
     let ctrl_alt = m.ctrl && m.alt && !m.shift;
     let found = match key {
-        Key::F if m.alt && !m.ctrl && !m.shift => Shortcut::Fullscreen,
         Key::W if ctrl_alt => Shortcut::Fullscreen,
         Key::Q if ctrl_alt => Shortcut::Disconnect,
         Key::S if ctrl_alt => Shortcut::MenuButton,
@@ -347,24 +341,12 @@ mod tests {
         assert_eq!(shortcut(&key(Key::W,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::Fullscreen));
         assert_eq!(shortcut(&key(Key::Q,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::Disconnect));
         assert_eq!(shortcut(&key(Key::S,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::MenuButton));
-        assert_eq!(shortcut(&key(Key::F,Modifiers{alt:true,..Default::default()},false)).map(|s|s.0),Some(Shortcut::Fullscreen));
+        assert!(shortcut(&key(Key::F,Modifiers{alt:true,..Default::default()},false)).is_none(), "Alt+F is gone");
         assert!(shortcut(&key(Key::W,ctrl_alt,true)).is_none(), "no key repeat");
         assert!(shortcut(&key(Key::W,Modifiers{ctrl:true,shift:true,..Default::default()},false)).is_none());
         assert!(shortcut(&key(Key::W,Modifiers{ctrl:true,..Default::default()},false)).is_none());
         assert!(shortcut(&key(Key::S,Modifiers{ctrl:true,alt:true,shift:true,..Default::default()},false)).is_none());
         assert!(shortcut(&key(Key::Q,Modifiers{alt:true,..Default::default()},false)).is_none());
-    }
-
-    #[test]
-    fn fullscreen_shortcut_requires_exact_alt_f_and_no_repeat_or_release() {
-        let event=|modifiers,pressed,repeat| Event::Key{key:Key::F,physical_key:Some(Key::F),pressed,repeat,modifiers};
-        let alt=Modifiers{alt:true,..Default::default()};
-        assert!(fullscreen_shortcut(&event(alt,true,false)));
-        assert!(!fullscreen_shortcut(&event(alt,false,false)));
-        assert!(!fullscreen_shortcut(&event(alt,true,true)));
-        assert!(!fullscreen_shortcut(&event(Modifiers::default(),true,false)));
-        assert!(!fullscreen_shortcut(&event(Modifiers{ctrl:true,..alt},true,false)));
-        assert!(!fullscreen_shortcut(&event(Modifiers{shift:true,..alt},true,false)));
     }
 
     #[test]

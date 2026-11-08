@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub enum CaptureShortcut { #[default] CtrlAltG, CtrlShiftG, CtrlAltZ }
-// Retained in persisted settings for compatibility; Alt+F now owns fullscreen.
+// Retained in persisted settings for compatibility; Ctrl+Alt+W now owns fullscreen.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -87,7 +87,7 @@ impl Settings {
             ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
             ui.columns(2,|c| {
                 c[0].label("Fullscreen");
-                c[0].label("Alt+F");
+                c[0].label("Ctrl+Alt+W");
                 c[1].label("Audio");c[1].checkbox(&mut self.audio,"Play host audio");
                 c[0].checkbox(&mut self.clipboard,"Share text clipboard");
             });

@@ -1,4 +1,5 @@
 mod account;
+mod awake;
 mod client_settings;
 mod video;
 mod picture;
@@ -153,6 +154,9 @@ struct App {
     stream_menu_open: bool,
     menu_page: u8,
     show_stream_stats: bool,
+    /// Held while a stream is connected: the screen must not dim or sleep.
+    awake: Option<awake::KeepAwake>,
+    awake_tried: bool,
     menu_button_hidden: bool,
     stream_menu_bounds: Option<egui::Rect>,
     stream_menu_button_bounds: Option<egui::Rect>,
@@ -240,6 +244,8 @@ impl App {
             stream_menu_open: false,
             menu_page: 0,
             show_stream_stats: false,
+            awake: None,
+            awake_tried: false,
             menu_button_hidden: false,
             stream_menu_bounds: None,
             stream_menu_button_bounds: None,
@@ -730,6 +736,15 @@ impl eframe::App for App {
         raw.events=local;
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if self.command.is_some() {
+            if self.awake.is_none() && !self.awake_tried {
+                self.awake_tried = true;
+                self.awake = awake::KeepAwake::new();
+            }
+        } else {
+            self.awake = None;
+            self.awake_tried = false;
+        }
         let scale = ctx.pixels_per_point();
         if self.brand_scale != scale {
             // Filter to physical pixels before upload. GPU bilinear minification
@@ -837,9 +852,9 @@ impl eframe::App for App {
                             }
                             if ui
                                 .button(if self.fullscreen {
-                                    "Window · Alt+F"
+                                    "Window · Ctrl+Alt+W"
                                 } else {
-                                    "Fullscreen · Alt+F"
+                                    "Fullscreen · Ctrl+Alt+W"
                                 })
                                 .clicked()
                             {

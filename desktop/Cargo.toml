@@ -61,7 +61,7 @@ tauri-winres = "0.3.6"
 secpar-host = { path = "../host/src-tauri", default-features = false }
 raw-window-handle = "0.6.2"
 tray-icon = { version = "0.25.1", default-features = false }
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Security"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_System_Power"] }
 
 [features]
 tray-review = []
@@ -74,6 +74,7 @@ required-features = ["ui-review"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 secpar-host-linux = { path = "../crates/secpar-host-linux" }
+dbus = "0.9"
 gstreamer = "0.24.5"
 gstreamer-app = "0.24.5"
 gstreamer-video = "0.24.5"

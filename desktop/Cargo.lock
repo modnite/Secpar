@@ -3839,6 +3839,7 @@ name = "secpar-desktop"
 version = "3.14.0"
 dependencies = [
  "cpal",
+ "dbus",
  "eframe",
  "gstreamer",
  "gstreamer-app",
