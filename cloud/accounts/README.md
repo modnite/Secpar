@@ -2,7 +2,7 @@
 
 This is a separate Cloudflare Worker with D1 storage. It does not change the original PC Remote relay, existing owner pairings or Preview 10. The API is deployed at https://accounts.secpar.win. Desktop sign-in/friend UI is implemented in development source; host/Android integration is not complete. Email/password is the default sign-in. The Resend sender is configured, registration/reset pages are enabled, and Resend accepted a simulated-delivery probe from the configured sender. The user confirmed registration, email verification and browser sign-in on 2026-11-05.
 
-Implemented HTTP endpoints provide email/password registration, email verification, sign-in and password reset, optional GitHub OAuth with browser-bound one-use state and PKCE, hashed opaque account sessions, logout/revocation, native device approval/polling, friend requests with explicit acceptance, blocking/unblocking, owner computer metadata, guest connection requests, owner approval of a subset of requested permissions, one-use guest claims and short-lived ES256 admission grants. No endpoint shares an existing owner device token, PIN or relay master key.
+Implemented HTTP endpoints provide email/password registration, email verification, sign-in and password reset, optional GitHub OAuth with browser-bound one-use state and PKCE, hashed opaque account sessions, logout/revocation, native device approval/polling, friend requests by username with explicit acceptance, blocking/unblocking, owner computer metadata, guest connection requests, owner approval of a subset of requested permissions, one-use guest claims and short-lived ES256 admission grants. No endpoint shares an existing owner device token, PIN or relay master key.
 
 Guest grants are restricted to view/audio/gamepad/keyboard/mouse/clipboard/files. Unlock, power and other administrator actions cannot be requested. The host must verify issuer, audience, signature, expiry, intended guest and grant id, then check the grant's active status on this service before accepting it. It must keep checking the lease and disconnect on revocation, block, lost friendship or lease expiry. JWT signature verification alone does not provide immediate revocation. Admission tokens expire after at most 60 seconds; an accepted session lease lasts at most eight hours. Host enforcement and gamepad-seat assignment are still to be implemented; these API tests are not proof that multiplayer is usable.
 
@@ -41,6 +41,16 @@ Passwords accept 8–256 characters with whitespace preserved and no arbitrary c
 An email/password account gets an internal `password:<uuid>` identity in the legacy non-null github_id column. It is never linked to a GitHub identity merely because email addresses match. Existing GitHub account rows and owner pairings are preserved. Unverified accounts cannot sign in; an email owner can recover an existing unverified signup by resetting its password. Existing registrations do not overwrite stored credentials.
 
 Browser form pages use `Referrer-Policy: same-origin`. Using `no-referrer` makes browsers send `Origin: null` on these POSTs, which conflicts with the exact-origin CSRF check. The origin check remains enforced, and no referrer is sent to other sites. The failure was reproduced with a real browser form before the fix.
+
+## Usernames and friends
+
+A username is `accounts.handle`. It has 3 to 30 characters from `A-Z a-z 0-9 _` and is unique without regard to case. Migration `0005_usernames.sql` adds `handle_lower` with a unique index. The first sign-up to use a name keeps it. The migration renames later duplicates to `name_2`, `name_3` and so on, and maps hyphens to underscores. `handle_lower` stays nullable so a Worker from before the migration can still insert rows during a deploy.
+
+Password sign-up stores the name as typed and answers `409` with `data-error="username_taken"` on the page when any account has the name in any letter case. The answer depends only on the username, so it says nothing about email addresses. GitHub sign-in maps every character outside letters and digits to an underscore, pads names under three characters with underscores, and adds `_2`, `_3` and so on when the name is taken. The username is chosen once. Later logins update the display name and keep the username.
+
+`PUT /v1/friends/by-username/:name` sends a friend request. The name is trimmed, loses one leading `@` and is lowercased before lookup. Unknown names, malformed names, your own name and blocked accounts all answer `404 {"error":"account_unavailable"}`. A match answers `202 {"state":"pending"}` and uses the same pending-invite insert as the id route. The route shares the `friend` rate limit (20 per minute per address) and counts every attempt, so it cannot be used to scan names. There is no search or listing endpoint. `GET /v1/me` returns the caller's own `handle`.
+
+`PUT /v1/friends/:id` still works with an account id for older app versions. Accept, remove and block use ids.
 
 ## Page styling
 

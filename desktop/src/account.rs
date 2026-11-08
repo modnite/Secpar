@@ -110,7 +110,7 @@ pub struct Panel {
     blocked: Vec<User>,
     waiting: Option<(String, String)>,
     note: String,
-    code: String,
+    username: String,
     busy: bool,
     tx: mpsc::Sender<Command>,
     events: mpsc::Receiver<Event>,
@@ -177,7 +177,7 @@ impl Panel {
                     blocked: vec![],
                     waiting: None,
                     note: String::new(),
-                    code: String::new(),
+                    username: String::new(),
                     busy: false,
                     tx,
                     events: rx,
@@ -198,7 +198,7 @@ impl Panel {
             blocked: vec![],
             waiting: None,
             note: String::new(),
-            code: String::new(),
+            username: String::new(),
             busy: false,
             tx,
             events,
@@ -304,7 +304,7 @@ impl Panel {
                     self.blocked = blocked;
                     self.waiting = None;
                     self.note = note;
-                    self.code.clear();
+                    self.username.clear();
                 }
                 Event::Message(note) => self.note = note,
                 Event::Busy(busy) => self.busy = busy,
@@ -481,10 +481,8 @@ impl Panel {
             }
         } else {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Copy my friend code").clicked() {
-                    ui.ctx().copy_text(self.user.as_ref().unwrap().id.clone());
-                    self.note = "Friend code copied".into();
-                }
+                let handle = self.user.as_ref().map(|u| u.handle.clone()).unwrap_or_default();
+                ui.add(egui::Label::new(you_are(&handle)).truncate());
                 if ui
                     .add_enabled(!self.busy, egui::Button::new("Refresh"))
                     .clicked()
@@ -497,18 +495,18 @@ impl Panel {
                 let width = (ui.available_width() - 80.).max(80.);
                 ui.add_sized(
                     [width, crate::design::CONTROL],
-                    egui::TextEdit::singleline(&mut self.code)
-                        .hint_text("Paste a friend code")
+                    egui::TextEdit::singleline(&mut self.username)
+                        .hint_text("Add by username")
                         .margin(egui::vec2(10., 7.)),
                 );
                 if ui
                     .add_enabled(
-                        !self.busy && !self.code.trim().is_empty(),
+                        !self.busy && !self.username.trim().is_empty(),
                         egui::Button::new("Add").min_size(egui::vec2(72., crate::design::CONTROL)),
                     )
                     .clicked()
                 {
-                    self.send(Command::Action(Action::Invite(self.code.clone())));
+                    self.send(Command::Action(Action::Invite(self.username.clone())));
                 }
             });
             ui.add_space(8.);
@@ -706,8 +704,7 @@ impl Api {
                 "invalid_host_proof" => {
                     "The host identity could not be verified. Update Secpar and try again."
                 }
-                "account_unavailable" => "Friend code was not found or is unavailable.",
-                "cannot_friend_yourself" => "That is your own friend code.",
+                "account_unavailable" => "No one with that username can be added.",
                 "rate_limited" => "Too many attempts. Please wait and try again.",
                 "device_code_expired_or_used" => "Sign-in expired. Please start again.",
                 "incoming_request_not_found" => "This friend request is no longer available.",
@@ -811,9 +808,33 @@ fn path_id(value: &str) -> Result<&str, String> {
             }
         })
     {
-        return Err("Paste your friend's complete friend code.".into());
+        return Err(USERNAME_ERROR.into());
     }
     Ok(value)
+}
+pub const USERNAME_ERROR: &str = "Enter a username of 3 to 30 letters, numbers or underscores.";
+/// The line that tells people which name to give their friends.
+pub fn you_are(handle: &str) -> String { format!("You are @{handle}") }
+/// A username as the server expects it: trimmed, one leading @ removed, lower case. Only letters,
+/// digits and underscore survive, so the result is safe to place in a URL path.
+fn clean_username(raw: &str) -> Result<String, String> {
+    let name = raw.trim();
+    let name = name.strip_prefix('@').unwrap_or(name).to_ascii_lowercase();
+    if (3..=30).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+        Ok(name)
+    } else {
+        Err(USERNAME_ERROR.into())
+    }
+}
+/// The verb and path for one friend or block change. Invite takes a username, the rest take account ids.
+fn action_request(action: &Action) -> Result<(Method, String), String> {
+    Ok(match action {
+        Action::Invite(name) => (Method::PUT, format!("/v1/friends/by-username/{}", clean_username(name)?)),
+        Action::Accept(id) => (Method::POST, format!("/v1/friends/{}/accept", path_id(id)?)),
+        Action::Remove(id) => (Method::DELETE, format!("/v1/friends/{}", path_id(id)?)),
+        Action::Block(id) => (Method::PUT, format!("/v1/blocks/{}", path_id(id)?)),
+        Action::Unblock(id) => (Method::DELETE, format!("/v1/blocks/{}", path_id(id)?)),
+    })
 }
 fn owned_key(owner: &str, id: &str) -> Result<String,String> {
     path_id(owner)?; path_id(id)?;
@@ -970,12 +991,9 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                         }
                         Command::Refresh=>Ok(String::new()),
                         Command::Action(action)=>{
-                            let (method,id,suffix)=match &action {
-                                Action::Invite(id)=>(Method::PUT,id,""),Action::Accept(id)=>(Method::POST,id,"/accept"),Action::Remove(id)=>(Method::DELETE,id,""),Action::Block(id)=>(Method::PUT,id,""),Action::Unblock(id)=>(Method::DELETE,id,"")
-                            };
-                            match path_id(id) {
+                            match action_request(&action) {
                                 Err(note)=>Err((StatusCode::BAD_REQUEST,note)),
-                                Ok(id)=>{let collection=if matches!(action,Action::Block(_)|Action::Unblock(_)){"blocks"}else{"friends"};api.call(method,&format!("/v1/{collection}/{id}{suffix}"),None).await.map(|_| if matches!(action,Action::Invite(_)){"Friend request sent".into()}else{String::new()})}
+                                Ok((method,path))=>api.call(method,&path,None).await.map(|_| if matches!(action,Action::Invite(_)){"Friend request sent".into()}else{String::new()})
                             }
                         }
                     };
@@ -1074,11 +1092,42 @@ mod tests {
         assert!(owned_key(alice,"../../paired-computer").is_err());
     }
     #[test]
-    fn friend_codes_cannot_inject_account_paths() {
+    fn account_ids_cannot_inject_account_paths() {
         assert!(path_id("d0d12c4d-13f1-4fbc-b113-a89d901ac34b").is_ok());
         for code in ["../me", "abcd/../../blocks", "", "a".repeat(36).as_str()] {
             assert!(path_id(code).is_err());
         }
+    }
+    #[test]
+    fn usernames_are_cleaned_before_they_reach_a_path() {
+        assert_eq!(clean_username("  @River_2\n").unwrap(), "river_2");
+        assert_eq!(clean_username("RIVER").unwrap(), "river");
+        assert_eq!(clean_username(&"A".repeat(30)).unwrap(), "a".repeat(30));
+        for bad in ["", "  ", "@", "@@river", "ab", "ri ver", "ri-ver", "../me", "river/accept", "river?x=1",
+            "river#x", "%2e%2e", "river%2f", "r\u{131}ver", "\u{ff52}iver", "river\u{0}", &"a".repeat(31),
+            "d0d12c4d-13f1-4fbc-b113-a89d901ac34b"] {
+            assert!(clean_username(bad).is_err(), "{bad:?}");
+        }
+    }
+    #[test]
+    fn friend_actions_build_fixed_paths() {
+        let id = "d0d12c4d-13f1-4fbc-b113-a89d901ac34b";
+        let line = |a: Action| action_request(&a).map(|(m, p)| format!("{m} {p}"));
+        assert_eq!(line(Action::Invite(" @Bob_Smith ".into())).unwrap(), "PUT /v1/friends/by-username/bob_smith");
+        assert_eq!(line(Action::Accept(id.into())).unwrap(), format!("POST /v1/friends/{id}/accept"));
+        assert_eq!(line(Action::Remove(id.into())).unwrap(), format!("DELETE /v1/friends/{id}"));
+        assert_eq!(line(Action::Block(id.into())).unwrap(), format!("PUT /v1/blocks/{id}"));
+        assert_eq!(line(Action::Unblock(id.into())).unwrap(), format!("DELETE /v1/blocks/{id}"));
+        // A username is not an account id and an id is not a username.
+        assert!(line(Action::Accept("river".into())).is_err());
+        assert!(line(Action::Block("river".into())).is_err());
+        assert!(line(Action::Invite(id.into())).is_err());
+        assert!(line(Action::Invite("../me".into())).is_err());
+        assert!(line(Action::Remove("../me".into())).is_err());
+    }
+    #[test]
+    fn your_own_name_is_shown_with_an_at_sign() {
+        assert_eq!(you_are("river"), "You are @river");
     }
     fn server(replies: Vec<(&'static str, String)>) -> (String, std::thread::JoinHandle<()>) {
         use std::io::{Read, Write};

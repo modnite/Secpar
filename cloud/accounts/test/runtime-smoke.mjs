@@ -12,12 +12,12 @@ const grantKey=JSON.stringify(await exportJWK((await generateKeyPair('ES256',{ex
 const runtime=new Miniflare(convertV4MiniflareOptions({modules:true,script:bundled.outputFiles[0].text,compatibilityDate:'2026-11-04',compatibilityFlags:['nodejs_compat'],bindings:{PUBLIC_ORIGIN:base,GRANT_PRIVATE_JWK:grantKey},d1Databases:{DB:'enrollment-test'}}));
 try {
 const db=await runtime.getD1Database('DB');
-for(const migration of ['0001_accounts.sql','0002_passwords.sql','0003_hosts.sql','0004_owner_pairings.sql']) {
+for(const migration of ['0001_accounts.sql','0002_passwords.sql','0003_hosts.sql','0004_owner_pairings.sql','0005_usernames.sql']) {
  const sql=readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8');
  for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
 }
 const sessionHash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode('d'.repeat(64)))).toString('hex');
-await db.prepare('INSERT INTO accounts(id,github_id,handle,name) VALUES(?,?,?,?)').bind('runtime-fixture','runtime-fixture','Fixture','Fixture').run();
+await db.prepare('INSERT INTO accounts(id,github_id,handle,handle_lower,name) VALUES(?,?,?,?,?)').bind('runtime-fixture','runtime-fixture','Fixture','fixture','Fixture').run();
 await db.prepare('INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)').bind(sessionHash,'runtime-fixture',Math.floor(Date.now()/1000)+60).run();
 const account='d'.repeat(64);
 const cert=readFileSync(new URL('./fixtures/host-cert.pem',import.meta.url),'utf8');

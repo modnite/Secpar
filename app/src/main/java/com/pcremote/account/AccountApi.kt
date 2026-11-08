@@ -20,7 +20,7 @@ private val HEX64 = Regex("[a-f0-9]{64}")
 private val UUID = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
 
 enum class AccountError { NETWORK, INVALID_RESPONSE, INVALID_ARGUMENT, SIGN_IN_REQUIRED, EXPIRED, PENDING, SLOW_DOWN, UNAVAILABLE, RATE_LIMITED, REQUEST_FAILED,
-    FRIEND_UNAVAILABLE, OWN_CODE, REQUEST_GONE, BAD_CODE }
+    FRIEND_UNAVAILABLE, REQUEST_GONE, BAD_NAME }
 class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.NETWORK -> "Could not reach Secpar. Check your connection and try again."
     AccountError.INVALID_RESPONSE -> "Unexpected account response."
@@ -30,10 +30,9 @@ class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.PENDING -> "Waiting for browser approval."
     AccountError.SLOW_DOWN -> "Please wait before trying again."
     AccountError.RATE_LIMITED -> "Too many attempts. Please wait and try again."
-    AccountError.FRIEND_UNAVAILABLE -> "Friend code was not found or is unavailable."
-    AccountError.OWN_CODE -> "That is your own friend code."
+    AccountError.FRIEND_UNAVAILABLE -> "No one with that username can be added."
     AccountError.REQUEST_GONE -> "This friend request is no longer available."
-    AccountError.BAD_CODE -> "Paste your friend's complete friend code."
+    AccountError.BAD_NAME -> "Enter a username of 3 to 30 letters, numbers or underscores."
     AccountError.UNAVAILABLE -> "Computer pairing is no longer available."
     AccountError.REQUEST_FAILED -> "The account request failed. Please try again."
 })
@@ -119,8 +118,9 @@ interface AccountService {
 
 /** The calls the Friends page makes. Paths and verbs match the desktop client. */
 enum class FriendAction(val method: String, val collection: String, val suffix: String = "") {
-    INVITE("PUT", "friends"), ACCEPT("POST", "friends", "/accept"), REMOVE("DELETE", "friends"),
+    INVITE("PUT", "friends/by-username"), ACCEPT("POST", "friends", "/accept"), REMOVE("DELETE", "friends"),
     BLOCK("PUT", "blocks"), UNBLOCK("DELETE", "blocks");
+    /** [id] is a username for INVITE and an account id for every other action. */
     fun path(id: String) = "/v1/$collection/$id$suffix"
 }
 
@@ -200,7 +200,9 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
     }
 
     override suspend fun friendAction(action: FriendAction, id: String) {
-        if (!UUID.matches(id)) throw AccountException(AccountError.BAD_CODE)
+        // The value goes into the URL path, so only a clean username or an account id gets through.
+        val clean = if (action == FriendAction.INVITE) AccountText.cleanUsername(id) == id else UUID.matches(id)
+        if (!clean) throw AccountException(AccountError.BAD_NAME)
         call(action.method, action.path(id))
     }
 
@@ -246,7 +248,6 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
                     code == "slow_down" -> AccountError.SLOW_DOWN
                     response.status == 401 || code == "session_expired" || code == "sign_in_required" -> AccountError.SIGN_IN_REQUIRED
                     code == "account_unavailable" -> AccountError.FRIEND_UNAVAILABLE
-                    code == "cannot_friend_yourself" -> AccountError.OWN_CODE
                     code == "incoming_request_not_found" -> AccountError.REQUEST_GONE
                     code == "device_code_expired_or_used" -> AccountError.EXPIRED
                     code == "pairing_request_unavailable" || code == "pairing_result_unavailable" || code == "computer_not_found" -> AccountError.UNAVAILABLE

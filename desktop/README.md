@@ -4,7 +4,7 @@ The desktop application hosts and connects through one interface on Windows. Hos
 
 Implemented: pairing links for pinned direct TLS and signed relay bootstrap, OS credential-store persistence for the last paired computer, encrypted UDP video, bounded frame assembly/FEC, duplicate rejection, direct candidate probing, STUN discovery, TURN allocation/channel/permission refresh, Opus audio playback, bounded worker decoding with verified Linux VA-API and OpenH264 fallback to a GPU-rendered window, host-native/720p/1080p/1440p/4K resolution choice, native cursor images, display switching, fullscreen, relative mouse/keyboard, configurable Ctrl+Alt+G cursor capture/release and held-input cleanup on focus loss/disconnect.
 
-The compact window uses the accepted Secpar triangle and wordmark. Computers and Friends are separate tabs. Friends supports browser-based Secpar sign-in, copy/paste friend codes, incoming acceptance, cancellation/removal, blocking and unblocking. Friendship itself grants no PC access; host admission and sharing are still unfinished.
+The compact window uses the accepted Secpar triangle and wordmark. Computers and Friends are separate tabs. Friends supports browser-based Secpar sign-in, adding a friend by username (not case sensitive), your own username shown as "You are @name", incoming acceptance, cancellation/removal, blocking and unblocking. Friendship itself grants no PC access; host admission and sharing are still unfinished.
 
 ## Run
 

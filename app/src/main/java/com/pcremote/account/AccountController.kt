@@ -27,13 +27,13 @@ data class AccountUi(
 /** Wording shared with the desktop client. */
 object AccountText {
     const val SIGNED_OUT_OFFLINE = "Signed out here. Could not revoke the remote session while offline."
-    const val FRIEND_CODE_COPIED = "Friend code copied"
     const val REQUEST_SENT = "Friend request sent"
     const val NO_BROWSER = "No browser is available. Open accounts.secpar.win/activate and enter the code."
-    val UUID_CODE = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
+    val UUID_ID = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
+    private val USERNAME = Regex("[a-z0-9_]{3,30}")
 
-    /** A friend code as the server expects it, or null when it is not a complete code. */
-    fun cleanCode(raw: String): String? = raw.trim().lowercase().takeIf { UUID_CODE.matches(it) }
+    /** A username as the server expects it: trimmed, one leading @ removed, lower case. Null when it is not valid. */
+    fun cleanUsername(raw: String): String? = raw.trim().removePrefix("@").lowercase().takeIf { USERNAME.matches(it) }
 }
 
 /** Main-dispatcher controller. Every asynchronous operation belongs to one login generation. */
@@ -245,12 +245,12 @@ class AccountController(
 
     fun showNote(text: String) { mutable.value = state.value.copy(note = text) }
 
-    /** Add by friend code, accept a request, or change the lists. Refreshes the lists afterwards. */
+    /** Add by username, accept a request, or change the lists. Refreshes the lists afterwards. */
     fun friendAction(action: FriendAction, rawId: String) {
         val service = api ?: return
         if (session == null || state.value.working) return
-        val id = AccountText.cleanCode(rawId)
-        if (id == null) { mutable.value = state.value.copy(error = AccountException(AccountError.BAD_CODE).message); return }
+        val id = if (action == FriendAction.INVITE) AccountText.cleanUsername(rawId) else rawId.trim().lowercase().takeIf { AccountText.UUID_ID.matches(it) }
+        if (id == null) { mutable.value = state.value.copy(error = AccountException(AccountError.BAD_NAME).message); return }
         val epoch = generation
         mutable.value = state.value.copy(working = true, error = null, note = null)
         scope.launch {
