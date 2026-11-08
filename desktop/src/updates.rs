@@ -1,6 +1,8 @@
 //! Product-specific update discovery and user-approved installation.
 use eframe::egui;
 use serde_json::Value;
+#[cfg(windows)]
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     io::Write,
@@ -215,9 +217,31 @@ fn launch_installer(path: &std::path::Path) -> Result<(), String> {
     #[cfg(not(target_os = "linux"))]
     open::that(path).map_err(|_| "Could not start the installer".into())
 }
+/// Windows: after the silent installer replaces the files and starts the service, open the
+/// window again. It waits for the new version to show in the installed-programs list, so a failed
+/// install leaves nothing behind but a process that gives up after five minutes.
+#[cfg(windows)]
+fn reopen_after(tag: &str) -> Option<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    const SCRIPT: &str = "$u='HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Secpar'; \
+        $end=(Get-Date).AddMinutes(5); \
+        do { Start-Sleep 1; $v=(Get-ItemProperty $u -ErrorAction SilentlyContinue).DisplayVersion } until ($v -eq $env:SECPAR_NEW -or (Get-Date) -gt $end); \
+        if ($v -ne $env:SECPAR_NEW) { exit }; \
+        for ($i=0; $i -lt 60; $i++) { if ((Get-Service Secpar -ErrorAction SilentlyContinue).Status -eq 'Running') { break }; Start-Sleep 1 }; \
+        Start-Sleep 2; Start-Process -FilePath $env:SECPAR_EXE";
+    let exe = std::env::current_exe().ok()?;
+    std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", SCRIPT])
+        .env("SECPAR_NEW", tag.trim_start_matches('v'))
+        .env("SECPAR_EXE", exe)
+        .creation_flags(0x0800_0000 | 0x0000_0200) // no window, own process group
+        .spawn()
+        .ok()
+}
 enum ResultEvent {
     Checked(Result<Option<Release>, String>),
     Downloaded(Result<PathBuf, String>),
+    Installed(Result<String, String>),
 }
 pub struct Panel {
     tx: mpsc::UnboundedSender<ResultEvent>,
@@ -225,6 +249,8 @@ pub struct Panel {
     release: Option<Release>,
     ready: Option<PathBuf>,
     busy: bool,
+    /// The silent install failed, so the downloaded installer is offered instead.
+    fallback: bool,
     message: String,
     pub open: bool,
     last_check: Option<Instant>,
@@ -238,6 +264,7 @@ impl Panel {
             release: None,
             ready: None,
             busy: false,
+            fallback: false,
             message: "Automatic checks every six hours.".into(),
             open: false,
             last_check: None,
@@ -279,6 +306,30 @@ impl Panel {
             ctx.request_repaint();
         });
     }
+    /// Windows: the hosting service runs as SYSTEM, so it downloads, checks and installs the
+    /// release itself without a prompt, and a helper opens this window again afterwards.
+    #[cfg(windows)]
+    fn start_silent_install(&mut self, ctx: &egui::Context) {
+        let Some(release) = self.release.clone() else { return };
+        self.busy = true;
+        self.message = "Installing update…".into();
+        let helper = reopen_after(&release.tag);
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = tokio::runtime::Builder::new_current_thread().enable_all().build()
+                .map_err(|_| "Could not start updater".to_string())
+                .and_then(|rt| rt.block_on(crate::local_host::call_for("install_update", json!({"tag": release.tag}), 240)))
+                .map(|v| v.as_str().unwrap_or_default().to_string());
+            if result.is_err() {
+                if let Some(mut helper) = helper {
+                    let _ = helper.kill();
+                }
+            }
+            let _ = tx.send(ResultEvent::Installed(result));
+            ctx.request_repaint();
+        });
+    }
     pub fn tick(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             self.busy = false;
@@ -296,6 +347,15 @@ impl Panel {
                 ResultEvent::Downloaded(Ok(path)) => {
                     self.ready = Some(path);
                     self.message = "Download verified. Ready to install.".into();
+                }
+                ResultEvent::Installed(Ok(version)) => {
+                    // The installer closes this window. Stay busy until it does.
+                    self.busy = true;
+                    self.message = format!("Installing {version}. Secpar will reopen.");
+                }
+                ResultEvent::Installed(Err(e)) => {
+                    self.fallback = true;
+                    self.message = e;
                 }
                 ResultEvent::Checked(Err(e)) | ResultEvent::Downloaded(Err(e)) => self.message = e,
             }
@@ -344,8 +404,15 @@ impl Panel {
                     if ui.add_enabled(!self.busy, egui::Button::new("Check for updates")).clicked() {
                         self.start_check(ctx);
                     }
-                    let can_download = !self.busy && self.release.is_some() && self.ready.is_none();
-                    if ui.add_enabled(can_download, egui::Button::new("Download update")).clicked() {
+                    #[cfg(windows)]
+                    if self.release.is_some() && !self.fallback
+                        && ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update")).clicked() {
+                        self.start_silent_install(ctx);
+                    }
+                    let can_download = !self.busy && self.release.is_some() && self.ready.is_none()
+                        && (!cfg!(windows) || self.fallback);
+                    if (!cfg!(windows) || self.fallback)
+                        && ui.add_enabled(can_download, egui::Button::new("Download update")).clicked() {
                         self.busy = true;
                         self.message = "Downloading update…".into();
                         let r = self.release.clone().unwrap();

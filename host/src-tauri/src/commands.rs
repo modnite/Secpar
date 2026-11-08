@@ -252,6 +252,8 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
             Ok(Value::Null)
         }
         "check_update" => to_value(check_update().await?),
+        // The window's silent update: this server runs as SYSTEM, so it installs without a prompt.
+        "install_update" => to_value(crate::update::install_tag(&crate::data_dir(), &arg::<String>(&args, "tag")?).await?),
         _ => Err(format!("unknown command {cmd}")),
     }
 }

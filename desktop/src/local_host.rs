@@ -22,8 +22,12 @@ pub async fn state() -> Result<State, String> {
 }
 #[cfg(windows)]
 pub async fn call(command: &str, args: Value) -> Result<Value, String> {
+    call_for(command, args, 20).await
+}
+#[cfg(windows)]
+pub async fn call_for(command: &str, args: Value, seconds: u64) -> Result<Value, String> {
     use tokio::net::windows::named_pipe::ClientOptions;
-    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+    tokio::time::timeout(std::time::Duration::from_secs(seconds), async {
         let start = std::time::Instant::now();
         let pipe = loop {
             match ClientOptions::new().open(r"\\.\pipe\secpar") {
