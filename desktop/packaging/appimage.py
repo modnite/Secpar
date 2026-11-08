@@ -64,10 +64,23 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
 set -eu
 APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
 export APPDIR
-export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
-export GST_PLUGIN_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
-export GST_PLUGIN_SCANNER="$APPDIR/usr/bin/gst-plugin-scanner"
+# A system GStreamer with the PipeWire plugin wins over the bundled one: the bundled plugin is older
+# than current PipeWire and fails desktop capture ("error alloc buffers"). The bundle stays the
+# fallback for systems without GStreamer.
+system_gst=""
+for dir in /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu; do
+    if [ -e "$dir/libgstreamer-1.0.so.0" ] && [ -e "$dir/gstreamer-1.0/libgstpipewire.so" ]; then system_gst=$dir; break; fi
+done
+if [ -n "$system_gst" ]; then
+    export LD_LIBRARY_PATH="$system_gst:$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export GST_PLUGIN_SYSTEM_PATH_1_0="$system_gst/gstreamer-1.0"
+    unset GST_PLUGIN_PATH_1_0 GST_PLUGIN_SCANNER
+else
+    export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export GST_PLUGIN_SYSTEM_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
+    export GST_PLUGIN_PATH_1_0="$APPDIR/usr/lib/gstreamer-1.0"
+    export GST_PLUGIN_SCANNER="$APPDIR/usr/bin/gst-plugin-scanner"
+fi
 export GST_REGISTRY="${XDG_CACHE_HOME:-$HOME/.cache}/secpar/appimage-gst-registry.bin"
 mkdir -p "$(dirname -- "$GST_REGISTRY")"
 if [ "${1:-}" = --install ]; then
