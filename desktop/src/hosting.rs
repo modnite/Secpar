@@ -112,7 +112,7 @@ impl Panel {
                 }],
                 locked: false,
             }),
-            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"anywhere":false},"displays":[]}),
+            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"anywhere":false},"displays":[],"pad":{"ok":true,"text":"Gamepad ready"}}),
             error: String::new(),
             busy: false,
             pairing: sample
@@ -234,25 +234,15 @@ impl Panel {
             ui.colored_label(Color32::from_rgb(255, 170, 120), &self.error);
         }
         ui.add_space(if self.settings_open { 0. } else { 10. });
-        if cfg!(target_os = "linux") {
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Account").clicked() { self.account_open = true; }
-                });
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.settings_open, false, "Paired devices");
+            ui.selectable_value(&mut self.settings_open, true, "Settings");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Account").clicked() {
+                    self.account_open = true;
+                }
             });
-            ui.add_space(6.);
-            ui.label("Paired devices");
-        } else {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.settings_open, false, "Paired devices");
-                ui.selectable_value(&mut self.settings_open, true, "Settings");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Account").clicked() {
-                        self.account_open = true;
-                    }
-                });
-            });
-        }
+        });
         ui.add_space(2.);
         egui::ScrollArea::vertical().show(ui, |ui| {
             if self.settings_open {
@@ -393,7 +383,31 @@ impl Panel {
             });
         }
     }
+    /// Linux hosting settings: what paired devices may do, and whether a gamepad can be offered.
+    /// Display choice, quality limit, router ports and tray start are not available on Linux yet.
+    fn linux_settings_ui(&mut self, ui: &mut egui::Ui) {
+        let config = self.settings["config"].clone();
+        let pad_ok = self.settings["pad"]["ok"].as_bool().unwrap_or(false);
+        let pad_text = self.settings["pad"]["text"].as_str().unwrap_or("Gamepad status unknown").to_string();
+        ui.add_enabled_ui(self.state.is_some() && !self.busy, |ui| {
+            ui.spacing_mut().item_spacing.y = 4.;
+            design::surface().inner_margin(10).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new("Device access").strong());
+                self.setting_toggle(ui, &config, "allow_files", "Receive and browse files", "Allow paired devices to send files to this computer and to browse it.");
+                self.setting_toggle(ui, &config, "allow_clip", "Allow clipboard sharing", "Allow clipboard exchange with paired devices.");
+                ui.add_space(4.);
+                ui.horizontal(|ui| {
+                    design::dot(ui, if pad_ok { design::ACCENT } else { design::MUTED });
+                    ui.label(egui::RichText::new(pad_text).size(12.).color(design::MUTED));
+                });
+            });
+        });
+    }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        if cfg!(target_os = "linux") {
+            return self.linux_settings_ui(ui);
+        }
         let config = self.settings["config"].clone();
         ui.add_enabled_ui(self.state.is_some() && !self.busy, |ui| {
             ui.spacing_mut().item_spacing.y = 4.;

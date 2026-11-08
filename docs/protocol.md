@@ -68,7 +68,9 @@ The host releases every key and button that is still held when a connection clos
 → {"t":"pad","id":0,"btn":4096,"lt":0,"rt":255,"lx":0,"ly":-32768,"rx":1200,"ry":0}
 ```
 - XInput state. `btn` is the XInput button mask; triggers are 0–255; sticks are int16.
-- The host creates a virtual Xbox 360 controller (ViGEm) per `id` (0–3) on the first `pad` message, and removes it 5 s after the connection closes.
+- The host creates a virtual Xbox 360 controller per `id` (0–3) on the first `pad` message, and removes it 5 s after the connection closes. A phone that reconnects within those 5 s replaces its old controllers at once. Windows uses ViGEm. Linux uses `/dev/uinput` and offers `pad` only when it can write to it (`docs/linux.md`).
+- `pad` also arrives inside PRS `INPUT` events (`docs/stream-protocol.md`) and drives the same controllers.
+- Without a working controller driver the host answers `pad` with `error{code:"unsupported", of:"pad"}`.
 - `{"t":"pad.off","id":0}` removes it immediately.
 - Host → client: `{"t":"rumble","id":0,"lo":0-255,"hi":0-255}`.
 
@@ -81,6 +83,7 @@ The host releases every key and button that is still held when a connection clos
 - `c` is one of `play_pause`, `next`, `prev`, `vol_up`, `vol_down`, `mute`, `vol_set` (with `"v":0-100`).
 - While subscribed, the host pushes `media` on every change, and once immediately.
 - `title`, `artist` and `app` may be empty strings.
+- Windows reads the current media session. Linux reads the MPRIS player that is playing (else the first with a track) and the default audio sink through `wpctl` or `pactl`. With no player, transport commands do nothing and `title`, `artist` and `app` are empty.
 
 ## Clipboard (cap `clip`)
 ```json
@@ -116,6 +119,8 @@ The host releases every key and button that is still held when a connection clos
 ← {"t":"file.offer","id","name":"Trip/a.jpg","size"} (one per file, at most 5000)
 ```
 - `path: ""` lists the user's folders and the drives. Hidden and system entries are left out; folders come first.
+- On Linux `path: ""` lists Home, the user's Desktop, Documents, Downloads, Pictures, Videos and Music folders, and `/`. Paths in `fs.list`, `fs.get` and `file.done` are native paths (`/home/ada/Downloads/Secpar/photo.jpg`). Dot-files are hidden in listings.
+- Both hosts refuse `file.begin`, `fs.list` and `fs.get` (`file.error` `denied`, or `error` `unsupported`) while file transfer is off in the host's settings.
 - Offers from `fs.get` use relative names like the uploads above.
 
 **Binary chunk layout:** `[0x01][16-byte uuid][8-byte offset, big-endian][data ≤ 256 KiB]`.
@@ -140,6 +145,7 @@ The host releases every key and button that is still held when a connection clos
 → {"t":"thumb.sub","on":true}
 ```
 - While subscribed, the host sends a binary frame `[0x02][JPEG]` with the primary display scaled to 320 px wide, quality 60, every 5 s, plus one immediately.
+- A Linux host reuses the screen sharing permission saved by an earlier stream. With none saved, or while any stream runs, it sends no frame. It never asks for permission for a preview (`docs/linux.md`).
 
 ## Status and network (cap `net`)
 ```json
