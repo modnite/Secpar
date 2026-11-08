@@ -51,6 +51,24 @@ object Updater {
     internal fun confirm(intent: Intent) { pendingConfirmation.value = intent }
     private val operation = java.util.concurrent.atomic.AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** GitHub answers a share of anonymous requests with 429 or 5xx in bad spells, so retry a few times. */
+    private fun execute(request: Request, pauseMs: Long = 2_000): okhttp3.Response {
+        var attempt = 0
+        while (true) {
+            attempt++
+            val response = try {
+                http.newCall(request).execute()
+            } catch (e: java.io.IOException) {
+                if (attempt >= 4) throw e
+                Thread.sleep(pauseMs * attempt)
+                continue
+            }
+            if (response.isSuccessful || attempt >= 4 || !(response.code >= 500 || response.code == 429)) return response
+            response.close()
+            Thread.sleep(pauseMs * attempt)
+        }
+    }
+
     /** Select only this product's channel, never desktop/host releases. */
     fun parse(json: String): Release? = runCatching {
         val o = Json.parseToJsonElement(json).jsonObject
@@ -106,7 +124,7 @@ object Updater {
         mutableState.value = mutableState.value.copy(message = CHECKING, busy = true)
         scope.launch {
             try {
-                val body = http.newCall(Request.Builder().url(LATEST).header("Accept", "application/vnd.github+json").build()).execute()
+                val body = execute(Request.Builder().url(LATEST).header("Accept", "application/vnd.github+json").build())
                     .use { check(it.isSuccessful) { "Update service unavailable. Try again later." }; it.body.string() }
                 val r = select(body, BuildConfig.VERSION_NAME.contains("secpar"))
                 val newer = r?.takeIf { isNewer(it.version, BuildConfig.VERSION_NAME) }
@@ -135,7 +153,7 @@ object Updater {
             try {
                 val digest = java.security.MessageDigest.getInstance("SHA-256")
                 var total = 0L
-                http.newCall(Request.Builder().url(r.apkUrl).build()).execute().use { resp ->
+                execute(Request.Builder().url(r.apkUrl).build()).use { resp ->
                     check(resp.isSuccessful) { "Download failed" }
                     apk.outputStream().use { out -> resp.body.byteStream().use { input ->
                         val buffer = ByteArray(65536)

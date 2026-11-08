@@ -97,16 +97,34 @@ fn client() -> Result<reqwest::Client, String> {
         .build()
         .map_err(|_| "Could not start updater".into())
 }
+/// GitHub answers a share of anonymous requests with 429 or 5xx during bad spells. Retrying
+/// a few times with a growing pause rides those out instead of failing the whole check.
+async fn get(url: &str, timeout: Option<Duration>, pause: Duration) -> Result<reqwest::Response, String> {
+    let client = client()?;
+    let mut attempt = 0u32;
+    loop {
+        let mut request = client.get(url);
+        if let Some(t) = timeout {
+            request = request.timeout(t);
+        }
+        let outcome = request.send().await;
+        let retry = match &outcome {
+            Ok(r) => r.status().is_server_error() || r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS,
+            Err(_) => true,
+        };
+        attempt += 1;
+        if !retry || attempt >= 4 {
+            return outcome.and_then(|r| r.error_for_status()).map_err(|e| e.to_string());
+        }
+        tokio::time::sleep(pause * attempt).await;
+    }
+}
 async fn check() -> Result<Option<Release>, String> {
     let Some(name) = asset_name() else {
         return Ok(None);
     };
-    let mut response = client()?
-        .get(FEED)
-        .timeout(Duration::from_secs(20))
-        .send()
+    let mut response = get(FEED, Some(Duration::from_secs(20)), Duration::from_secs(2))
         .await
-        .and_then(|r| r.error_for_status())
         .map_err(|_| "Could not check for updates. Try again.")?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response
@@ -159,11 +177,8 @@ async fn download(r: Release) -> Result<PathBuf, String> {
             .create_new(true)
             .open(&path)
             .map_err(|_| "Could not save update")?;
-        let mut response = client()?
-            .get(&r.url)
-            .send()
+        let mut response = get(&r.url, None, Duration::from_secs(2))
             .await
-            .and_then(|r| r.error_for_status())
             .map_err(|_| "Download failed")?;
         let mut hash = Sha256::new();
         let mut count = 0u64;
@@ -449,6 +464,41 @@ mod tests {
             } else {
                 assert!(result.is_err());
             }
+        }
+    }
+    #[tokio::test]
+    async fn rides_out_server_errors_then_gives_up() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        for (failures, ok) in [(2usize, true), (9, false)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/feed", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let mut served = 0usize;
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    let mut request = [0u8; 4096];
+                    let _ = socket.read(&mut request).await;
+                    let reply: &[u8] = if served < failures {
+                        b"HTTP/1.1 503 Service Unavailable
+Content-Length: 0
+Connection: close
+
+"
+                    } else {
+                        b"HTTP/1.1 200 OK
+Content-Length: 2
+Connection: close
+
+[]"
+                    };
+                    served += 1;
+                    let _ = socket.write_all(reply).await;
+                }
+                served
+            });
+            let result = get(&url, None, Duration::ZERO).await;
+            assert_eq!(result.is_ok(), ok);
+            server.abort();
         }
     }
 }
