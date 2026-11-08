@@ -26,6 +26,8 @@ gstreamer-app = "0.24.5"
 gstreamer-video = "0.24.5"
 opus = "0.4.0"
 get_if_addrs = "0.5.3"
+# Already in the build through ashpd, with the same features; used directly for MPRIS.
+zbus = { version = "5.13", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 tempfile = "3"

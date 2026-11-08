@@ -59,7 +59,7 @@ impl Handlers for Host {
             out,
             media: None,
             store: self.store.clone(),
-            incoming: Incoming::new(dir.into()),
+            incoming: files::incoming(dir.into()),
             outgoing: self.outgoing.clone(),
             clip: None,
             sid: u64::from_le_bytes(crate::store::random::<8>()),

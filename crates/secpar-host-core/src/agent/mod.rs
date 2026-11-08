@@ -59,6 +59,36 @@ impl Outbox {
     pub fn is_closed(&self) -> bool {
         self.ctl.is_closed()
     }
+
+    /// An outbox with no socket behind it, and the end that reads what a session sent. For tests
+    /// of `Session` implementations in other crates.
+    pub fn pair() -> (Outbox, OutboxRx) {
+        let (ctl, ctl_rx) = mpsc::unbounded_channel();
+        let (bin, bin_rx) = mpsc::channel(64);
+        (Outbox { ctl, bin }, OutboxRx { ctl: ctl_rx, bin: bin_rx })
+    }
+}
+
+/// What a test `Outbox` received so far (see `Outbox::pair`).
+pub struct OutboxRx {
+    ctl: mpsc::UnboundedReceiver<Out>,
+    bin: mpsc::Receiver<Vec<u8>>,
+}
+
+impl OutboxRx {
+    /// The next control message, if one is waiting.
+    pub fn msg(&mut self) -> Option<ServerMsg> {
+        loop {
+            match self.ctl.try_recv().ok()? {
+                Out::Msg(m) => return Some(m),
+                Out::Close(_) => continue,
+            }
+        }
+    }
+    /// The next binary frame, if one is waiting.
+    pub fn bin(&mut self) -> Option<Vec<u8>> {
+        self.bin.try_recv().ok()
+    }
 }
 
 /// What the agent needs from the rest of the host.
@@ -233,4 +263,25 @@ pub fn revoke_envelope(device: &str) -> tokio_tungstenite::tungstenite::Message 
     tokio_tungstenite::tungstenite::Message::text(
         serde_json::json!({"o":"revoke","dev":device}).to_string(),
     )
+}
+
+#[cfg(test)]
+mod outbox_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_outbox_delivers_messages_and_frames_in_order_and_reports_a_closed_peer() {
+        let (out, mut rx) = Outbox::pair();
+        assert!(rx.msg().is_none() && rx.bin().is_none());
+        assert!(out.send(ServerMsg::Pong));
+        assert!(out.send(ServerMsg::Ok { of: "x".into() }));
+        assert!(out.send_bin(vec![2, 1]).await);
+        assert_eq!(rx.msg(), Some(ServerMsg::Pong));
+        assert_eq!(rx.msg(), Some(ServerMsg::Ok { of: "x".into() }));
+        assert_eq!(rx.bin(), Some(vec![2, 1]));
+        assert!(!out.is_closed());
+        drop(rx);
+        assert!(out.is_closed());
+        assert!(!out.send(ServerMsg::Pong));
+    }
 }

@@ -98,7 +98,7 @@ All integers are big-endian.
 ```json
 [{"i":1041,"t":"mouse.move","dx":3,"dy":-1},{"i":1042,"t":"mouse.button","b":"left","down":true}]
 ```
-- Events use the same shapes as the agent input messages in `docs/protocol.md` (`mouse.*`, `key`, `text`, `pad`), plus `"i"`: a per-session increasing event id.
+- Events use the same shapes as the agent input messages in `docs/protocol.md` (`mouse.*`, `key`, `text`, `pad`), plus `"i"`: a per-session increasing event id. Hosts apply `pad` and `pad.off` to the same virtual controllers as the agent connection (Windows and Linux).
 - Every packet carries the newest event plus the previous two (so each event is sent 3×), and the host applies each `i` only once. `mouse.move` is relative, so duplicates must never be re-applied.
 
 ### REPORT (phone→host, every 100 ms)

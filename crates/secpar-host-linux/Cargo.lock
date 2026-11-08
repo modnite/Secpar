@@ -1859,6 +1859,7 @@ dependencies = [
  "futures-util",
  "reqwest",
  "ring",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "tokio",
@@ -1872,6 +1873,7 @@ version = "0.1.0"
 dependencies = [
  "ashpd",
  "base64",
+ "futures-util",
  "get_if_addrs",
  "gstreamer",
  "gstreamer-app",
@@ -1888,7 +1890,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "url",
+ "zbus",
 ]
 
 [[package]]

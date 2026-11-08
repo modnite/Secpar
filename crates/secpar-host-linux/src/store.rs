@@ -204,9 +204,9 @@ impl Store {
         self.data.config.clone()
     }
     pub fn set_config(&mut self, config: Config) -> io::Result<()> {
-        if config.anywhere || config.allow_files {
+        if config.anywhere {
             return Err(io::Error::other(
-                "This Linux preview supports local owner streaming only",
+                "This Linux host does not open router ports yet",
             ));
         }
         let old = self.data.config.clone();

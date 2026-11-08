@@ -94,7 +94,11 @@ pub struct Options {
     pub audio: bool,
     /// Where to get TURN credentials for a relay of our own; None until this host has relay access.
     pub relay: Option<RelayProvider>,
+    /// The session's virtual controllers: `pad` events that arrive over the media channel go here.
+    pub pads: SharedPads,
 }
+/// Shared between the control connection and the media channel (both carry `pad`).
+pub type SharedPads = Arc<Mutex<Option<secpar_host_core::pad::Pads>>>;
 pub fn local_addresses() -> Vec<String> {
     get_if_addrs::get_if_addrs()
         .unwrap_or_default()
@@ -170,6 +174,7 @@ impl Stream {
         let (input, input_rx) = mpsc::channel::<ClientMsg>(128);
         let input_portal = portal.clone();
         let input_shared = shared.clone();
+        let pads = options.pads.clone();
         tokio::spawn(async move {
             let mut input_rx = input_rx;
             let mut target = Input::new(input_portal);
@@ -178,6 +183,10 @@ impl Stream {
                     break;
                 }
                 tokio::select! {msg=input_rx.recv()=>match msg {Some(msg)=>{
+                    if let Some(pad) = pad_message(&msg) {
+                        pad.apply(&pads);
+                        continue;
+                    }
                     if target.apply(msg).await.is_err(){break}
                     if let Some((x,y))=target.take_pos() {
                         let mut packet=[0u8;5];
@@ -411,6 +420,30 @@ impl Drop for Stream {
         });
     }
 }
+/// A gamepad message from the media channel, ready to apply to the session's controllers.
+pub enum PadMessage {
+    State(u8, secpar_host_core::pad::PadState),
+    Off(u8),
+}
+pub fn pad_message(msg: &ClientMsg) -> Option<PadMessage> {
+    match *msg {
+        ClientMsg::Pad { id, btn, lt, rt, lx, ly, rx, ry } => Some(PadMessage::State(id, secpar_host_core::pad::PadState { btn, lt, rt, lx, ly, rx, ry })),
+        ClientMsg::PadOff { id } => Some(PadMessage::Off(id)),
+        _ => None,
+    }
+}
+impl PadMessage {
+    pub fn apply(&self, pads: &SharedPads) {
+        if let Some(p) = pads.lock().unwrap().as_mut() {
+            match self {
+                PadMessage::State(id, state) => {
+                    let _ = p.pad(*id, state);
+                }
+                PadMessage::Off(id) => p.off(*id),
+            }
+        }
+    }
+}
 fn dedup_inputs(bytes: &[u8], last: &mut Option<u64>) -> Vec<ClientMsg> {
     let Ok(items) = serde_json::from_slice::<Vec<serde_json::Value>>(bytes) else {
         return vec![];
@@ -429,6 +462,8 @@ fn dedup_inputs(bytes: &[u8], last: &mut Option<u64>) -> Vec<ClientMsg> {
                     | ClientMsg::MouseScroll { .. }
                     | ClientMsg::Key { .. }
                     | ClientMsg::Text { .. }
+                    | ClientMsg::Pad { .. }
+                    | ClientMsg::PadOff { .. }
             )
             .then_some((id, msg))
         })
@@ -573,6 +608,29 @@ mod tests {
         let p=br#"[{"i":2,"t":"mouse.move","dx":5,"dy":0},{"i":1,"t":"mouse.move","dx":1,"dy":0},{"i":3,"t":"power","a":"shutdown"}]"#;
         assert_eq!(dedup_inputs(p, &mut last).len(), 2);
         assert!(dedup_inputs(p, &mut last).is_empty());
+    }
+    #[test]
+    fn udp_input_carries_gamepad_state_to_the_session_controllers() {
+        let mut last = None;
+        let p=br#"[{"i":1,"t":"pad","id":1,"btn":4096,"lt":0,"rt":255,"lx":0,"ly":0,"rx":0,"ry":0},{"i":2,"t":"pad.off","id":1},{"i":3,"t":"pad","id":9,"btn":0,"lt":0,"rt":0,"lx":0,"ly":0,"rx":0,"ry":0}]"#;
+        let msgs = dedup_inputs(p, &mut last);
+        assert_eq!(msgs.len(), 3);
+        let pads: SharedPads = Arc::new(Mutex::new(None));
+        for m in &msgs { pad_message(m).unwrap().apply(&pads); } // no controllers yet: ignored
+        assert!(pad_message(&ClientMsg::Ping).is_none());
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+        struct Bus(Arc<Mutex<Vec<String>>>);
+        struct Target(u8, Arc<Mutex<Vec<String>>>);
+        impl secpar_host_core::pad::Bus for Bus {
+            fn plug(&self, id: u8, _: secpar_host_core::pad::Rumble) -> Option<Box<dyn secpar_host_core::pad::Target>> { self.0.lock().unwrap().push(format!("plug {id}")); Some(Box::new(Target(id, self.0.clone()))) }
+        }
+        impl secpar_host_core::pad::Target for Target {
+            fn update(&mut self, s: &secpar_host_core::pad::PadState) -> bool { self.1.lock().unwrap().push(format!("update {} {} {}", self.0, s.btn, s.rt)); true }
+        }
+        impl Drop for Target { fn drop(&mut self) { self.1.lock().unwrap().push(format!("unplug {}", self.0)); } }
+        *pads.lock().unwrap() = Some(secpar_host_core::pad::Pads::new(Arc::new(Bus(log.clone())), Box::new(|_, _, _| {})));
+        for m in &msgs { pad_message(m).unwrap().apply(&pads); }
+        assert_eq!(*log.lock().unwrap(), ["plug 1", "update 1 4096 255", "unplug 1"], "id 9 is out of range and ignored");
     }
     fn synthetic_shared()->Arc<Shared> {
         Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false),link:Arc::new(Link::new())})

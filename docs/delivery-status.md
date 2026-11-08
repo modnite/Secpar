@@ -1,5 +1,17 @@
 # Secpar delivery record
 
+## LINUX HOST PARITY (branch feat/linux-host-parity, not released)
+
+The Linux host now offers `thumb`, `media`, `pad`, `files` and `fsbrowse` like the
+Windows host. File transfer, the gamepad bus logic and the media types moved into
+secpar-host-core; the Windows host re-exports them. Verified: Windows host 134 tests,
+core 63, Linux host 73 (6 ignored by design), desktop 50 on Linux. A real uinput device,
+a real private D-Bus session bus with a fake MPRIS player and a real JPEG pipeline ran on
+the OMV box. Not verified: the portal preview and MPRIS with real KDE, wpctl or pactl
+output from a real mixer, a game reading the virtual pad, the new Settings tab on screen.
+Details and the udev rule: docs/linux.md.
+
+
 ## UPSTREAM MIGRATION FOUNDATION —2026-11-07
 
 New worktree work/secpar-upstream-engine, branch feat/upstream-streaming-migration
