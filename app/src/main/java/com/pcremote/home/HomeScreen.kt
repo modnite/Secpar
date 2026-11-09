@@ -22,6 +22,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -274,32 +276,14 @@ private fun SavedCard(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode
     Box {
     CardFrame {
         CardTitle(card.name, card.os.substringBefore(' '), ComputerList.status(card), endPad = 36.dp)
-        BoxWithConstraints {
-            val wide = maxWidth >= 520.dp
-            val actions: @Composable ColumnScope.() -> Unit = {
-                if (card.online || card.primary == PrimaryAction.WAKE) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    when {
-                        card.online -> {
-                            PrimaryButton(stringResource(R.string.pcr_connect), { a.primary(card) })
-                            if (card.locked && card.canUnlock) GhostButton(stringResource(R.string.pcr_unlock), unlock, icon = R.drawable.lucide_fingerprint)
-                        }
-                        else -> PrimaryButton(stringResource(R.string.pcr_wake), { a.primary(card) })
-                    }
-                }
-                if (card.online && modes.isNotEmpty()) modes.chunked(if (wide) 3 else 2).forEach { group ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        group.forEach { m -> ModeTile(m, Modifier.weight(1f)) { a.open(card, m) } }
-                        repeat((if (wide) 3 else 2) - group.size) { Spacer(Modifier.weight(1f)) }
-                    }
-                }
-            }
-            if (wide && card.online && thumb != null) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Preview(thumb, Modifier.width(240.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), content = actions)
-            } else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (card.online && thumb != null) Preview(thumb, Modifier.widthIn(max = 360.dp).fillMaxWidth())
-                actions()
-            }
+        // The preview, then one strip: Connect first, the modes after, each a glyph with no label.
+        Column(Modifier.widthIn(max = 360.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (card.online && thumb != null) Preview(thumb, Modifier.fillMaxWidth())
+            if (card.online) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                GlyphTile(R.drawable.lucide_monitor, stringResource(R.string.pcr_connect), Modifier.weight(1f), primary = true) { a.primary(card) }
+                modes.forEach { m -> GlyphTile(m.iconRes(), stringResource(m.label()), Modifier.weight(1f)) { a.open(card, m) } }
+                if (card.locked && card.canUnlock) GlyphTile(R.drawable.lucide_fingerprint, stringResource(R.string.pcr_unlock), Modifier.weight(1f), onClick = unlock)
+            } else if (card.primary == PrimaryAction.WAKE) PrimaryButton(stringResource(R.string.pcr_wake), { a.primary(card) })
         }
     }
     // The 48dp touch target sits over the card's top right corner; the dots line up with the name row.
@@ -315,16 +299,16 @@ private fun Preview(thumb: ImageBitmap, modifier: Modifier) {
         .border(1.dp, c.border, MidnightShapes.control), contentScale = ContentScale.Crop)
 }
 
+/** A 44dp tall button holding one glyph. The label is only for screen readers. */
 @Composable
-private fun ModeTile(m: Mode, modifier: Modifier, onClick: () -> Unit) {
+private fun GlyphTile(@androidx.annotation.DrawableRes icon: Int, label: String, modifier: Modifier, primary: Boolean = false, onClick: () -> Unit) {
     val c = LocalMidnight.current
     val haptics = com.pcremote.ui.theme.rememberHaptics()
-    Row(modifier.heightIn(min = 40.dp).clip(MidnightShapes.control).background(c.surfaceHigh)
-        .border(1.dp, c.controlBorder, MidnightShapes.control)
-        .clickable { haptics.tick(); onClick() }.padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Icon(painterResource(m.iconRes()), null, tint = c.text, modifier = Modifier.size(20.dp))
-        Text(stringResource(m.label()), color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Box(modifier.height(44.dp).clip(MidnightShapes.control).background(if (primary) c.accent else c.surfaceHigh)
+        .then(if (primary) Modifier else Modifier.border(1.dp, c.controlBorder, MidnightShapes.control))
+        .clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = label) { haptics.tick(); onClick() }
+        .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), null, tint = if (primary) c.onAccent else c.text, modifier = Modifier.size(22.dp))
     }
 }
 

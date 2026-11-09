@@ -1,6 +1,6 @@
 //! One phone connection: TLS → WebSocket `/v1` (or a relayed connection) → pair|hello → message loop.
 
-use super::{Ctx, Event, Out, Outbox, MAX_FRAME};
+use super::{Bin, Ctx, Event, Out, Outbox, MAX_FRAME};
 use crate::proto::{ClientMsg, ServerMsg};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use std::sync::Arc;
@@ -196,12 +196,15 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                     if !send(&mut ws, &r).await { break }
                 }
             },
+            Some(b) = bin_rx.recv() => match b {
+                Bin::Frame(b) => if ws.send(Message::binary(b)).await.is_err() { break },
+                Bin::Then(m) => if !send(&mut ws, &m).await { break },
+            },
             o = rx.recv() => match o {
                 Some(Out::Msg(m)) => if !send(&mut ws, &m).await { break },
                 Some(Out::Close(code)) => { fail(&mut ws, code, "this phone was removed on the PC").await; break }
                 None => break,
             },
-            Some(b) = bin_rx.recv() => if ws.send(Message::binary(b)).await.is_err() { break },
         }
     }
     drop(registration);

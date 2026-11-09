@@ -41,7 +41,13 @@ pub trait Session: Send {
 #[derive(Clone)]
 pub struct Outbox {
     ctl: mpsc::UnboundedSender<Out>,
-    bin: mpsc::Sender<Vec<u8>>,
+    bin: mpsc::Sender<Bin>,
+}
+
+/// What travels through the binary queue: frames, and messages that must not overtake them.
+pub(crate) enum Bin {
+    Frame(Vec<u8>),
+    Then(ServerMsg),
 }
 
 impl Outbox {
@@ -50,11 +56,15 @@ impl Outbox {
         self.ctl.send(Out::Msg(m)).is_ok()
     }
     pub async fn send_bin(&self, b: Vec<u8>) -> bool {
-        self.bin.send(b).await.is_ok()
+        self.bin.send(Bin::Frame(b)).await.is_ok()
     }
     /// For blocking threads (file upload).
     pub fn send_bin_blocking(&self, b: Vec<u8>) -> bool {
-        self.bin.blocking_send(b).is_ok()
+        self.bin.blocking_send(Bin::Frame(b)).is_ok()
+    }
+    /// Sends `m` after every binary frame queued so far (`file.end` after the last chunk).
+    pub fn send_after_bin_blocking(&self, m: ServerMsg) -> bool {
+        self.bin.blocking_send(Bin::Then(m)).is_ok()
     }
     pub fn is_closed(&self) -> bool {
         self.ctl.is_closed()
@@ -65,29 +75,48 @@ impl Outbox {
     pub fn pair() -> (Outbox, OutboxRx) {
         let (ctl, ctl_rx) = mpsc::unbounded_channel();
         let (bin, bin_rx) = mpsc::channel(64);
-        (Outbox { ctl, bin }, OutboxRx { ctl: ctl_rx, bin: bin_rx })
+        (Outbox { ctl, bin }, OutboxRx { ctl: ctl_rx, bin: bin_rx, frames: Default::default(), msgs: Default::default() })
     }
 }
 
 /// What a test `Outbox` received so far (see `Outbox::pair`).
 pub struct OutboxRx {
     ctl: mpsc::UnboundedReceiver<Out>,
-    bin: mpsc::Receiver<Vec<u8>>,
+    bin: mpsc::Receiver<Bin>,
+    frames: std::collections::VecDeque<Vec<u8>>,
+    msgs: std::collections::VecDeque<ServerMsg>,
 }
 
 impl OutboxRx {
-    /// The next control message, if one is waiting.
+    /// The next control message, if one is waiting. Messages queued behind binary frames come
+    /// out here too; the frames they skipped stay available from `bin`.
     pub fn msg(&mut self) -> Option<ServerMsg> {
         loop {
-            match self.ctl.try_recv().ok()? {
-                Out::Msg(m) => return Some(m),
-                Out::Close(_) => continue,
+            if let Some(m) = self.msgs.pop_front() {
+                return Some(m);
+            }
+            match self.ctl.try_recv() {
+                Ok(Out::Msg(m)) => return Some(m),
+                Ok(Out::Close(_)) => continue,
+                Err(_) => {}
+            }
+            match self.bin.try_recv().ok()? {
+                Bin::Frame(f) => self.frames.push_back(f),
+                Bin::Then(m) => return Some(m),
             }
         }
     }
     /// The next binary frame, if one is waiting.
     pub fn bin(&mut self) -> Option<Vec<u8>> {
-        self.bin.try_recv().ok()
+        loop {
+            if let Some(f) = self.frames.pop_front() {
+                return Some(f);
+            }
+            match self.bin.try_recv().ok()? {
+                Bin::Frame(f) => return Some(f),
+                Bin::Then(m) => self.msgs.push_back(m),
+            }
+        }
     }
 }
 
