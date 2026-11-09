@@ -144,7 +144,13 @@ impl Panel {
                     )),
                     restored_computer: None,
                     computers: if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("owned")) {
-                        [("00000000-0000-4000-8000-000000000010","Studio PC","windows",1),("00000000-0000-4000-8000-000000000011","Linux laptop","linux",1),("00000000-0000-4000-8000-000000000012","Workshop","linux",0)].into_iter().map(|(id,name,platform,online)|OwnedComputer{id:id.into(),name:name.into(),platform:platform.into(),certificate_fp:Some("ab".repeat(32)),linked:1,online}).collect()
+                        let long=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("long"));
+                        let mut list=vec![("00000000-0000-4000-8000-000000000010","Studio PC","windows",1),("00000000-0000-4000-8000-000000000011","Linux laptop","linux",1),("00000000-0000-4000-8000-000000000012","Workshop","linux",0)];
+                        if long {
+                            list[1].1="Brother's Gaming Laptop (Linux)";
+                            list.extend([("00000000-0000-4000-8000-000000000013","Living room media center","windows",1),("00000000-0000-4000-8000-000000000014","Dad's old desktop","windows",0),("00000000-0000-4000-8000-000000000015","Office build server","linux",1),("00000000-0000-4000-8000-000000000016","Garage PC","windows",1)]);
+                        }
+                        list.into_iter().map(|(id,name,platform,online)|OwnedComputer{id:id.into(),name:name.into(),platform:platform.into(),certificate_fp:Some("ab".repeat(32)),linked:1,online}).collect()
                     }else{vec![]},
                     owned_connection: None,
                     signed_out: false,
@@ -271,47 +277,18 @@ impl Panel {
         if self.user.is_some() {
             let local = self.host.as_ref().and_then(|state|state.as_ref().ok()).and_then(|state|state.computer.as_deref());
             let mut connect = None;
-            egui::ScrollArea::vertical().id_salt("owned-computers").max_height((ui.available_height()-82.).max(80.)).show(ui,|ui| {
-                for computer in &self.computers {
-                    let is_local = local == Some(computer.id.as_str());
-                    let preview=self.textures.get(&computer.id).filter(|_| computer.online==1);
-                    design::surface().inner_margin(8).show(ui,|ui| {
-                        ui.set_width(ui.available_width());
-                        let mut row=|ui:&mut egui::Ui| {
-                            let presence=if computer.online==1 {Presence::Online}else{Presence::Offline};
-                            let (status,color)=computer_status(is_local,computer.linked==1,presence);
-                            design::dot(ui,color);
-                            let text=|ui:&mut egui::Ui| {
-                                ui.spacing_mut().item_spacing.y=2.;
-                                ui.add(egui::Label::new(egui::RichText::new(&computer.name).strong()).truncate());
-                                ui.label(egui::RichText::new(status).size(12.).color(design::MUTED));
-                            };
-                            if preview.is_some() {
-                                // Given its own height so the text centres in a tall row, as the dot and button do.
-                                let height=ui.fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(14.))+2.+fonts.row_height(&egui::FontId::proportional(12.)));
-                                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),height),egui::Layout::top_down(egui::Align::Min),text);
-                            } else {
-                                ui.vertical(text);
-                            }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
-                                if !is_local && ui.add_enabled(!self.busy && computer.linked==1,design::primary("Connect")).clicked() { connect=Some(computer.id.clone()); }
-                                let platform=match computer.platform.as_str(){"windows"=>"Windows","linux"=>"Linux","macos"=>"macOS",_=>""};
-                                ui.label(egui::RichText::new(platform).size(12.).color(design::MUTED));
-                            });
-                        };
-                        if let Some(texture)=preview {
-                            // The picture sets the row height, so the text and button centre on it.
-                            ui.horizontal(|ui| {
-                                previews::show(ui,texture);
-                                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),previews::HEIGHT),egui::Layout::left_to_right(egui::Align::Center),&mut row);
-                            });
-                        } else {
-                            ui.horizontal(&mut row);
-                        }
-                    });
-                }
-                if self.computers.is_empty() { ui.label(egui::RichText::new(NO_COMPUTERS).color(design::MUTED)); }
-            });
+            ui.spacing_mut().item_spacing.y=6.;
+            for computer in &self.computers {
+                let is_local = local == Some(computer.id.as_str());
+                let preview=self.textures.get(&computer.id).filter(|_| computer.online==1);
+                let presence=if computer.online==1 {Presence::Online}else{Presence::Offline};
+                let (status,color)=computer_status(is_local,computer.linked==1,presence);
+                let platform=match computer.platform.as_str(){"windows"=>"Windows","linux"=>"Linux","macos"=>"macOS",_=>""};
+                let clicked=crate::card::show(ui,crate::card::Card{name:&computer.name,status:Some((status,color)),platform,preview,connect:(!is_local).then_some(!self.busy && computer.linked==1),menu:None});
+                if clicked { connect=Some(computer.id.clone()); }
+            }
+            ui.spacing_mut().item_spacing.y=8.;
+            if self.computers.is_empty() { ui.label(egui::RichText::new(NO_COMPUTERS).color(design::MUTED)); }
             if let Some(id)=connect { self.connect_owned(id); }
             if !self.note.is_empty() { ui.label(&self.note); }
             ui.add_space(6.);
@@ -1366,8 +1343,14 @@ fn review_textures(ctx: &eframe::egui::Context) -> previews::Cache<eframe::egui:
             for y in y0..y1 { for x in x0..x1 { pixels[y * w + x] = color; } }
         }
         let image = ColorImage { size: [w, h], source_size: eframe::egui::vec2(w as f32, h as f32), pixels };
-        cache.insert("00000000-0000-4000-8000-000000000010", ctx.load_texture("preview a", image.clone(), TextureOptions::LINEAR));
-        cache.insert("00000000-0000-4000-8000-000000000011", ctx.load_texture("preview b", image, TextureOptions::LINEAR));
+        let ids: &[&str] = if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("long")) {
+            &["00000000-0000-4000-8000-000000000011", "00000000-0000-4000-8000-000000000013", "00000000-0000-4000-8000-000000000015", "00000000-0000-4000-8000-000000000016"]
+        } else {
+            &["00000000-0000-4000-8000-000000000010", "00000000-0000-4000-8000-000000000011"]
+        };
+        for id in ids {
+            cache.insert(id, ctx.load_texture(format!("preview {id}"), image.clone(), TextureOptions::LINEAR));
+        }
     }
     cache
 }

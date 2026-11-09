@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{watch, Notify};
 
-/// Logical size of a preview in a computer card (16:9).
-pub const WIDTH: f32 = 160.;
-pub const HEIGHT: f32 = 90.;
+/// Logical size of a preview in a computer card (16:9). It sits beside the text.
+pub const WIDTH: f32 = 80.;
+pub const HEIGHT: f32 = 45.;
 /// Card corners are 7 with an 8 margin, so the picture steps in to 4.
 const RADIUS: u8 = 4;
 const RETRY: Duration = Duration::from_secs(10);
@@ -85,7 +85,7 @@ pub fn cover_uv(width: usize, height: usize) -> egui::Rect {
     egui::Rect::from_min_max(egui::pos2((1. - kx) / 2., (1. - ky) / 2.), egui::pos2((1. + kx) / 2., (1. + ky) / 2.))
 }
 
-/// The preview in a computer card: 160 x 90, rounded one step inside the card, thin border.
+/// The preview in a computer card: 80 x 45, rounded one step inside the card, thin border.
 pub fn show(ui: &mut egui::Ui, texture: &egui::TextureHandle) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(WIDTH, HEIGHT), egui::Sense::hover());
     let [w, h] = texture.size();

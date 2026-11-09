@@ -1,4 +1,5 @@
 mod account;
+mod card;
 mod awake;
 use std::time::Instant;
 mod client_settings;
@@ -140,8 +141,10 @@ fn review_size() -> [f32; 2] {
             }
         }
     }
-    [540., 400.]
+    [DEFAULT_SIZE.0, DEFAULT_SIZE.1]
 }
+/// Big enough for this PC and six other computers, some with previews, without a scrollbar.
+const DEFAULT_SIZE: (f32, f32) = (720., 660.);
 fn initial_status() -> String {
     #[cfg(feature = "ui-review")]
     if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.ends_with("-sample")) {
@@ -1043,41 +1046,37 @@ impl eframe::App for App {
                             if self.client.ui(ui) {self.options=self.client.options();self.client.save();}
                         });
                     } else {
-                        self.account.computers_ui(ui);
-                        if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none()) {
-                            let name = computer.name.clone();
-                            design::surface().show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.horizontal(|ui| {
-                                    design::dot(ui, design::ACCENT);
-                                    ui.add(
-                                        egui::Label::new(egui::RichText::new(name).strong())
-                                            .truncate(),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.menu_button("…", |ui| {
-                                                if ui.button("Forget on this device").clicked() {
-                                                    self.account.forget_computer();
-                                                    ui.close();
-                                                }
-                                            });
-                                            if ui.add(design::primary("Connect")).clicked() {
-                                                self.start(ctx, true);
-                                            }
-                                        },
-                                    );
-                                });
-                            });
-                            ui.add_space(8.);
-                            egui::CollapsingHeader::new("Add computer")
-                                .show(ui, |ui| self.pairing_ui(ui, ctx));
-                        } else if self.account.user.is_some() {
-                            egui::CollapsingHeader::new("Add computer").show(ui,|ui|self.pairing_ui(ui,ctx));
-                        } else {
-                            self.pairing_ui(ui, ctx);
+                        // Everything fits at the default size. Only a smaller window scrolls, as a whole.
+                        let shown = egui::ScrollArea::vertical().id_salt("computers-page").auto_shrink([false, false]).show(ui, |ui| {
+                            self.account.computers_ui(ui);
+                            if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none()) {
+                                let name = computer.name.clone();
+                                let mut forget = false;
+                                let mut menu = |ui: &mut egui::Ui| {
+                                    ui.menu_button("…", |ui| {
+                                        if ui.button("Forget on this device").clicked() {
+                                            forget = true;
+                                            ui.close();
+                                        }
+                                    });
+                                };
+                                let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: None, connect: Some(true), menu: Some(&mut menu) });
+                                if forget { self.account.forget_computer(); }
+                                if connect { self.start(ctx, true); }
+                                ui.add_space(8.);
+                                egui::CollapsingHeader::new("Add computer")
+                                    .show(ui, |ui| self.pairing_ui(ui, ctx));
+                            } else if self.account.user.is_some() {
+                                egui::CollapsingHeader::new("Add computer").show(ui,|ui|self.pairing_ui(ui,ctx));
+                            } else {
+                                self.pairing_ui(ui, ctx);
+                            }
+                        });
+                        #[cfg(feature = "ui-review")]
+                        if self.review_frames == 11 {
+                            eprintln!("FIT content={:.1} viewport={:.1}", shown.content_size.y, shown.inner_rect.height());
                         }
+                        let _ = shown;
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
