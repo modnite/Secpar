@@ -365,6 +365,7 @@ impl Stream {
                     if let Some(wanted) = video_resize.lock().unwrap().take() {
                         // the encoder renegotiates on the new size and opens with a keyframe
                         if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
+                            eprintln!("secpar: stream is now {w}x{h} (asked for {}x{})", wanted.0, wanted.1);
                             video_picture.store(pack_size(w, h), Ordering::Relaxed);
                             video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
                             video_shared.idr.store(true, Ordering::Relaxed);

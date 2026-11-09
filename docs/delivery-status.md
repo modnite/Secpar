@@ -863,3 +863,19 @@ This list is a work record, not a claim that the app family is complete.
   Compact600x420 and360x640 screenshots saved with synthetic names. Additional
   cancellation-generation/expiry fixes unit-tested after the instrumented gate;
   final production APK still needs rebuilding and matching native account release.
+
+- Linux host latency and resize (branch claude/linux-perf, not released). The 3.16.5
+  lag came from the VA encoders, not from the embedded pointer. They ask upstream if
+  the source is live when the caps arrive, pipewiresrc says no at that moment, and the
+  encoder then holds every frame back by four. The chain now answers that query itself.
+  Loopback pointer jump to decoded frame on the headless KDE session (Intel iHD,
+  1366x768): 223 ms before, 76 ms after (about 35 ms of that is the test decoder).
+  3.16.4 has the same delay on all content, the client drawn pointer only hid it.
+  A client size change used to reach pipewiresrc, which reconnected its stream. On a
+  virtual KWin output that resized the screen and the video stalled (3.16.4 too). The
+  source is pinned to the display size, reconfigure events stop at the queue, a VA
+  encoder gets a new chain on a size change instead of renegotiating (destroying its
+  context aborts the process on the iHD driver), and a panic in the video thread ends
+  the stream with an error. The abort itself was not reproduced here: this iHD does not
+  abort. Real Android app on emulator-5556, HEVC, nine live size changes: host stays up
+  and every size is right. Tools and numbers: test/linux-perf/README.md.

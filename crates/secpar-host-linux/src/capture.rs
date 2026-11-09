@@ -194,7 +194,7 @@ fn source_variants(base: &str, fps: u32, native: (u32, u32)) -> Vec<String> {
     all.into_iter().map(|(_, v)| v).collect()
 }
 /// Caps fields that pin a source to one size; nothing when the size is not known.
-fn pinned(size: (u32, u32)) -> String {
+pub(crate) fn pinned(size: (u32, u32)) -> String {
     if size.0 == 0 || size.1 == 0 {
         String::new()
     } else {
@@ -300,6 +300,7 @@ impl Capture {
                     if fit(native, (options.width, options.height)) == native {
                         capture.native = (frame.width, frame.height);
                     }
+                    eprintln!("secpar: capture {} {} asked {}x{} display {}x{} first frame {}x{}", encoder.factory, encoder.codec, options.width, options.height, native.0, native.1, frame.width, frame.height);
                     capture.size = (frame.width, frame.height);
                     capture.first = Some(frame);
                     return Ok(capture);

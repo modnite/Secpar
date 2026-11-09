@@ -349,6 +349,7 @@ impl OwnerSession {
                     out.send(ready);
                 }
                 Err(e) => {
+                    eprintln!("secpar: the stream could not start: {e}");
                     out.send(ServerMsg::StreamError {
                         code: "capture_failed".into(),
                         msg: e,
