@@ -358,7 +358,7 @@ impl Session for HostSession {
                 tokio::task::spawn_blocking(move || {
                     let Some(key) = files::parse_uuid(&id) else { return };
                     match files::stream(&path, &key, offset, &mut |f| out.send_bin_blocking(f)) {
-                        Ok(sha256) => out.send(ServerMsg::FileEnd { id, sha256 }),
+                        Ok(sha256) => out.send_after_bin_blocking(ServerMsg::FileEnd { id, sha256 }),
                         Err(_) => out.send(ServerMsg::FileError { id, code: "denied".into() }),
                     };
                 });

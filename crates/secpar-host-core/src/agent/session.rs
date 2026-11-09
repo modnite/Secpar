@@ -1,7 +1,7 @@
 //! One phone connection: TLS → WebSocket `/v1` (or a relayed connection) → pair|hello → message loop.
 
 use super::guest::{self, Filtered, Link, OwnerWatch};
-use super::{Ctx, Event, Out, Outbox, Session, MAX_FRAME};
+use super::{Bin, Ctx, Event, Out, Outbox, Session, MAX_FRAME};
 use crate::proto::{ClientMsg, ServerMsg};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use std::sync::Arc;
@@ -237,6 +237,16 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                     if !send(&mut ws, &r).await { break }
                 }
             },
+            Some(b) = bin_rx.recv() => match b {
+                Bin::Frame(b) => {
+                    if gate.as_ref().is_some_and(|g| !g.has("files")) { continue }
+                    if ws.send(Message::binary(b)).await.is_err() { break }
+                }
+                Bin::Then(m) => {
+                    if gate.as_ref().is_some_and(|g| !guest::out_allowed(&m, g)) { continue }
+                    if !send(&mut ws, &m).await { break }
+                }
+            },
             o = rx.recv() => match o {
                 Some(Out::Msg(m)) => {
                     if gate.as_ref().is_some_and(|g| !guest::out_allowed(&m, g)) { continue }
@@ -244,10 +254,6 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                 }
                 Some(Out::Close(code)) => { fail(&mut ws, code, "this phone was removed on the PC").await; break }
                 None => break,
-            },
-            Some(b) = bin_rx.recv() => {
-                if gate.as_ref().is_some_and(|g| !g.has("files")) { continue }
-                if ws.send(Message::binary(b)).await.is_err() { break }
             },
         }
     }

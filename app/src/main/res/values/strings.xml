@@ -156,6 +156,7 @@
     <string name="pcr_files_this_pc">This computer</string>
     <string name="pcr_files_browse_failed">Could not open this folder. It may be protected, or the computer went offline.</string>
     <string name="pcr_files_empty">This folder is empty.</string>
+    <string name="pcr_files_refused">The computer refused this file. Check Receive and browse files in its settings.</string>
     <string name="pcr_files_download">Download</string>
     <string name="secpar_capture_shortcut">Mouse capture shortcut</string>
     <string name="secpar_wake_local">Local network</string>

@@ -488,7 +488,7 @@ impl Session for OwnerSession {
                 tokio::task::spawn_blocking(move || {
                     let Some(key) = files::parse_uuid(&id) else { return };
                     match files::stream(&path, &key, offset, &mut |f| out.send_bin_blocking(f)) {
-                        Ok(sha256) => out.send(ServerMsg::FileEnd { id, sha256 }),
+                        Ok(sha256) => out.send_after_bin_blocking(ServerMsg::FileEnd { id, sha256 }),
                         Err(_) => out.send(ServerMsg::FileError { id, code: "denied".into() }),
                     };
                 });
@@ -676,7 +676,8 @@ mod tests {
         let config = r.host.command("get_config", Value::Null).await.unwrap();
         assert_eq!(config["pad"]["ok"], json!(uinput::available()));
         assert!(config["pad"]["text"].as_str().unwrap().starts_with("Gamepad"));
-        assert_eq!(config["config"]["allow_files"], json!(false));
+        assert_eq!(config["config"]["allow_files"], json!(false), "this rig turned it off");
+        assert!(crate::store::Config::default().allow_files, "on by default, like the Windows host");
     }
 
     #[tokio::test]

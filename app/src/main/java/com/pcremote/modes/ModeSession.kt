@@ -104,6 +104,7 @@ fun ModeScaffold(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val online = state is AgentState.Online
                         StatusDot(if (locked && online) c.warn else if (online) c.ok else if (state is AgentState.Failed) c.bad else c.warn)
+                        Spacer(Modifier.width(8.dp))
                         Text(session?.pc?.name ?: "", color = c.textDim, style = MaterialTheme.typography.bodySmall,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }

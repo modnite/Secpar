@@ -39,7 +39,7 @@ pub struct Connected {
     pub socket: Socket,
     pub computer: Computer,
     pub direct_host: Option<String>,
-    /// What the host allows this connection to do. Empty for a paired device.
+    /// Capabilities the host listed in `welcome`. Empty after a first pairing.
     pub caps: Vec<String>,
 }
 
@@ -182,6 +182,37 @@ pub async fn next(socket: &mut Socket) -> Result<Value, String> {
         }
     }
 }
+/// One message from the host: JSON text or a binary frame.
+pub enum Incoming {
+    Text(Value),
+    Binary(Vec<u8>),
+}
+/// Like `next`, but binary frames are returned instead of skipped.
+pub async fn next_incoming(socket: &mut Socket) -> Result<Incoming, String> {
+    loop {
+        match socket.next().await {
+            Some(Ok(Message::Text(t))) => {
+                return serde_json::from_str(&t)
+                    .map(Incoming::Text)
+                    .map_err(|_| "Host sent an invalid response".into())
+            }
+            Some(Ok(Message::Binary(b))) => return Ok(Incoming::Binary(b.to_vec())),
+            Some(Ok(Message::Ping(p))) => socket
+                .send(Message::Pong(p))
+                .await
+                .map_err(|_| "Connection closed")?,
+            Some(Ok(Message::Pong(_))) => {}
+            _ => return Err("Connection closed".into()),
+        }
+    }
+}
+/// The JPEG inside a thumbnail frame (`[0x02][JPEG]`), or None for any other frame.
+pub fn thumb_jpeg(frame: &[u8]) -> Option<&[u8]> {
+    match frame {
+        [2, rest @ ..] if rest.starts_with(&[0xFF, 0xD8]) => Some(rest),
+        _ => None,
+    }
+}
 fn now_s() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -291,7 +322,7 @@ impl Connected {
                 socket: ws,
                 computer,
                 direct_host,
-                caps: Vec::new(),
+                caps: vec![],
             });
         }
         Err(last)
@@ -338,11 +369,15 @@ impl Connected {
             if v["pc"]["id"].as_str() != Some(&computer.id) {
                 return Err("Host identity changed".into());
             }
+            let caps = v["caps"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|c| c.as_str().map(Into::into)).collect())
+                .unwrap_or_default();
             return Ok(Self {
                 socket: ws,
                 computer,
                 direct_host,
-                caps: Vec::new(),
+                caps,
             });
         }
         Err(last)
@@ -479,6 +514,14 @@ impl Connected {
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+    #[test]
+    fn thumbnail_frames_carry_a_jpeg_after_one_marker_byte() {
+        assert_eq!(thumb_jpeg(&[2, 0xFF, 0xD8, 1, 2]), Some(&[0xFF, 0xD8, 1, 2][..]));
+        assert_eq!(thumb_jpeg(&[2]), None);
+        assert_eq!(thumb_jpeg(&[2, 0x89, 0x50]), None);
+        assert_eq!(thumb_jpeg(&[1, 0xFF, 0xD8]), None);
+        assert_eq!(thumb_jpeg(&[]), None);
+    }
     use tokio_rustls::{rustls::pki_types::PrivatePkcs8KeyDer, TlsAcceptor};
     #[tokio::test]
     async fn pinned_tls_pairs_reconnects_and_rejects_other_certificate() {

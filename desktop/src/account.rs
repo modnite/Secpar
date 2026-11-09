@@ -1,5 +1,5 @@
 //! Account credentials remain on this worker; UI events never contain a bearer token.
-use crate::{local_host, vault};
+use crate::{local_host, previews, vault};
 use reqwest::{Client, Method, StatusCode};
 use secpar_client::control::Computer;
 use secpar_client::pairing::Pairing;
@@ -207,6 +207,8 @@ pub struct Panel {
     pub computers: Vec<OwnedComputer>,
     pub owned_connection: Option<OwnedConnection>,
     pub signed_out: bool,
+    previews: previews::Previews,
+    textures: previews::Cache<eframe::egui::TextureHandle>,
     friends: Vec<Friend>,
     blocked: Vec<User>,
     waiting: Option<(String, String)>,
@@ -229,6 +231,8 @@ pub struct Panel {
 }
 impl Panel {
     pub fn new(ctx: eframe::egui::Context) -> Self {
+        #[allow(unused_variables)]
+        let preview_ctx = ctx.clone();
         let (tx, events) = {
             #[cfg(feature = "ui-review")]
             if std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO").is_some() {
@@ -256,6 +260,8 @@ impl Panel {
                     }else{vec![]},
                     owned_connection: None,
                     signed_out: false,
+                    previews: previews::Previews::inert(),
+                    textures: review_textures(&ctx),
                     forgot_computer: false,
                     storage_note: None,
                     user: sample.then(|| User {
@@ -314,6 +320,8 @@ impl Panel {
             computers: vec![],
             owned_connection: None,
             signed_out: false,
+            previews: previews::Previews::new(preview_ctx),
+            textures: Default::default(),
             forgot_computer: false,
             storage_note: None,
             user: None,
@@ -353,6 +361,23 @@ impl Panel {
     pub fn remember_owned(&mut self, owner: String, id: String, computer: Computer) {
         self.send(Command::RememberOwned { owner, id, computer });
     }
+    /// Takes new preview frames and tells the preview worker which computers to watch. A computer
+    /// being streamed, this computer and offline ones get no preview.
+    pub fn sync_previews(&mut self, ctx: &eframe::egui::Context, streaming: Option<&str>) {
+        let local = self.host.as_ref().and_then(|state| state.as_ref().ok()).and_then(|state| state.computer.as_deref());
+        let owner = self.user.as_ref().map(|user| user.id.as_str());
+        let shown = |c: &OwnedComputer| c.online == 1 && c.linked == 1 && Some(c.id.as_str()) != local && Some(c.id.as_str()) != streaming;
+        let targets = owner.map(|owner| {
+            self.computers.iter().filter(|c| shown(c)).filter_map(|c| {
+                let fingerprint = secpar_client::pairing::fingerprint(c.certificate_fp.as_deref()?).ok()?;
+                Some(previews::Target { id: c.id.clone(), key: owned_key(owner, &c.id).ok()?, fingerprint })
+            }).collect()
+        });
+        self.previews.set(previews::Wanted { targets: targets.unwrap_or_default() });
+        self.textures.apply(self.previews.take(), |id, image| ctx.load_texture(format!("preview {id}"), image, eframe::egui::TextureOptions::LINEAR));
+        let computers = &self.computers;
+        self.textures.retain(|id| computers.iter().any(|c| c.id == id && shown(c)));
+    }
     pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
         use crate::design;
         use eframe::egui;
@@ -381,23 +406,40 @@ impl Panel {
             egui::ScrollArea::vertical().id_salt("owned-computers").max_height((ui.available_height()-82.).max(80.)).show(ui,|ui| {
                 for computer in &self.computers {
                     let is_local = local == Some(computer.id.as_str());
+                    let preview=self.textures.get(&computer.id).filter(|_| computer.online==1);
                     design::surface().inner_margin(8).show(ui,|ui| {
                         ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
+                        let mut row=|ui:&mut egui::Ui| {
                             let presence=if computer.online==1 {Presence::Online}else{Presence::Offline};
                             let (status,color)=computer_status(is_local,computer.linked==1,presence);
                             design::dot(ui,color);
-                            ui.vertical(|ui| {
+                            let text=|ui:&mut egui::Ui| {
                                 ui.spacing_mut().item_spacing.y=2.;
                                 ui.add(egui::Label::new(egui::RichText::new(&computer.name).strong()).truncate());
                                 ui.label(egui::RichText::new(status).size(12.).color(design::MUTED));
-                            });
+                            };
+                            if preview.is_some() {
+                                // Given its own height so the text centres in a tall row, as the dot and button do.
+                                let height=ui.fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(14.))+2.+fonts.row_height(&egui::FontId::proportional(12.)));
+                                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),height),egui::Layout::top_down(egui::Align::Min),text);
+                            } else {
+                                ui.vertical(text);
+                            }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                                 if !is_local && ui.add_enabled(!self.busy && computer.linked==1,design::primary("Connect")).clicked() { connect=Some(computer.id.clone()); }
                                 let platform=match computer.platform.as_str(){"windows"=>"Windows","linux"=>"Linux","macos"=>"macOS",_=>""};
                                 ui.label(egui::RichText::new(platform).size(12.).color(design::MUTED));
                             });
-                        });
+                        };
+                        if let Some(texture)=preview {
+                            // The picture sets the row height, so the text and button centre on it.
+                            ui.horizontal(|ui| {
+                                previews::show(ui,texture);
+                                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),previews::HEIGHT),egui::Layout::left_to_right(egui::Align::Center),&mut row);
+                            });
+                        } else {
+                            ui.horizontal(&mut row);
+                        }
                     });
                 }
                 if self.computers.is_empty() { ui.label(egui::RichText::new(NO_COMPUTERS).color(design::MUTED)); }
@@ -1964,6 +2006,24 @@ mod tests {
         });
         server.join().unwrap();
     }
+}
+
+#[cfg(feature = "ui-review")]
+fn review_textures(ctx: &eframe::egui::Context) -> previews::Cache<eframe::egui::TextureHandle> {
+    use eframe::egui::{Color32, ColorImage, TextureOptions};
+    let mut cache = previews::Cache::default();
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("preview")) {
+        // Flat blocks standing in for a desktop, so edges and rounding are easy to judge.
+        let (w, h) = (320usize, 180usize);
+        let mut pixels = vec![Color32::from_rgb(30, 70, 110); w * h];
+        for (x0, y0, x1, y1, color) in [(0, 152, 320, 180, Color32::from_rgb(20, 24, 30)), (24, 20, 190, 120, Color32::from_rgb(235, 238, 244)), (120, 56, 296, 140, Color32::from_rgb(60, 66, 80))] {
+            for y in y0..y1 { for x in x0..x1 { pixels[y * w + x] = color; } }
+        }
+        let image = ColorImage { size: [w, h], source_size: eframe::egui::vec2(w as f32, h as f32), pixels };
+        cache.insert("00000000-0000-4000-8000-000000000010", ctx.load_texture("preview a", image.clone(), TextureOptions::LINEAR));
+        cache.insert("00000000-0000-4000-8000-000000000011", ctx.load_texture("preview b", image, TextureOptions::LINEAR));
+    }
+    cache
 }
 
 #[cfg(test)]

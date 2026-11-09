@@ -108,7 +108,8 @@ pub fn roots(home: &Path, dirs: &HashMap<String, PathBuf>) -> Vec<FsEntry> {
     let mut v = vec![entry("Home", home)];
     for (key, name) in [("DESKTOP", "Desktop"), ("DOCUMENTS", "Documents"), ("DOWNLOAD", "Downloads"), ("PICTURES", "Pictures"), ("VIDEOS", "Videos"), ("MUSIC", "Music")] {
         let path = dirs.get(key).cloned().unwrap_or_else(|| home.join(name));
-        if path.is_dir() {
+        // Several XDG folders can point at one place; the phone's list needs unique paths.
+        if path.is_dir() && !v.iter().any(|e| Path::new(&e.path) == path) {
             v.push(entry(name, &path));
         }
     }
@@ -179,6 +180,21 @@ mod tests {
             ],
             "missing folders are left out and the user-dirs mapping wins"
         );
+    }
+
+    #[test]
+    fn roots_never_repeat_a_path() {
+        let home = tmp("roots-dup");
+        std::fs::create_dir_all(home.join("Stuff")).unwrap();
+        let mut dirs = HashMap::new();
+        for k in ["DESKTOP", "DOCUMENTS", "PICTURES"] {
+            dirs.insert(k.to_string(), home.join("Stuff"));
+        }
+        let paths: Vec<String> = roots(&home, &dirs).into_iter().map(|e| e.path).collect();
+        let mut unique = paths.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(paths.len(), unique.len(), "{paths:?}");
     }
 
     #[test]

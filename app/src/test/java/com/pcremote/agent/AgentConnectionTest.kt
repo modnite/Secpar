@@ -211,4 +211,34 @@ class AgentConnectionTest {
         assertEquals(remote, c.remote.value)
         c.close()
     }
+
+    @Test fun `a silent address does not hold up the next one`() = runTest {
+        val f = FakeWs(mapOf("h1" to "slow", "h2" to "ok"), server)
+        val c = conn(f)
+        c.hello("good", "Pixel")
+        assertEquals(AgentState.Online(pc, setOf("input")), c.state.value)
+        assertEquals(listOf("h1", "h2"), f.opened)
+        assertTrue("took ${testScheduler.currentTime} ms of waiting", testScheduler.currentTime < 1_000)
+        assertEquals("h2", c.connectedHost)
+        c.close()
+    }
+
+    @Test fun `the relay waits until every direct address has answered`() = runTest {
+        val f = FakeWs(mapOf("h1" to "slow", "@relay" to "ok"), server)
+        val c = conn(f, listOf("h1", "@relay"))
+        c.hello("good", "Pixel")
+        assertEquals(AgentState.Online(pc, setOf("input")), c.state.value)
+        assertTrue("the relay opened after ${testScheduler.currentTime} ms", testScheduler.currentTime >= 2_000)
+        assertEquals("@relay", c.connectedHost)
+        c.close()
+    }
+
+    @Test fun `a direct address that opens late still beats the relay`() = runTest {
+        val f = FakeWs(mapOf("h1" to "ok", "@relay" to "ok"), server)
+        val c = conn(f, listOf("h1", "@relay"))
+        c.hello("good", "Pixel")
+        assertEquals("h1", c.connectedHost)
+        assertEquals(listOf("h1"), f.opened)
+        c.close()
+    }
 }

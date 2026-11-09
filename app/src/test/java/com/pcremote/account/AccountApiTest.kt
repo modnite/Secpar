@@ -199,4 +199,13 @@ class AccountApiTest {
         try { AccountApi(token, limited).friends(); fail() }
         catch (e: AccountException) { assertEquals("Too many attempts. Please wait and try again.", e.message) }
     }
+
+    @Test fun `bodyless post and put get an empty body because OkHttp refuses them`() {
+        for (m in listOf("POST", "PUT")) assertEquals(0L, requestBody(m, null)!!.contentLength())
+        assertNull(requestBody("GET", null))
+        assertNull(requestBody("DELETE", null))
+        assertTrue(requestBody("POST", "{}")!!.contentLength() > 0)
+        // the real builder: this threw "method PUT must have a request body" before
+        okhttp3.Request.Builder().url("https://accounts.secpar.win/v1/friends/by-username/bob").method("PUT", requestBody("PUT", null)).build()
+    }
 }

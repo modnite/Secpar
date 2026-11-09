@@ -3923,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-desktop"
-version = "3.16.1"
+version = "3.16.3"
 dependencies = [
  "cpal",
  "dbus",
@@ -3958,7 +3958,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-host"
-version = "3.16.1"
+version = "3.16.3"
 dependencies = [
  "base64",
  "futures-util",

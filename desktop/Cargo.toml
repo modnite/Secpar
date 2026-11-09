@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "3.16.1"
+version = "3.16.3"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
@@ -10,7 +10,7 @@ sha2 = "0.10.9"
 secpar-client = { path = "../crates/secpar-client" }
 secpar-clipboard = { path = "../crates/secpar-clipboard" }
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 openh264 = "0.9.8"
 cpal = "0.17"
 opus = "0.4.0"

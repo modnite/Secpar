@@ -58,7 +58,7 @@ Each controller appears as "Microsoft X-Box 360 pad" (045e:028e), so SDL, Steam 
 
 ### Files
 
-Turn on "Receive and browse files" in Hosting, Settings. It is off by default. Received files go to `Secpar` inside your Downloads folder (`XDG_DOWNLOAD_DIR`, from `~/.config/user-dirs.dirs`, else `~/Downloads`). A name clash adds ` (1)`. Interrupted uploads resume from a `.part` file. The host shows a notice through `notify-send` when it is installed.
+"Receive and browse files" in Hosting, Settings is on by default. Turn it off to refuse files. Received files go to `Secpar` inside your Downloads folder (`XDG_DOWNLOAD_DIR`, from `~/.config/user-dirs.dirs`, else `~/Downloads`). A name clash adds ` (1)`. Interrupted uploads resume from a `.part` file. The host shows a notice through `notify-send` when it is installed.
 
 On the phone, the browse root lists Home, your Desktop, Documents, Downloads, Pictures, Videos and Music folders, and `/`. Dot-files are hidden in listings. Downloading a folder offers every file in it, hidden ones included. The host checks free disk space with `statvfs` before it accepts an upload.
 
