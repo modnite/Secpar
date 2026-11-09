@@ -18,6 +18,8 @@ pub const HEIGHT: f32 = 90.;
 /// Card corners are 7 with an 8 margin, so the picture steps in to 4.
 const RADIUS: u8 = 4;
 const RETRY: Duration = Duration::from_secs(10);
+/// Pause before asking a host again that cannot give previews (no thumbnails, credential gone).
+const UNSUPPORTED_RETRY: Duration = Duration::from_secs(300);
 /// Hosts send 320 px wide frames. Anything much larger is not a thumbnail.
 const MAX_SIDE: u32 = 1280;
 
@@ -163,6 +165,8 @@ struct Task {
     handle: tokio::task::JoinHandle<()>,
     stop: Arc<Notify>,
     live: Arc<AtomicBool>,
+    /// Set when the host cannot give previews, so it is not asked again every few seconds.
+    unsupported: Arc<AtomicBool>,
     stopping: bool,
 }
 
@@ -187,7 +191,8 @@ async fn manage(mut wanted: watch::Receiver<Wanted>, pending: Pending, ctx: egui
             if !task.handle.is_finished() {
                 return true;
             }
-            retry.insert(key.clone(), Instant::now() + RETRY);
+            let wait = if task.unsupported.load(Ordering::Acquire) { UNSUPPORTED_RETRY } else { RETRY };
+            retry.insert(key.clone(), Instant::now() + wait);
             publish(&pending, &ctx, &task.id, None);
             false
         });
@@ -208,10 +213,10 @@ async fn manage(mut wanted: watch::Receiver<Wanted>, pending: Pending, ctx: egui
                 continue;
             }
             let Some(target) = want.targets.iter().find(|t| t.key == key).cloned() else { continue };
-            let (stop, live) = (Arc::new(Notify::new()), Arc::new(AtomicBool::new(true)));
+            let (stop, live, unsupported) = (Arc::new(Notify::new()), Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)));
             let id = target.id.clone();
-            let handle = tokio::spawn(watch_one(target, stop.clone(), live.clone(), pending.clone(), ctx.clone()));
-            tasks.insert(key, Task { id, handle, stop, live, stopping: false });
+            let handle = tokio::spawn(watch_one(target, stop.clone(), live.clone(), unsupported.clone(), pending.clone(), ctx.clone()));
+            tasks.insert(key, Task { id, handle, stop, live, unsupported, stopping: false });
         }
     }
     for task in tasks.values() {
@@ -221,13 +226,14 @@ async fn manage(mut wanted: watch::Receiver<Wanted>, pending: Pending, ctx: egui
     tokio::time::sleep(Duration::from_millis(300)).await;
 }
 
-async fn watch_one(target: Target, stop: Arc<Notify>, live: Arc<AtomicBool>, pending: Pending, ctx: egui::Context) {
+async fn watch_one(target: Target, stop: Arc<Notify>, live: Arc<AtomicBool>, unsupported: Arc<AtomicBool>, pending: Pending, ctx: egui::Context) {
     let Some(saved) = vault::load(&target.key)
         .ok()
         .flatten()
         .and_then(|value| serde_json::from_str::<Computer>(&value).ok())
         .filter(|saved| saved.fingerprint == target.fingerprint)
     else {
+        unsupported.store(true, Ordering::Release);
         return;
     };
     let device = crate::device_name();
@@ -237,6 +243,7 @@ async fn watch_one(target: Target, stop: Arc<Notify>, live: Arc<AtomicBool>, pen
     };
     let Ok(mut conn) = connected else { return };
     if !conn.caps.iter().any(|cap| cap == "thumb") {
+        unsupported.store(true, Ordering::Release);
         return;
     }
     if control::send(&mut conn.socket, json!({"t":"thumb.sub","on":true})).await.is_err() {
