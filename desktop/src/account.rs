@@ -36,9 +36,8 @@ pub struct OwnedComputer {
 pub enum Presence { Online, Offline, Streaming, Locked }
 /// Status text and dot colour for a computer card. Online is OK, streaming is ACCENT, locked and
 /// "Host update required" are WARN, offline is MUTED.
-pub fn computer_status(is_local: bool, linked: bool, presence: Presence) -> (&'static str, eframe::egui::Color32) {
+pub fn computer_status(linked: bool, presence: Presence) -> (&'static str, eframe::egui::Color32) {
     use crate::design::{ACCENT, MUTED, OK, WARN};
-    if is_local { return ("This computer", OK); }
     if !linked { return ("Host update required", WARN); }
     match presence {
         Presence::Streaming => ("Streaming", ACCENT),
@@ -49,6 +48,12 @@ pub fn computer_status(is_local: bool, linked: bool, presence: Presence) -> (&'s
 }
 pub const SIGN_IN_CONFIRM: &str = "Confirm this code in your browser";
 pub const NO_COMPUTERS: &str = "No computers yet";
+pub const NO_OTHER_COMPUTERS: &str = "No other computers yet";
+/// The computers you can connect to. The one this app is hosting from is left out: you are already
+/// on it and cannot connect to yourself.
+pub fn remote_computers<'a>(computers: &'a [OwnedComputer], local: Option<&str>) -> Vec<&'a OwnedComputer> {
+    computers.iter().filter(|c| local != Some(c.id.as_str())).collect()
+}
 pub fn pairing_with(name: &str) -> String { format!("Pairing with {name}…") }
 pub enum OwnedConnection {
     Cached { owner: String, computer: Computer },
@@ -105,6 +110,9 @@ pub struct Panel {
     pub user: Option<User>,
     pub computers: Vec<OwnedComputer>,
     pub owned_connection: Option<OwnedConnection>,
+    /// The next owned connection is for the Files page, not for a stream.
+    files_wanted: bool,
+    pub files_connection: Option<OwnedConnection>,
     pub signed_out: bool,
     previews: previews::Previews,
     textures: previews::Cache<eframe::egui::TextureHandle>,
@@ -146,6 +154,7 @@ impl Panel {
                     computers: if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("owned")) {
                         let long=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("long"));
                         let mut list=vec![("00000000-0000-4000-8000-000000000010","Studio PC","windows",1),("00000000-0000-4000-8000-000000000011","Linux laptop","linux",1),("00000000-0000-4000-8000-000000000012","Workshop","linux",0)];
+                        if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("only")) { list.truncate(1); }
                         if long {
                             list[1].1="Brother's Gaming Laptop (Linux)";
                             list.extend([("00000000-0000-4000-8000-000000000013","Living room media center","windows",1),("00000000-0000-4000-8000-000000000014","Dad's old desktop","windows",0),("00000000-0000-4000-8000-000000000015","Office build server","linux",1),("00000000-0000-4000-8000-000000000016","Garage PC","windows",1)]);
@@ -153,6 +162,8 @@ impl Panel {
                         list.into_iter().map(|(id,name,platform,online)|OwnedComputer{id:id.into(),name:name.into(),platform:platform.into(),certificate_fp:Some("ab".repeat(32)),linked:1,online}).collect()
                     }else{vec![]},
                     owned_connection: None,
+                    files_wanted: false,
+                    files_connection: None,
                     signed_out: false,
                     previews: previews::Previews::inert(),
                     textures: review_textures(&ctx),
@@ -202,6 +213,8 @@ impl Panel {
             restored_computer: None,
             computers: vec![],
             owned_connection: None,
+            files_wanted: false,
+            files_connection: None,
             signed_out: false,
             previews: previews::Previews::new(preview_ctx),
             textures: Default::default(),
@@ -231,7 +244,27 @@ impl Panel {
     pub fn forget_computer(&mut self) {
         self.send(Command::ForgetComputer);
     }
-    pub fn connect_owned(&mut self, id: String) { self.send(Command::ConnectOwned(id)); }
+    pub fn connect_owned(&mut self, id: String) { self.files_wanted = false; self.send(Command::ConnectOwned(id)); }
+    /// Same as `connect_owned`, but the credential goes to the Files page instead of a stream.
+    pub fn connect_owned_for_files(&mut self, id: String) {
+        self.note.clear();
+        self.files_wanted = true;
+        self.send(Command::ConnectOwned(id));
+    }
+    /// What the account worker last said, such as pairing progress or why a request failed.
+    pub fn note(&self) -> &str { &self.note }
+    /// Computers the Files page can open: the other computers on the account and one paired by hand.
+    pub fn picks(&self, manual: Option<&Computer>) -> Vec<crate::files::Pick> {
+        let mut out: Vec<crate::files::Pick> = if self.user.is_some() {
+            remote_computers(&self.computers, self.local_id()).into_iter()
+                .map(|c| crate::files::Pick { id: c.id.clone(), name: c.name.clone(), ready: c.online == 1 && c.linked == 1, saved: None })
+                .collect()
+        } else { vec![] };
+        if let Some(c) = manual.filter(|c| out.iter().all(|p| p.id != c.id)) {
+            out.push(crate::files::Pick { id: c.id.clone(), name: c.name.clone(), ready: true, saved: Some(c.clone()) });
+        }
+        out
+    }
     pub fn remember_owned(&mut self, owner: String, id: String, computer: Computer) {
         self.send(Command::RememberOwned { owner, id, computer });
     }
@@ -251,6 +284,10 @@ impl Panel {
         self.textures.apply(self.previews.take(), |id, image| ctx.load_texture(format!("preview {id}"), image, eframe::egui::TextureOptions::LINEAR));
         let computers = &self.computers;
         self.textures.retain(|id| computers.iter().any(|c| c.id == id && shown(c)));
+    }
+    /// The computer this app hosts from, when the local host is linked to the account.
+    pub fn local_id(&self) -> Option<&str> {
+        self.host.as_ref().and_then(|state| state.as_ref().ok()).and_then(|state| state.computer.as_deref())
     }
     pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
         use crate::design;
@@ -275,20 +312,19 @@ impl Panel {
             });
         }
         if self.user.is_some() {
-            let local = self.host.as_ref().and_then(|state|state.as_ref().ok()).and_then(|state|state.computer.as_deref());
             let mut connect = None;
             ui.spacing_mut().item_spacing.y=6.;
-            for computer in &self.computers {
-                let is_local = local == Some(computer.id.as_str());
+            let shown = remote_computers(&self.computers,self.local_id());
+            for computer in &shown {
                 let preview=self.textures.get(&computer.id).filter(|_| computer.online==1);
                 let presence=if computer.online==1 {Presence::Online}else{Presence::Offline};
-                let (status,color)=computer_status(is_local,computer.linked==1,presence);
+                let (status,color)=computer_status(computer.linked==1,presence);
                 let platform=match computer.platform.as_str(){"windows"=>"Windows","linux"=>"Linux","macos"=>"macOS",_=>""};
-                let clicked=crate::card::show(ui,crate::card::Card{name:&computer.name,status:Some((status,color)),platform,preview,connect:(!is_local).then_some(!self.busy && computer.linked==1),menu:None});
+                let clicked=crate::card::show(ui,crate::card::Card{name:&computer.name,status:Some((status,color)),platform,preview,connect:Some(!self.busy && computer.linked==1),menu:None});
                 if clicked { connect=Some(computer.id.clone()); }
             }
             ui.spacing_mut().item_spacing.y=8.;
-            if self.computers.is_empty() { ui.label(egui::RichText::new(NO_COMPUTERS).color(design::MUTED)); }
+            if shown.is_empty() { ui.label(egui::RichText::new(if self.computers.is_empty() {NO_COMPUTERS}else{NO_OTHER_COMPUTERS}).color(design::MUTED)); }
             if let Some(id)=connect { self.connect_owned(id); }
             if !self.note.is_empty() { ui.label(&self.note); }
             ui.add_space(6.);
@@ -301,6 +337,7 @@ impl Panel {
                 Event::SignedOut(note) => {
                     self.computers.clear();
                     self.owned_connection = None;
+                    self.files_connection = None;
                     self.signed_out = true;
                     self.user = None;
                     self.friends.clear();
@@ -331,7 +368,10 @@ impl Panel {
                 Event::ForgotComputer => self.forgot_computer = true,
                 Event::StorageNote(note) => self.storage_note = Some(note),
                 Event::Owned(computers) => self.computers = computers,
-                Event::OwnedConnection(connection) => self.owned_connection = Some(connection),
+                Event::OwnedConnection(connection) => {
+                    if std::mem::take(&mut self.files_wanted) { self.files_connection = Some(connection); }
+                    else { self.owned_connection = Some(connection); }
+                }
             }
         }
     }
@@ -1361,12 +1401,24 @@ mod status_tests {
     use crate::design::{ACCENT, MUTED, OK, WARN};
     #[test]
     fn status_text_and_colour() {
-        assert_eq!(computer_status(true, true, Presence::Offline), ("This computer", OK));
-        assert_eq!(computer_status(false, true, Presence::Online), ("Online", OK));
-        assert_eq!(computer_status(false, true, Presence::Offline), ("Offline", MUTED));
-        assert_eq!(computer_status(false, true, Presence::Streaming), ("Streaming", ACCENT));
-        assert_eq!(computer_status(false, true, Presence::Locked), ("Locked", WARN));
-        assert_eq!(computer_status(false, false, Presence::Online), ("Host update required", WARN));
+        assert_eq!(computer_status(true, Presence::Online), ("Online", OK));
+        assert_eq!(computer_status(true, Presence::Offline), ("Offline", MUTED));
+        assert_eq!(computer_status(true, Presence::Streaming), ("Streaming", ACCENT));
+        assert_eq!(computer_status(true, Presence::Locked), ("Locked", WARN));
+        assert_eq!(computer_status(false, Presence::Online), ("Host update required", WARN));
+    }
+    fn computer(id: &str) -> OwnedComputer {
+        OwnedComputer { id: id.into(), name: id.into(), platform: "linux".into(), certificate_fp: None, linked: 1, online: 1 }
+    }
+    #[test]
+    fn this_computer_is_never_a_connect_target() {
+        let all = vec![computer("a"), computer("b"), computer("c")];
+        let ids = |local| remote_computers(&all, local).iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(Some("b")), ["a", "c"]);
+        assert_eq!(ids(None), ["a", "b", "c"]);
+        assert_eq!(ids(Some("elsewhere")), ["a", "b", "c"]);
+        assert!(remote_computers(&all[1..2], Some("b")).is_empty());
+        assert!(remote_computers(&[], Some("b")).is_empty());
     }
     #[test]
     fn strings() {

@@ -10,6 +10,8 @@ mod gpu;
 mod audio;
 mod audio_worker;
 mod design;
+mod dialogs;
+mod files;
 mod hosting;
 mod input;
 mod stream_menu;
@@ -130,6 +132,19 @@ pub fn run() -> eframe::Result {
     };
     eframe::run_native("Secpar", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }
+fn new_files(ctx: egui::Context, dir: &str) -> files::Panel {
+    #[cfg(feature = "ui-review")]
+    if let Ok(page) = std::env::var("SECPAR_REVIEW_PAGE") {
+        if std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO").is_some() && page.starts_with("files") {
+            if let Ok(link) = std::env::var("SECPAR_REVIEW_FILES_LINK") {
+                let script = std::env::var("SECPAR_REVIEW_FILES_SCRIPT").unwrap_or_default();
+                return files::Panel::live(ctx, &link, &script, &std::env::var("SECPAR_REVIEW_FILES_SAVE").unwrap_or_default());
+            }
+            return files::Panel::sample(ctx, &page);
+        }
+    }
+    files::Panel::new(ctx, Some(dir))
+}
 fn review_size() -> [f32; 2] {
     #[cfg(feature = "ui-review")]
     if let Ok(size) = std::env::var("SECPAR_REVIEW_SIZE") {
@@ -143,7 +158,7 @@ fn review_size() -> [f32; 2] {
     }
     [DEFAULT_SIZE.0, DEFAULT_SIZE.1]
 }
-/// Big enough for this PC and six other computers, some with previews, without a scrollbar.
+/// Big enough for six other computers, some with previews, without a scrollbar.
 const DEFAULT_SIZE: (f32, f32) = (720., 660.);
 fn initial_status() -> String {
     #[cfg(feature = "ui-review")]
@@ -163,11 +178,14 @@ fn initial_page() -> Page {
     }
     #[cfg(feature="ui-review")]
     if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("client-settings")) {return Page::Settings;}
+    #[cfg(feature="ui-review")]
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("files")) {return Page::Files;}
     Page::Computers
 }
 #[derive(PartialEq)]
 enum Page {
     Computers,
+    Files,
     Hosting,
     Friends,
     Settings,
@@ -175,6 +193,8 @@ enum Page {
 struct App {
     #[cfg(feature = "ui-review")]
     review_frames: u32,
+    #[cfg(feature = "ui-review")]
+    review_shot: bool,
     #[cfg(feature="ui-review")]
     review_commands: Option<mpsc::Receiver<Command>>,
     #[cfg(windows)]
@@ -184,6 +204,7 @@ struct App {
     shortcut_key: Option<Key>,
     hosting: hosting::Panel,
     account: account::Panel,
+    files: files::Panel,
     page: Page,
     pair_link: String,
     status: String,
@@ -258,6 +279,7 @@ impl App {
             TextureOptions::LINEAR,
         );
         let client=client_settings::Settings::load();
+        let client_files_dir=client.files_dir.clone();
         let options=client.options();
         let icon=image::load_from_memory(include_bytes!("../../assets/branding/secpar-icon.png")).expect("Secpar icon")
             .resize_exact((24.*brand_scale).round().max(1.) as u32,(24.*brand_scale).round().max(1.) as u32,image::imageops::FilterType::Lanczos3).to_rgba8();
@@ -269,6 +291,8 @@ impl App {
             shortcut_key: None,
             #[cfg(feature = "ui-review")]
             review_frames: 0,
+            #[cfg(feature = "ui-review")]
+            review_shot: false,
             #[cfg(feature="ui-review")]
             review_commands: None,
             #[cfg(windows)]
@@ -276,6 +300,7 @@ impl App {
             updates: updates::Panel::new(),
             hosting: hosting::Panel::new(cc.egui_ctx.clone()),
             account: account::Panel::new(cc.egui_ctx.clone()),
+            files: new_files(cc.egui_ctx.clone(), &client_files_dir),
             page: initial_page(),
             pair_link: String::new(),
             status: initial_status(),
@@ -522,6 +547,8 @@ impl App {
                     } else if self.computer_account.is_none() {
                         self.account.remember(c.clone());
                     }
+                    // Files the computer offers while we stream arrive through a second, quiet connection.
+                    self.files.background(&c.id, &c.name, self.session_account.clone(), files::Source::Saved(c.clone()));
                     self.computer = Some(c);
                     self.pair_link.clear();
                 }
@@ -580,6 +607,7 @@ impl App {
                 }
                 Event::Cursor { x, y, visible } => self.cursor = (x, y, visible),
                 Event::Ended(s) => {
+                    self.files.end_background();
                     self.connection_error=if s=="Disconnected" {None}else{Some(s.clone())};
                     self.clipboard=None;
                     self.session_account=None;
@@ -805,6 +833,23 @@ impl eframe::App for App {
         }
         self.poll(ctx);
         self.account.poll();
+        self.files.poll();
+        if let Some(connection) = self.account.files_connection.take() {
+            let (owner, computer_id, source) = match connection {
+                account::OwnedConnection::Cached { owner, computer } => (owner, computer.id.clone(), files::Source::Saved(computer)),
+                account::OwnedConnection::Pair { owner, id, pairing } => (owner, id, files::Source::Pair(pairing)),
+            };
+            if self.files.wants(&computer_id) && self.account.user.as_ref().is_some_and(|user| user.id == owner) {
+                let name = self.account.computers.iter().find(|c| c.id == computer_id).map(|c| c.name.clone()).unwrap_or_default();
+                self.files.open(&computer_id, &name, Some(owner), source);
+            }
+        }
+        if let Some((owner, id, computer)) = self.files.take_paired() {
+            self.account.remember_owned(owner, id, computer);
+        }
+        if self.account.user.is_none() {
+            self.files.account_gone();
+        }
         let streaming = if self.command.is_some() { self.owned_connecting.as_ref().map(|(_, id)| id.clone()).or_else(|| self.computer.as_ref().map(|c| c.id.clone())) } else { None };
         self.account.sync_previews(ctx, streaming.as_deref());
         if std::mem::take(&mut self.account.signed_out) && self.computer_account.is_some() {
@@ -923,8 +968,11 @@ impl eframe::App for App {
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
+                        // Five tabs still fit the smallest window.
+                        let tab = ((ui.available_width() - 4. * ui.spacing().item_spacing.x) / 5.).clamp(60., 100.);
                         for (page, label) in [
                             (Page::Computers, "Computers"),
+                            (Page::Files, "Files"),
                             (Page::Hosting, "Hosting"),
                             (Page::Friends, "Friends"),
                             (Page::Settings, "Settings"),
@@ -934,7 +982,7 @@ impl eframe::App for App {
                             }
                             let selected = self.page == page;
                             let response = ui.add_sized(
-                                [100., 36.],
+                                [tab, 36.],
                                 egui::Button::new(egui::RichText::new(label).color(if selected {
                                     Color32::WHITE
                                 } else {
@@ -1039,6 +1087,17 @@ impl eframe::App for App {
                 } else if self.command.is_none() {
                     if self.page == Page::Hosting {
                         self.hosting.ui(ui, ctx, &mut self.account);
+                    } else if self.page == Page::Files {
+                        let manual = self.computer.clone().filter(|_| self.computer_account.is_none());
+                        let picks = self.account.picks(manual.as_ref());
+                        let note = self.account.note().to_string();
+                        if let Some(files::Action::Owned(id)) = self.files.ui(ui, &picks, &note) {
+                            self.account.connect_owned_for_files(id);
+                        }
+                        if let Some(dir) = self.files.take_save_dir() {
+                            self.client.files_dir = dir;
+                            self.client.save();
+                        }
                     } else if self.page == Page::Friends {
                         self.account.ui(ui);
                     } else if self.page == Page::Settings {
@@ -1091,7 +1150,8 @@ impl eframe::App for App {
         #[cfg(feature = "ui-review")]
         if let Some(path) = std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO") {
             self.review_frames += 1;
-            if self.review_frames == 12 {
+            if self.review_frames >= 12 && !self.review_shot && (self.files.review_ready() || self.review_frames > 3000) {
+                self.review_shot = true;
                 ctx.send_viewport_cmd(ViewportCommand::Screenshot(Default::default()));
             }
             for event in ctx.input(|i| i.events.clone()) {
@@ -1112,6 +1172,7 @@ impl eframe::App for App {
         }
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.files.close();
         for m in self.input.release() {
             self.send(Command::Input(m));
         }
