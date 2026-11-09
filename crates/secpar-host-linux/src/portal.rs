@@ -126,7 +126,7 @@ impl Portal {
             }
         }
     }
-    pub(crate) fn fd(&self) -> i32 {
+    pub fn fd(&self) -> i32 {
         self.remote_fd.as_raw_fd()
     }
     pub fn is_closed(&self) -> bool {

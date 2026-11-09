@@ -351,51 +351,65 @@ impl Stream {
         let video_shared = shared.clone();
         std::thread::spawn(move || {
             let _guard = guard;
-            let mut id = 0u32;
-            while !video_shared.stop.load(Ordering::Relaxed) {
-                if video_shared.peer.lock().unwrap().is_none() {
-                    std::thread::sleep(Duration::from_millis(5));
-                    continue;
-                }
-                if let Some(wanted) = video_resize.lock().unwrap().take() {
-                    // the encoder renegotiates on the new size and opens with a keyframe
-                    if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
-                        video_picture.store(pack_size(w, h), Ordering::Relaxed);
-                        video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
-                        video_shared.idr.store(true, Ordering::Relaxed);
+            let failed = video_out.clone();
+            let ended = video_shared.clone();
+            // A panic in here must end this stream and say why. It would otherwise end only this thread and leave the
+            // session open with a picture that never moves.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let mut id = 0u32;
+                while !video_shared.stop.load(Ordering::Relaxed) {
+                    if video_shared.peer.lock().unwrap().is_none() {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
                     }
-                }
-                if video_shared.idr.swap(false, Ordering::Relaxed) {
-                    capture.request_keyframe();
-                }
-                let frame = match capture.next_frame(Duration::from_millis(100)) {
-                    Ok(Some(f)) => f,
-                    Ok(None) => continue,
-                    Err(_) => break,
-                };
-                let fh = FrameHeader {
-                    len: frame.data.len() as u32,
-                    capture_us: frame.capture_us,
-                    keyframe: frame.key,
-                    codec,
-                };
-                let packets = packetize(id, &fh, &frame.data, 15);
-                let count = packets.len().div_ceil(4).max(1);
-                let start = Instant::now();
-                for (index, chunk) in packets.chunks(count).enumerate() {
-                    if let Some(wait) = (start + Duration::from_millis(index as u64))
-                        .checked_duration_since(Instant::now())
-                    {
-                        std::thread::sleep(wait)
+                    if let Some(wanted) = video_resize.lock().unwrap().take() {
+                        // the encoder renegotiates on the new size and opens with a keyframe
+                        if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
+                            video_picture.store(pack_size(w, h), Ordering::Relaxed);
+                            video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
+                            video_shared.idr.store(true, Ordering::Relaxed);
+                        }
                     }
-                    for (h, p) in chunk {
-                        video_shared.send(*h, p)
+                    if video_shared.idr.swap(false, Ordering::Relaxed) {
+                        capture.request_keyframe();
                     }
+                    let frame = match capture.next_frame(Duration::from_millis(100)) {
+                        Ok(Some(f)) => f,
+                        Ok(None) => continue,
+                        Err(error) => return Some(error),
+                    };
+                    let fh = FrameHeader {
+                        len: frame.data.len() as u32,
+                        capture_us: frame.capture_us,
+                        keyframe: frame.key,
+                        codec,
+                    };
+                    let packets = packetize(id, &fh, &frame.data, 15);
+                    let count = packets.len().div_ceil(4).max(1);
+                    let start = Instant::now();
+                    for (index, chunk) in packets.chunks(count).enumerate() {
+                        if let Some(wait) = (start + Duration::from_millis(index as u64))
+                            .checked_duration_since(Instant::now())
+                        {
+                            std::thread::sleep(wait)
+                        }
+                        for (h, p) in chunk {
+                            video_shared.send(*h, p)
+                        }
+                    }
+                    id = id.wrapping_add(1);
                 }
-                id = id.wrapping_add(1);
+                None
+            }));
+            let why = match outcome {
+                Ok(error) => error,
+                Err(_) => Some("Desktop capture stopped unexpectedly.".to_string()),
+            };
+            if let Some(why) = why {
+                failed.send(ServerMsg::error("capture_failed", &why, Some("stream.start")));
             }
-            video_shared.stop.store(true, Ordering::Relaxed);
-            video_shared.send(header(Type::Bye, 0), &[]);
+            ended.stop.store(true, Ordering::Relaxed);
+            ended.send(header(Type::Bye, 0), &[]);
         });
         if options.audio {
             let audio_shared = shared.clone();
