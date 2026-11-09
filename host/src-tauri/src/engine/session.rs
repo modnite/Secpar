@@ -45,6 +45,8 @@ pub struct Params {
     pub public: Option<IpAddr>,
     /// Windows device name of the display to stream; empty = primary.
     pub display: String,
+    /// Set for a friend's stream: frames stop when it closes, loses view, or the desktop locks.
+    pub gate: Option<secpar_host_core::guest_policy::Gate>,
 }
 
 /// The UDP port streams use when it's free (mapped on the router by `net`).
@@ -346,6 +348,15 @@ impl Video {
         let mut last_cursor = None;
         let mut want = (p.w, p.h);
         while !sh.stopped() {
+            if let Some(g) = &p.gate {
+                // Checked before every frame: a friend never follows the owner onto the lock screen.
+                if crate::win::desk::locked_or_unknown() {
+                    g.close_because("locked");
+                }
+                if !g.view() {
+                    break;
+                }
+            }
             let t = *sh.target.lock().unwrap();
             let new_display = sh.switch.lock().unwrap().take().filter(|id| *id != self.shown.id);
             let new_size = sh.resize.lock().unwrap().take().filter(|s| *s != want);
@@ -568,7 +579,7 @@ impl StreamSession {
         let mut threads = vec![video];
         let csh = sh.clone();
         threads.push(std::thread::spawn(move || control(&csh, &mut input, &mut br, TIMEOUT)));
-        if p.audio {
+        if p.audio && p.gate.as_ref().is_none_or(|g| g.has("audio")) {
             let ash = sh.clone();
             threads.push(std::thread::spawn(move || {
                 let _com = Com::init();

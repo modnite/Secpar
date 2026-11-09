@@ -1,6 +1,8 @@
 //! The real agent handlers: one `HostSession` per phone, composed from the feature modules.
 
 use crate::agent::{BoxFut, Handlers, Outbox, Session};
+use secpar_host_core::agent::{guest, GuestAdmission};
+use secpar_host_core::guest_policy::Gate;
 use crate::proto::{ClientMsg, PcInfo, ServerMsg};
 use crate::store::Store;
 use crate::files::{self, Incoming, Outgoing};
@@ -16,12 +18,41 @@ pub struct Host {
     pads: Option<Arc<dyn pad::Bus>>,
     lingering: pad::Lingering,
     pub net: Arc<Mutex<net::NetStatus>>,
+    /// None when the host is not linked to an account that could vouch for a friend.
+    guests: Option<Arc<GuestAdmission>>,
 }
 
 impl Host {
-    pub fn new(store: Arc<Mutex<Store>>) -> Self {
+    pub fn new(store: Arc<Mutex<Store>>, guests: Option<Arc<GuestAdmission>>) -> Self {
         let pads = pad::ViGEm::connect().map(|b| Arc::new(b) as Arc<dyn pad::Bus>);
-        Host { store, outgoing: Outgoing::default(), pads, lingering: Default::default(), net: Arc::default() }
+        Host { store, outgoing: Outgoing::default(), pads, lingering: Default::default(), net: Arc::default(), guests }
+    }
+
+    fn build(&self, device: &str, out: Outbox, gate: Option<Gate>) -> Box<dyn Session> {
+        let dir = self.store.lock().unwrap().files_dir();
+        let pads = self.pads.clone().map(|bus| {
+            let out = out.clone();
+            Pads::new(bus, Box::new(move |id, lo, hi| {
+                out.send(ServerMsg::Rumble { id, lo, hi });
+            }))
+            .for_device(device, self.lingering.clone())
+        });
+        Box::new(HostSession {
+            input: input::Input::new(input::SendInputEmitter),
+            out,
+            media: None,
+            store: self.store.clone(),
+            incoming: files::incoming(dir.into()),
+            outgoing: self.outgoing.clone(),
+            clip: None,
+            sid: u64::from_le_bytes(crate::store::random::<8>()),
+            pads: Arc::new(Mutex::new(pads)),
+            thumb: None,
+            net: self.net.clone(),
+            stream: None,
+            gate,
+            checked: None,
+        })
     }
 }
 
@@ -46,28 +77,19 @@ impl Handlers for Host {
     }
 
     fn session(&self, device: &str, out: Outbox) -> Box<dyn Session> {
-        let dir = self.store.lock().unwrap().files_dir();
-        let pads = self.pads.clone().map(|bus| {
-            let out = out.clone();
-            Pads::new(bus, Box::new(move |id, lo, hi| {
-                out.send(ServerMsg::Rumble { id, lo, hi });
-            }))
-            .for_device(device, self.lingering.clone())
-        });
-        Box::new(HostSession {
-            input: input::Input::new(input::SendInputEmitter),
-            out,
-            media: None,
-            store: self.store.clone(),
-            incoming: files::incoming(dir.into()),
-            outgoing: self.outgoing.clone(),
-            clip: None,
-            sid: u64::from_le_bytes(crate::store::random::<8>()),
-            pads: Arc::new(Mutex::new(pads)),
-            thumb: None,
-            net: self.net.clone(),
-            stream: None,
-        })
+        self.build(device, out, None)
+    }
+
+    fn guests(&self) -> Option<Arc<GuestAdmission>> {
+        self.guests.clone()
+    }
+
+    fn guest_refusal(&self) -> Option<&'static str> {
+        (!self.store.lock().unwrap().config().friends).then_some("Friends are switched off on this PC.")
+    }
+
+    fn guest_session(&self, gate: &Gate, out: Outbox) -> Option<Box<dyn Session>> {
+        Some(self.build("guest", out, Some(gate.clone())))
     }
 }
 
@@ -86,6 +108,21 @@ pub struct HostSession {
     thumb: Option<tokio::task::JoinHandle<()>>,
     net: Arc<Mutex<net::NetStatus>>,
     stream: Option<StreamSession>,
+    /// Set for a friend's session. Everything that reaches the PC asks it first.
+    gate: Option<Gate>,
+    checked: Option<std::time::Instant>,
+}
+
+/// True once a friend's gate is closed. Reads the lock state at most every 20 ms, and an
+/// unreadable state counts as locked, so a friend never types into the lock screen.
+fn gate_blocked(gate: &Gate, last: &mut Option<std::time::Instant>) -> bool {
+    if last.is_none_or(|t| t.elapsed() >= std::time::Duration::from_millis(20)) {
+        *last = Some(std::time::Instant::now());
+        if win::desk::locked_or_unknown() {
+            gate.close_because("locked");
+        }
+    }
+    !gate.is_open()
 }
 
 impl HostSession {
@@ -97,7 +134,15 @@ impl HostSession {
     fn stream_input(&self) -> crate::engine::session::InputSink {
         let pads = self.pads.clone();
         let mut inp = input::Input::new(input::SendInputEmitter);
-        Box::new(move |m| match m {
+        let gate = self.gate.clone();
+        let mut checked = None;
+        Box::new(move |m| {
+            if let Some(g) = &gate {
+                if gate_blocked(g, &mut checked) || !matches!(guest::verdict(&m, g), guest::Verdict::Allow) {
+                    return;
+                }
+            }
+            match m {
             ClientMsg::Pad { id, btn, lt, rt, lx, ly, rx, ry } => {
                 if let Some(p) = pads.lock().unwrap().as_mut() {
                     let _ = p.pad(id, &pad::PadState { btn, lt, rt, lx, ly, rx, ry });
@@ -110,6 +155,7 @@ impl HostSession {
             }
             m => {
                 let _ = inp.handle(&m);
+            }
             }
         })
     }
@@ -144,6 +190,16 @@ impl Session for HostSession {
     fn on_msg(&mut self, m: ClientMsg) -> Option<ServerMsg> {
         let of = m.t();
         let err = |code: &str, msg: &str| Some(ServerMsg::error(code, msg, Some(of)));
+        if let Some(g) = &self.gate {
+            // The agent already filtered this. These never run for a friend, whatever the grant says.
+            if matches!(m, ClientMsg::Power { .. } | ClientMsg::Unlock { .. } | ClientMsg::FsList { .. } | ClientMsg::FsGet { .. }
+                | ClientMsg::Net | ClientMsg::MediaSub { .. } | ClientMsg::MediaCmd { .. } | ClientMsg::ThumbSub { .. }) {
+                return err("forbidden", "This is not allowed for a friend.");
+            }
+            if gate_blocked(g, &mut self.checked) {
+                return None;
+            }
+        }
         match m {
             ClientMsg::MouseMove { .. }
             | ClientMsg::MouseButton { .. }
@@ -200,7 +256,7 @@ impl Session for HostSession {
                 let (fps, max_kbps) = (if fps == 0 { 60 } else { fps }, if max_kbps == 0 { 20000 } else { max_kbps });
                 let (w,h,fps)=crate::engine::session::quality_limit(&self.store.lock().unwrap().config().max_quality,w,h,fps);
                 let display = if display.is_empty() { self.store.lock().unwrap().config().display.clone() } else { display };
-                let p = Params { w, h, fps, codecs, max_kbps, audio, cands, public, display };
+                let p = Params { w, h, fps, codecs, max_kbps, audio, cands, public, display, gate: self.gate.clone() };
                 let out = self.out.clone();
                 let notify: crate::engine::session::Notify = Arc::new(move |m| {
                     out.send(m);

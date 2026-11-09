@@ -18,6 +18,8 @@ pub struct App {
     pub account: Result<Arc<crate::host_account::Account>, String>,
     pub outgoing: files::Outgoing,
     pub net: Arc<Mutex<net::NetStatus>>,
+    /// Display names of friends with a running session, by account id.
+    pub friends: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 pub fn run() {
@@ -33,7 +35,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&dir)?;
     let identity = tls::Identity::load_or_create(&dir)?;
     let store = Arc::new(Mutex::new(Store::open(&dir)?));
-    let host = Arc::new(crate::host::Host::new(store.clone()));
+    // Account-link failure must never interrupt existing owner connections.
+    let account = crate::host_account::open(&dir, &identity.fingerprint_hex);
+    let guests = account.as_ref().ok().map(|a| secpar_host_core::agent::GuestAdmission::new(a.clone()));
+    let host = Arc::new(crate::host::Host::new(store.clone(), guests));
     let (outgoing, net) = (host.outgoing.clone(), host.net.clone());
     if store.lock().unwrap().config().anywhere {
         let net = net.clone();
@@ -51,19 +56,31 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     crate::notify::set_hook(Box::new(move |title, body| {
         let _ = tx.send(json!({"ev": "toast", "title": title, "body": body}));
     }));
-    let (mut events, tx) = (agent.events(), ui.clone());
+    let friends: Arc<Mutex<std::collections::HashMap<String, String>>> = Arc::default();
+    let (mut events, tx, names) = (agent.events(), ui.clone(), friends.clone());
     tokio::spawn(async move {
         while let Ok(e) = events.recv().await {
+            match &e {
+                Event::GuestConnected { guest, handle } => {
+                    let who = if handle.is_empty() { "A friend".to_string() } else { format!("@{handle}") };
+                    names.lock().unwrap().insert(guest.clone(), who.clone());
+                    crate::notify::show("Friend connected", &format!("{who} is using this PC. Open Secpar to disconnect them."));
+                }
+                Event::GuestDisconnected { guest } => {
+                    if let Some(who) = names.lock().unwrap().remove(guest) {
+                        crate::notify::show("Friend disconnected", &who);
+                    }
+                }
+                _ => {}
+            }
             let _ = tx.send(json!({"ev": if matches!(e, Event::Paired { .. }) { "paired" } else { "devices" }}));
         }
     });
     tokio::spawn(watch_lock(agent.clone(), ui.clone()));
     tokio::spawn(start_tray(store.clone()));
 
-    // Account-link failure must never interrupt existing owner connections.
-    let account = crate::host_account::open(&dir, &identity.fingerprint_hex);
     if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
-    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net });
+    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends });
     let weak = Arc::downgrade(&app);
     tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_secs(3));

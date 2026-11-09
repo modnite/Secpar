@@ -192,7 +192,7 @@ async fn watch(ctx: Arc<Ctx>, admission: Arc<GuestAdmission>, pass: Pass) {
     }
 }
 
-pub(crate) enum Verdict {
+pub enum Verdict {
     Allow,
     /// Ignored without a reply, for high rate input.
     Drop,
@@ -200,7 +200,7 @@ pub(crate) enum Verdict {
 }
 
 /// Whether a message from a friend may reach the host session.
-pub(crate) fn verdict(m: &ClientMsg, gate: &Gate) -> Verdict {
+pub fn verdict(m: &ClientMsg, gate: &Gate) -> Verdict {
     use ClientMsg::*;
     use Verdict::*;
     let need = |p: &str| if gate.has(p) { Allow } else { Deny };
@@ -223,7 +223,7 @@ pub(crate) fn verdict(m: &ClientMsg, gate: &Gate) -> Verdict {
 }
 
 /// Whether a message from the host may go to a friend.
-pub(crate) fn out_allowed(m: &ServerMsg, gate: &Gate) -> bool {
+pub fn out_allowed(m: &ServerMsg, gate: &Gate) -> bool {
     use ServerMsg::*;
     match m {
         Welcome { .. } | Pong | Error { .. } | Ok { .. } | Lock { .. } | Status { .. } => true,

@@ -19,10 +19,10 @@ export const listen = <T = unknown>(name: string, cb: (payload: T) => void) => w
 export const appWindow = () => window.__TAURI__.window.getCurrentWindow();
 
 export interface Device { id: string; name: string; connected: boolean }
-export interface State { name: string; devices: Device[]; locked: boolean }
+export interface State { name: string; devices: Device[]; friends: Device[]; locked: boolean }
 export interface Config {
   autostart: boolean; display: string; max_quality: string;
-  allow_files: boolean; allow_clip: boolean; anywhere: boolean; files_dir: string;
+  allow_files: boolean; allow_clip: boolean; friends: boolean; anywhere: boolean; files_dir: string;
 }
 export interface Display { id: string; name: string; primary: boolean }
 export interface Update { current: string; latest: string; newer: boolean; preview: boolean; url: string }

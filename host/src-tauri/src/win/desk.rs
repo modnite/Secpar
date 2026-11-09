@@ -58,19 +58,28 @@ pub fn follow() -> bool {
 
 /// The console session is locked, or at the sign-in screen with nobody logged on.
 pub fn is_locked() -> bool {
-    let Some(s) = super::session::console() else { return false };
+    locked_state().unwrap_or(false)
+}
+
+/// Like `is_locked`, but a friend's stream and input stop when the state cannot be read.
+pub fn locked_or_unknown() -> bool {
+    locked_state().unwrap_or(true)
+}
+
+fn locked_state() -> Option<bool> {
+    let s = super::session::console()?;
     let mut buf = PWSTR::null();
     let mut len = 0;
     // SAFETY: WTS allocates `buf` (a WTSINFOEXW); we read it then free it.
     unsafe {
         if WTSQuerySessionInformationW(None, s, WTSSessionInfoEx, &mut buf, &mut len).is_err() {
-            return false;
+            return None;
         }
         let info = &*(buf.0 as *const WTSINFOEXW);
         let l1 = &info.Data.WTSInfoExLevel1;
         let locked = l1.SessionFlags as u32 == WTS_SESSIONSTATE_LOCK || l1.UserName[0] == 0;
         WTSFreeMemory(buf.0 as _);
-        locked
+        Some(locked)
     }
 }
 

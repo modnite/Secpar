@@ -56,6 +56,7 @@ export async function settings(): Promise<HTMLElement> {
       {},
       toggle("Receive files", "", config.allow_files, (v) => save({ allow_files: v })),
       toggle("Share clipboard", "", config.allow_clip, (v) => save({ allow_clip: v })),
+      toggle("Let friends connect", "", config.friends, (v) => save({ friends: v })),
       toggle("Direct remote access", "Automatic port mapping (UPnP)", config.anywhere, async (v) => {
         netNote.textContent = v ? "Asking your router…" : "";
         await save({ anywhere: v });

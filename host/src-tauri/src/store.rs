@@ -29,6 +29,8 @@ pub struct Config {
     pub max_quality: String,
     pub allow_files: bool,
     pub allow_clip: bool,
+    /// Friends may connect (they still need your approval or an "any time" setting).
+    pub friends: bool,
     pub anywhere: bool,
     pub files_dir: String,
 }
@@ -41,6 +43,7 @@ impl Default for Config {
             max_quality: "auto".into(),
             allow_files: true,
             allow_clip: true,
+            friends: true,
             anywhere: false,
             // empty: the signed-in user's Downloads\Secpar (see Store::files_dir)
             files_dir: String::new(),

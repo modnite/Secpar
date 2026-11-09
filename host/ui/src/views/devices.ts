@@ -32,6 +32,16 @@ function row(d: Device, reload: () => void): HTMLElement {
   return li;
 }
 
+function friend(d: Device, reload: () => void): HTMLElement {
+  return h(
+    "li.row",
+    {},
+    h("i.dot.live"),
+    h("span.grow", {}, h("span.label", {}, d.name), h("span.hint", {}, "Connected")),
+    h("button.ghost.danger", { onclick: async () => { await invoke("disconnect_friend", { id: d.id }); reload(); } }, "Disconnect"),
+  );
+}
+
 export function devices(state: State, reload: () => void): HTMLElement {
   return h(
     "section.view.devices",
@@ -40,5 +50,6 @@ export function devices(state: State, reload: () => void): HTMLElement {
     state.devices.length
       ? h("ul.list", {}, ...state.devices.map((d) => row(d, reload)))
       : h("p.empty", {}, "No paired devices. Use the code or pairing link on Home."),
+    ...(state.friends.length ? [h("h2", {}, "Friends connected"), h("ul.list", {}, ...state.friends.map((d) => friend(d, reload)))] : []),
   );
 }

@@ -45,6 +45,8 @@ pub struct DeviceView {
 pub struct StateView {
     name: String,
     devices: Vec<DeviceView>,
+    /// Friends with a running session. Never in `devices`: a friend is not a paired device.
+    friends: Vec<DeviceView>,
     locked: bool,
 }
 
@@ -58,7 +60,14 @@ fn state(app: &App) -> StateView {
         .into_iter()
         .map(|d| DeviceView { connected: connected.contains(&d.id), id: d.id, name: d.name })
         .collect();
-    StateView { name: crate::win::sys::pc_name(), devices, locked: crate::win::desk::is_locked() }
+    let names = app.friends.lock().unwrap();
+    let friends = app
+        .agent
+        .guests()
+        .into_iter()
+        .map(|id| DeviceView { name: names.get(&id).cloned().unwrap_or_else(|| "A friend".into()), connected: true, id })
+        .collect();
+    StateView { name: crate::win::sys::pc_name(), devices, friends, locked: crate::win::desk::is_locked() }
 }
 
 /// A fresh pairing code: the QR (SVG) and the same one-time link as text, for "Copy pairing link".
@@ -210,6 +219,10 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
         "new_qr" => to_value(new_qr(&app)),
         "revoke" => {
             app.agent.revoke(&arg::<String>(&args, "id")?);
+            Ok(Value::Null)
+        }
+        "disconnect_friend" => {
+            app.agent.disconnect_guest(&arg::<String>(&args, "id")?);
             Ok(Value::Null)
         }
         "rename" => {
