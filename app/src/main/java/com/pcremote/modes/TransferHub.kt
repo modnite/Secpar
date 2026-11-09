@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.util.Log
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -14,7 +15,9 @@ import com.pcremote.agent.FsEntry
 import com.pcremote.agent.Msg
 import com.pcremote.agent.PcStore
 import com.pcremote.settings.prefsKv
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,6 +48,8 @@ data class Transfer(
     val status: Status = Status.QUEUED,
     /** Bytes per second, smoothed. */
     val speed: Double = 0.0,
+    /** Why it failed, when the PC said. */
+    val note: String = "",
 ) {
     enum class Status { QUEUED, ACTIVE, PAUSED, DONE, FAILED }
     val progress get() = if (size <= 0) (if (status == Status.DONE) 1f else 0f) else (done.toFloat() / size).coerceIn(0f, 1f)
@@ -78,7 +83,8 @@ class Rate(private val now: () -> Long = System::nanoTime) {
  * with the same id; downloads land in Downloads/Secpar keeping their folders.
  */
 class TransferHub private constructor(private val ctx: Context, val pcId: String) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // A task that fails must never take the app down with it.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, e -> Log.w("TransferHub", "transfer task failed", e) })
     private val _transfers = MutableStateFlow<List<Transfer>>(emptyList())
     val transfers: StateFlow<List<Transfer>> = _transfers
     private val pending = PendingUploads(prefsKv(ctx), pcId)
@@ -88,6 +94,9 @@ class TransferHub private constructor(private val ctx: Context, val pcId: String
     private val replies = ConcurrentHashMap<String, CompletableDeferred<Msg>>()
     private val offers = ConcurrentHashMap.newKeySet<String>()
     private var listing: CompletableDeferred<Msg.FsList>? = null
+    /** What the PC said when it refused the last [list], for the Files screen. */
+    @Volatile var listProblem: String? = null
+        private set
     private var current: Pair<String, Job>? = null
     private var conn: AgentConnection? = null
 
@@ -183,21 +192,35 @@ class TransferHub private constructor(private val ctx: Context, val pcId: String
         val ready = CompletableDeferred<Msg>().also { replies[p.id + ":ready"] = it }
         val done = CompletableDeferred<Msg>().also { replies[p.id + ":done"] = it }
         val rate = Rate()
+        var refused = false
+        var failure: Exception? = null
         val job = scope.launch(Dispatchers.IO) {
-            FileSender(UUID.fromString(p.id), p.name, p.size, { ctx.contentResolver.openInputStream(Uri.parse(p.uri))!! }, { c.send(it) }, c::sendBinary,
-                onProgress = { pr -> val bytes = (pr * p.size).toLong(); val s = rate.update(bytes); set(p.id) { it.copy(done = bytes, speed = s) } },
-                backlog = c::backlog,
-            ).run {
-                when (val r = withTimeoutOrNull(15_000) { ready.await() }) {
-                    is Msg.FileReady -> r.offset
-                    else -> throw IllegalStateException("not ready")
+            try {
+                FileSender(UUID.fromString(p.id), p.name, p.size, { ctx.contentResolver.openInputStream(Uri.parse(p.uri))!! }, { c.send(it) }, c::sendBinary,
+                    onProgress = { pr -> val bytes = (pr * p.size).toLong(); val s = rate.update(bytes); set(p.id) { it.copy(done = bytes, speed = s) } },
+                    backlog = c::backlog,
+                ).run {
+                    when (val r = withTimeoutOrNull(15_000) { ready.await() }) {
+                        is Msg.FileReady -> r.offset
+                        is Msg.FileError -> { refused = true; throw IllegalStateException("refused: ${r.code}") }
+                        else -> throw IllegalStateException("not ready")
+                    }
                 }
-            }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { failure = e }
         }
         current = p.id to job
         try {
             job.join()
             if (job.isCancelled) return // paused or cancelled: state already set
+            if (failure != null) {
+                // A refusal won't change by retrying (the PC has file transfer off); anything else resumes on reconnect.
+                if (refused) {
+                    pending.remove(p.id)
+                    set(p.id) { it.copy(status = Transfer.Status.FAILED, speed = 0.0, note = ctx.getString(com.pcremote.R.string.pcr_files_refused)) }
+                } else set(p.id) { it.copy(status = Transfer.Status.FAILED, speed = 0.0) }
+                return
+            }
             val r = withTimeoutOrNull(120_000 + p.size / 20_000) { done.await() }
             if (r is Msg.FileDone) {
                 pending.remove(p.id)
@@ -283,7 +306,10 @@ class TransferHub private constructor(private val ctx: Context, val pcId: String
                 set(m.id) { it.copy(done = if (ok) it.size else it.done, status = if (ok) Transfer.Status.DONE else Transfer.Status.FAILED, speed = 0.0) }
             }
             is Msg.FsList -> listing?.complete(m)
-            is Msg.Error -> if (m.of == "fs.list") listing?.complete(Msg.FsList("", emptyList()))
+            is Msg.Error -> if (m.of == "fs.list") {
+                listProblem = m.msg.ifBlank { m.code }
+                listing?.complete(Msg.FsList("", emptyList()))
+            }
             else -> {}
         }
     }
@@ -296,8 +322,10 @@ class TransferHub private constructor(private val ctx: Context, val pcId: String
         withTimeoutOrNull(10_000) { c.state.first { it is AgentState.Online } } ?: return null
         val d = CompletableDeferred<Msg.FsList>()
         listing = d
+        listProblem = null
         c.send(Msg.FsList(path))
-        return withTimeoutOrNull(10_000) { d.await() }?.entries
+        val reply = withTimeoutOrNull(10_000) { d.await() } ?: return null
+        return if (listProblem != null) null else reply.entries
     }
 
     /** Downloads a file or a whole folder from the PC. */

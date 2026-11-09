@@ -136,7 +136,7 @@ private fun detail(t: Transfer): String {
         Transfer.Status.QUEUED -> stringResource(R.string.pcr_files_waiting) + "   $size"
         Transfer.Status.PAUSED -> stringResource(R.string.pcr_files_paused) + "   ${Format.bytes(t.done)} / $size"
         Transfer.Status.DONE -> stringResource(if (t.outgoing) R.string.pcr_files_sent else R.string.pcr_files_saved) + "   $size"
-        Transfer.Status.FAILED -> stringResource(R.string.pcr_files_failed)
+        Transfer.Status.FAILED -> t.note.ifBlank { stringResource(R.string.pcr_files_failed) }
     }
 }
 
@@ -161,9 +161,9 @@ private fun Browser(hub: TransferHub) {
                 maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
         }
         // read once: the LazyColumn builder runs later, when `entries` may already be cleared for the next folder
-        val list = entries
+        val list = entries?.distinctBy { it.path }
         when {
-            failed -> Text(stringResource(R.string.pcr_files_browse_failed), color = c.textDim, modifier = Modifier.padding(24.dp))
+            failed -> Text(hub.listProblem ?: stringResource(R.string.pcr_files_browse_failed), color = c.textDim, modifier = Modifier.padding(24.dp))
             list == null -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = c.accent) }
             list.isEmpty() -> Text(stringResource(R.string.pcr_files_empty), color = c.textDim, modifier = Modifier.padding(24.dp))
             else -> LazyColumn(contentPadding = PaddingValues(16.dp, 0.dp, 16.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -599,7 +599,8 @@ mod tests {
         let config = r.host.command("get_config", Value::Null).await.unwrap();
         assert_eq!(config["pad"]["ok"], json!(uinput::available()));
         assert!(config["pad"]["text"].as_str().unwrap().starts_with("Gamepad"));
-        assert_eq!(config["config"]["allow_files"], json!(false));
+        assert_eq!(config["config"]["allow_files"], json!(false), "this rig turned it off");
+        assert!(crate::store::Config::default().allow_files, "on by default, like the Windows host");
     }
 
     #[tokio::test]

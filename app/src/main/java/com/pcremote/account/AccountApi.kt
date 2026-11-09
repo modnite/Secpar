@@ -56,7 +56,7 @@ class OkHttpAccountTransport : AccountTransport {
             u.rawFragment != null || !u.rawPath.startsWith("/")) throw AccountException(AccountError.INVALID_ARGUMENT)
         val req = Request.Builder().url(request.url).header("Accept", "application/json")
             .apply { request.bearer?.let { header("Authorization", "Bearer $it") } }
-            .method(request.method, request.body?.toRequestBody("application/json".toMediaType())).build()
+            .method(request.method, requestBody(request.method, request.body)).build()
         return client.newCall(req).execute().use { response ->
             val body = response.body ?: throw AccountException(AccountError.INVALID_RESPONSE)
             if (body.contentLength() > MAX_BODY) throw AccountException(AccountError.INVALID_RESPONSE)
@@ -262,6 +262,11 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         catch (_: Exception) { throw AccountException(AccountError.INVALID_RESPONSE) }
     }
 }
+
+/** OkHttp refuses a POST or PUT without a body, so friend invites, accepts and blocks send an empty one. */
+internal fun requestBody(method: String, body: String?): okhttp3.RequestBody? =
+    if (body == null && method in setOf("POST", "PUT", "PATCH")) "".toRequestBody(null)
+    else body?.toRequestBody("application/json".toMediaType())
 
 private fun invalid(): Nothing = throw AccountException(AccountError.INVALID_RESPONSE)
 private fun valid(value: Boolean) { if (!value) invalid() }

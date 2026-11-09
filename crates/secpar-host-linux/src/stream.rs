@@ -99,19 +99,77 @@ pub struct Options {
 }
 /// Shared between the control connection and the media channel (both carry `pad`).
 pub type SharedPads = Arc<Mutex<Option<secpar_host_core::pad::Pads>>>;
+/// This host's IPv4 addresses, best first. The phone tries them in this order and waits two
+/// seconds on each dead one, so the order decides how fast it connects.
 pub fn local_addresses() -> Vec<String> {
-    get_if_addrs::get_if_addrs()
+    let found = get_if_addrs::get_if_addrs()
         .unwrap_or_default()
         .into_iter()
         .filter_map(|i| match i.ip() {
-            std::net::IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_unspecified() => {
-                Some(ip.to_string())
-            }
+            std::net::IpAddr::V4(ip) => Some((i.name, ip)),
             _ => None,
         })
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect()
+        .collect();
+    rank_addresses(found, default_route_interface().as_deref())
+}
+
+/// Interfaces a phone cannot be on: containers, VMs and their bridges.
+fn is_virtual(name: &str) -> bool {
+    ["docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "lxc", "lxd", "cni", "flannel", "podman", "incus"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// Loopback and link-local dropped. Real network first, private ranges before others, the default
+/// route's interface first of those; container bridges last. Stable, so each address appears once.
+pub fn rank_addresses(mut found: Vec<(String, std::net::Ipv4Addr)>, default: Option<&str>) -> Vec<String> {
+    found.retain(|(_, ip)| !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local());
+    found.sort_by_key(|(name, ip)| (is_virtual(name), !ip.is_private(), Some(name.as_str()) != default));
+    let mut seen = HashSet::new();
+    found.into_iter().filter(|(_, ip)| seen.insert(*ip)).map(|(_, ip)| ip.to_string()).collect()
+}
+
+/// The interface the IPv4 default route leaves through, from `/proc/net/route`.
+fn default_route_interface() -> Option<String> {
+    let table = std::fs::read_to_string("/proc/net/route").ok()?;
+    table.lines().skip(1).find_map(|line| {
+        let mut columns = line.split_whitespace();
+        let (name, destination) = (columns.next()?, columns.next()?);
+        (destination == "00000000").then(|| name.to_string())
+    })
+}
+
+#[cfg(test)]
+mod address_order_tests {
+    use super::*;
+
+    fn ip(s: &str) -> std::net::Ipv4Addr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn real_network_comes_first_and_bridges_last() {
+        let found = vec![
+            ("docker0".into(), ip("172.17.0.1")),
+            ("lo".into(), ip("127.0.0.1")),
+            ("tailscale0".into(), ip("100.101.102.103")),
+            ("wlan0".into(), ip("192.168.1.20")),
+            ("enp0s25".into(), ip("10.0.0.5")),
+            ("wlan0".into(), ip("169.254.3.4")),
+            ("br-1a2b".into(), ip("172.18.0.1")),
+        ];
+        assert_eq!(
+            rank_addresses(found.clone(), Some("wlan0")),
+            ["192.168.1.20", "10.0.0.5", "100.101.102.103", "172.17.0.1", "172.18.0.1"]
+        );
+        assert_eq!(rank_addresses(found, None)[0], "192.168.1.20", "without a default route the order is stable");
+    }
+
+    #[test]
+    fn the_same_address_is_listed_once() {
+        let found = vec![("wlan0".into(), ip("192.168.1.20")), ("wlan0:1".into(), ip("192.168.1.20"))];
+        assert_eq!(rank_addresses(found, None), ["192.168.1.20"]);
+    }
 }
 impl Stream {
     pub async fn start(

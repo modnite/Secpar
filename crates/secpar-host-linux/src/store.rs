@@ -120,7 +120,7 @@ impl Default for Config {
             autostart: false,
             display: String::new(),
             max_quality: "auto".into(),
-            allow_files: false,
+            allow_files: true,
             allow_clip: true,
             anywhere: false,
             files_dir: String::new(),

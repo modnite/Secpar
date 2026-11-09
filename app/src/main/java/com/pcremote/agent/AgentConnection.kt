@@ -2,7 +2,10 @@ package com.pcremote.agent
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,6 +13,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,6 +23,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 enum class FailReason { UNREACHABLE, UNAUTHORIZED, REVOKED, BAD_OTP, PIN_TIMEOUT, CERT_MISMATCH }
 
@@ -134,7 +139,10 @@ class AgentConnection(
     /** The host from [hosts] that the current connection reached. */
     @Volatile var connectedHost: String? = null
         private set
+    /** Ids of connection attempts and of the live session; one counter so none is ever reused. */
+    private val ids = AtomicInteger()
     @Volatile private var session = 0
+    private fun nextSession() { session = ids.incrementAndGet() }
     @Volatile private var closed = false
     @Volatile private var handshake: CompletableDeferred<Msg>? = null
     @Volatile private var rxSincePing = true
@@ -145,33 +153,71 @@ class AgentConnection(
 
     private enum class Open { OK, REFUSED, MISMATCH }
 
-    private suspend fun connectAny(): Ws? {
-        for (h in hosts) {
-            if (closed) return null
-            val id = ++session
-            val opened = CompletableDeferred<Open>()
-            val s = factory.open(h, port, fingerprint, listenerFor(id, opened))
-            val result = withTimeoutOrNull(if (h == RELAY_HOST) 8_000 else 2_000) { opened.await() } ?: run {
-                opened.complete(Open.REFUSED) // a late onOpen for this attempt is ignored
-                Open.REFUSED
-            }
-            when (result) {
-                Open.OK -> { ws = s; connectedHost = h; return s }
-                Open.MISMATCH -> {
-                    s.close()
-                    if (!continueAfterPinMismatch) {
-                        session++; _state.value = AgentState.Failed(FailReason.CERT_MISMATCH); return null
+    private class Try(val id: Int, val host: String, val ws: Ws, val result: Deferred<Open>)
+
+    /**
+     * Tries [hosts] in order, but never waits more than [STAGGER_MS] on a silent one before starting
+     * the next, so a dead address costs a fraction of a second instead of its whole timeout. The
+     * first to open wins. The relay only starts once every direct address has answered.
+     */
+    private suspend fun connectAny(): Ws? = coroutineScope {
+        val tries = ArrayList<Try>()
+        val waiting = ArrayList<Try>()
+        fun abandon(except: Try?) = tries.forEach { if (it !== except) { it.result.cancel(); it.ws.close() } }
+        fun failed(reason: FailReason): Ws? { nextSession(); abandon(null); _state.value = AgentState.Failed(reason); return null }
+        fun win(t: Try): Ws { abandon(t); session = t.id; ws = t.ws; connectedHost = t.host; return t.ws }
+
+        /** Waits up to [limit] ms for a connection to open. Null: none did (all answered, or time ran out). */
+        suspend fun settle(limit: Long): Try? {
+            var won: Try? = null
+            var certMismatch = false
+            withTimeoutOrNull(limit) {
+                while (waiting.isNotEmpty()) {
+                    for (t in waiting.toList()) {
+                        if (!t.result.isCompleted) continue
+                        waiting.remove(t)
+                        when (t.result.await()) {
+                            Open.OK -> { won = t; return@withTimeoutOrNull }
+                            // No authentication is sent before pinned TLS opens. An overlapping LAN
+                            // address may belong to another machine; try the next pinned route safely.
+                            Open.MISMATCH -> { t.ws.close(); certMismatch = true; if (!continueAfterPinMismatch) return@withTimeoutOrNull }
+                            Open.REFUSED -> t.ws.close()
+                        }
                     }
-                    // No authentication is sent before pinned TLS opens. An overlapping LAN
-                    // address may belong to another machine; try the next pinned route safely.
+                    if (won != null || (certMismatch && !continueAfterPinMismatch)) return@withTimeoutOrNull
+                    if (waiting.isEmpty()) return@withTimeoutOrNull
+                    select<Unit> { waiting.forEach { t -> t.result.onAwait { } } }
                 }
-                Open.REFUSED -> s.close()
             }
+            if (certMismatch && !continueAfterPinMismatch && won == null) mismatched = true
+            return won
         }
-        session++ // late callbacks from the abandoned attempts must not revive this connection
-        _state.value = AgentState.Failed(FailReason.UNREACHABLE)
-        return null
+
+        mismatched = false
+        for (h in hosts) {
+            if (closed) { abandon(null); return@coroutineScope null }
+            if (h == RELAY_HOST) settle(Long.MAX_VALUE)?.let { return@coroutineScope win(it) }
+            if (mismatched) return@coroutineScope failed(FailReason.CERT_MISMATCH)
+            val id = ids.incrementAndGet()
+            val opened = CompletableDeferred<Open>()
+            val socket = factory.open(h, port, fingerprint, listenerFor(id, opened))
+            val t = Try(id, h, socket, async {
+                withTimeoutOrNull(if (h == RELAY_HOST) 8_000 else 2_000) { opened.await() } ?: run {
+                    opened.complete(Open.REFUSED) // a late onOpen for this attempt is ignored
+                    Open.REFUSED
+                }
+            })
+            tries += t
+            waiting += t
+            settle(if (h == hosts.last()) Long.MAX_VALUE else STAGGER_MS)?.let { return@coroutineScope win(it) }
+            if (mismatched) return@coroutineScope failed(FailReason.CERT_MISMATCH)
+        }
+        // the relay is last, so settle() above already waited for the direct ones when it came up
+        settle(Long.MAX_VALUE)?.let { return@coroutineScope win(it) }
+        if (mismatched) return@coroutineScope failed(FailReason.CERT_MISMATCH)
+        failed(FailReason.UNREACHABLE) // late callbacks from the abandoned attempts must not revive this connection
     }
+    @Volatile private var mismatched = false
 
     private fun listenerFor(id: Int, opened: CompletableDeferred<Open>) = object : WsListener {
         override fun onOpen() { opened.complete(Open.OK) }
@@ -242,7 +288,7 @@ class AgentConnection(
     }
 
     private fun fail(code: String?, s: Ws) {
-        session++ // the close echo from this socket arrives later and must be ignored
+        nextSession() // the close echo from this socket arrives later and must be ignored
         s.close()
         ws = null
         _state.value = AgentState.Failed(
@@ -319,7 +365,7 @@ class AgentConnection(
         pingJob?.cancel()
         val s = ws
         ws = null
-        session++
+        nextSession()
         _state.value = AgentState.Closed
         s?.close()
     }
@@ -330,6 +376,7 @@ class AgentConnection(
 
         private val BACKOFF_MS = longArrayOf(1_000, 2_000, 5_000, 10_000)
         private const val PING_MS = 10_000L
+        private const val STAGGER_MS = 200L
         private const val HANDSHAKE_TIMEOUT_MS = 8_000L
     }
 }
