@@ -7,6 +7,46 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 /// Output textures in flight: the async encoder may still read one while the next is written.
 const RING: usize = 3;
 
+/// Holds the device's immediate-context lock. One conversion is a sequence of state calls and a
+/// draw. Every stream shares one device and one immediate context, and the multithread
+/// protection only makes single calls atomic. Without this guard two streams interleave their
+/// bindings: one stream's render target or shader lands on the other's draw. The planes come out
+/// half written (zero chroma is green) on both clients.
+pub struct GpuGuard(Option<ID3D11Multithread>);
+
+#[cfg(test)]
+thread_local!(static HELD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+
+impl GpuGuard {
+    /// Test-only: does this thread hold the device lock? State-setting code asserts it.
+    #[cfg(test)]
+    pub fn held() -> bool {
+        HELD.with(|h| h.get() > 0)
+    }
+
+    pub fn lock(dev: &ID3D11Device) -> GpuGuard {
+        let mt = dev.cast::<ID3D11Multithread>().ok();
+        if let Some(mt) = &mt {
+            // SAFETY: balanced by Leave in Drop; the lock is recursive per thread.
+            unsafe { mt.Enter() };
+        }
+        #[cfg(test)]
+        HELD.with(|h| h.set(h.get() + 1));
+        GpuGuard(mt)
+    }
+}
+
+impl Drop for GpuGuard {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        HELD.with(|h| h.set(h.get() - 1));
+        if let Some(mt) = &self.0 {
+            // SAFETY: pairs with the Enter in lock.
+            unsafe { mt.Leave() };
+        }
+    }
+}
+
 pub struct Convert {
     dev: ID3D11Device,
     /// Filtered-chroma shader passes; the video processor below is the fallback.
@@ -77,6 +117,7 @@ impl Convert {
 
     /// Converts `src` (BGRA, the input size) into the next NV12 texture of the ring.
     pub fn convert(&mut self, src: &ID3D11Texture2D) -> windows::core::Result<ID3D11Texture2D> {
+        let _gpu = GpuGuard::lock(&self.dev);
         if let Some(ps) = self.ps.as_mut() {
             let idx = self.next;
             if ps.run(&self.dev, src, idx).is_ok() {
@@ -122,6 +163,7 @@ pub fn fit((dw, dh): (u32, u32), (ww, wh): (u32, u32)) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn fit_keeps_aspect_and_is_even() {
@@ -236,5 +278,93 @@ mod tests {
             assert!((y1 - y0).abs() > 100, "luma stays sharp: {y0} vs {y1}");
             assert!(worst <= 3, "chroma is neutral, worst deviation {worst}");
         }
+    }
+
+    /// Two streams share one device and immediate context. Each converts its own solid colour in
+    /// a loop; every output must equal what that stream produces alone. Interleaved state calls
+    /// (render target, shader, viewport) show up as wrong or half-written planes.
+    #[test]
+    fn concurrent_streams_on_one_device_do_not_corrupt_each_other() {
+        let Some((dev, ctx, _, _)) = crate::engine::capture::device("") else { return eprintln!("no D3D11 device") };
+        let (w, h) = (1280u32, 720u32);
+        let solid = |rgba: [f32; 4]| -> ID3D11Texture2D {
+            // SAFETY: test-only texture creation on live objects.
+            unsafe {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: w,
+                    Height: h,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                    ..Default::default()
+                };
+                let mut t = None;
+                dev.CreateTexture2D(&desc, None, Some(&mut t)).unwrap();
+                let t = t.unwrap();
+                let mut rtv = None;
+                dev.CreateRenderTargetView(&t, None, Some(&mut rtv)).unwrap();
+                let _g = GpuGuard::lock(&dev);
+                ctx.ClearRenderTargetView(&rtv.unwrap(), &rgba);
+                t
+            }
+        };
+        let read = |nv12: &ID3D11Texture2D| -> Vec<u8> {
+            // SAFETY: test-only staging readback under the device lock.
+            unsafe {
+                let mut d = D3D11_TEXTURE2D_DESC::default();
+                nv12.GetDesc(&mut d);
+                let sd = D3D11_TEXTURE2D_DESC { Usage: D3D11_USAGE_STAGING, BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32, ..d };
+                let mut st = None;
+                dev.CreateTexture2D(&sd, None, Some(&mut st)).unwrap();
+                let st = st.unwrap();
+                let _g = GpuGuard::lock(&dev);
+                ctx.CopyResource(&st, nv12);
+                let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+                ctx.Map(&st, 0, D3D11_MAP_READ, 0, Some(&mut m)).unwrap();
+                let rows = (h + h / 2) as usize;
+                let mut v = Vec::with_capacity(rows * w as usize);
+                for r in 0..rows {
+                    v.extend_from_slice(std::slice::from_raw_parts(m.pData.cast::<u8>().add(r * m.RowPitch as usize), w as usize));
+                }
+                ctx.Unmap(&st, 0);
+                v
+            }
+        };
+        let colours = [[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
+        let srcs: Vec<_> = colours.iter().map(|c| solid(*c)).collect();
+        let reference: Vec<Vec<u8>> = srcs
+            .iter()
+            .map(|s| {
+                let mut c = Convert::new(&dev, &ctx, (w, h), (w, h)).unwrap();
+                read(&c.convert(s).unwrap())
+            })
+            .collect();
+        if Convert::new(&dev, &ctx, (w, h), (w, h)).unwrap().ps.is_none() {
+            return eprintln!("GPU can't render NV12 planes; video processor in use");
+        }
+        let bad: Vec<usize> = std::thread::scope(|scope| {
+            let jobs: Vec<_> = srcs
+                .iter()
+                .zip(&reference)
+                .map(|(src, want)| {
+                    let (dev, ctx, read) = (&dev, &ctx, &read);
+                    scope.spawn(move || {
+                        let mut c = Convert::new(dev, ctx, (w, h), (w, h)).unwrap();
+                        // Back to back conversions keep both streams inside the call sequence at once.
+                        (0..3000)
+                            .filter(|i| {
+                                let out = c.convert(src).unwrap();
+                                i % 10 == 9 && read(&out) != *want
+                            })
+                            .count()
+                    })
+                })
+                .collect();
+            jobs.into_iter().map(|j| j.join().unwrap()).collect()
+        });
+        assert_eq!(bad, vec![0, 0], "frames that differ from the single-stream result");
     }
 }

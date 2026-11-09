@@ -127,6 +127,10 @@ impl Passes {
 
     /// Renders `src` into output texture `idx`: luma pass, then chroma pass.
     pub fn run(&mut self, dev: &ID3D11Device, src: &ID3D11Texture2D, idx: usize) -> windows::core::Result<()> {
+        // The caller holds the device lock: these bindings and the draws must not interleave
+        // with another stream's on the shared immediate context.
+        #[cfg(test)]
+        assert!(super::convert::GpuGuard::held(), "convert passes need the device lock");
         // SAFETY: state-setting calls on live objects; the views outlive the draws.
         unsafe {
             let key = src.as_raw() as usize;
