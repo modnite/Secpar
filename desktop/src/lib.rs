@@ -12,6 +12,7 @@ mod audio_worker;
 mod design;
 mod hosting;
 mod input;
+mod pad;
 mod stream_menu;
 mod icons;
 mod local_host;
@@ -191,6 +192,10 @@ struct App {
     computer_account: Option<String>,
     session_account: Option<String>,
     owned_connecting: Option<(String,String)>,
+    /// A friend's computer is open. Nothing about it is remembered.
+    guest_session: bool,
+    guest_error: bool,
+    pads: Option<pad::Pads>,
     decoder: Option<video::Worker>,
     audio: Option<audio_worker::Worker>,
     audio_route:audio_worker::Route,
@@ -283,6 +288,9 @@ impl App {
             computer_account: None,
             session_account: None,
             owned_connecting: None,
+            guest_session: false,
+            guest_error: false,
+            pads: None,
             decoder: None,
             audio: None,
             audio_route:audio_worker::Route::default(),
@@ -381,19 +389,28 @@ impl App {
         self.connect(ctx,pairing);
     }
     fn connect(&mut self, ctx: &egui::Context, pairing: Option<Pairing>) {
+        self.connect_with(ctx, pairing, None);
+    }
+    fn connect_with(&mut self, ctx: &egui::Context, pairing: Option<Pairing>, guest: Option<account::Grant>) {
         if self.command.is_some() { return; }
         self.session_account=self.computer_account.clone();
+        self.guest_session=guest.is_some();
+        self.guest_error=false;
+        self.pads=None;
+        if guest.is_some() { self.session_account=self.account.user.as_ref().map(|u|u.id.clone()); }
         let lan_first = self.computer_account.is_some();
         let computer = self.computer.clone();
         self.audio_route.output(None);
         self.audio_route=audio_worker::Route::default();
         self.open_audio();
-        self.clipboard=self.client.clipboard.then(secpar_clipboard::Bridge::start);
+        let clipboard=self.client.clipboard && guest.as_ref().is_none_or(|g|g.allows("clipboard"));
+        self.clipboard=clipboard.then(secpar_clipboard::Bridge::start);
         self.notice=None;self.connection_error=None;
         self.stream_stats=None;
         let options = Options {
-            audio: self.client.audio,
+            audio: self.client.audio && guest.as_ref().is_none_or(|g|g.allows("audio")),
             audio_sink:Some(self.audio_route.sink()),
+            clipboard,
             ..self.options.clone()
         };
         let ctx = ctx.clone();
@@ -401,7 +418,7 @@ impl App {
         let (ev_tx, ev_rx) = mpsc::channel(8);
         self.command = Some(tx);
         self.events = Some(ev_rx);
-        self.status = "Connecting".into();
+        self.status = match &guest { Some(g) => format!("Connecting to @{}", g.owner_handle), None => "Connecting".into() };
         self.auto_capture_pending = true;
         self.remote_keyboard = true;
         self.video_rect = None;
@@ -425,7 +442,9 @@ impl App {
                 }
             };
             runtime.block_on(async move {
-                let connection = if let Some(p) = pairing {
+                let connection = if let Some(g) = guest {
+                    Connected::guest(&g.relay, &g.pc, &g.grant, &g.name).await
+                } else if let Some(p) = pairing {
                     if lan_first { Connected::pair_lan_first(p, &device_name()).await }
                     else { Connected::pair(p, &device_name()).await }
                 } else if let Some(c) = computer {
@@ -495,6 +514,9 @@ impl App {
                 None=>{},
             }
         }
+        if self.pads.as_ref().is_some_and(|pads|pads.failed()) {
+            self.pads=None;self.notice=Some("Controllers are not available on this system".into());
+        }
         if self.audio.as_ref().is_some_and(|audio|audio.failed()) {
             self.audio_route.output(None);self.audio=None;self.audio_error=Some("Audio output stopped. Check the selected system output and retry.".into());
         }
@@ -517,13 +539,23 @@ impl App {
                     }
                     if let Some((owner,id))=self.owned_connecting.take() {
                         self.account.remember_owned(owner,id,c.clone());
-                    } else if self.computer_account.is_none() {
+                    } else if self.computer_account.is_none() && !self.guest_session {
                         self.account.remember(c.clone());
                     }
-                    self.computer = Some(c);
-                    self.pair_link.clear();
+                    if !self.guest_session {
+                        self.computer = Some(c);
+                        self.pair_link.clear();
+                    }
                 }
                 Event::Status(s) => { self.status=s; }
+                Event::Caps(caps) => {
+                    // Controllers run only in a friend session whose grant has them.
+                    if self.guest_session && self.pads.is_none() && caps.iter().any(|c|c=="pad") {
+                        if let Some(tx)=self.command.clone() { self.pads=Some(pad::Pads::start(tx)); }
+                    }
+                }
+                Event::Rumble{id,lo,hi} => { if let Some(pads)=&self.pads { pads.rumble(id,lo,hi); } }
+                Event::Notice(text) => self.notice=Some(text),
                 Event::Audio{packet,received_at} => {
                     // A covered window may resume with a few old events queued.
                     // Skip stale compressed audio instead of replaying it late.
@@ -578,6 +610,9 @@ impl App {
                 }
                 Event::Cursor { x, y, visible } => self.cursor = (x, y, visible),
                 Event::Ended(s) => {
+                    self.guest_error=self.guest_session && s!="Disconnected";
+                    self.guest_session=false;
+                    self.pads=None;
                     self.connection_error=if s=="Disconnected" {None}else{Some(s.clone())};
                     self.clipboard=None;
                     self.session_account=None;
@@ -803,10 +838,21 @@ impl eframe::App for App {
         }
         self.poll(ctx);
         self.account.poll();
-        if std::mem::take(&mut self.account.signed_out) && self.computer_account.is_some() {
+        let signed_out = std::mem::take(&mut self.account.signed_out);
+        if signed_out && self.computer_account.is_some() {
             self.clipboard=None;self.audio_route.output(None);self.audio=None;self.capture(ctx,false); self.send(Command::Stop);
             self.computer=None; self.computer_account=None; self.owned_connecting=None;
         }
+        self.account.session_open = self.command.is_some();
+        if signed_out && self.guest_session {
+            self.pads=None;self.clipboard=None;self.capture(ctx,false);self.send(Command::Stop);
+        }
+        if self.command.is_none() {
+            if let Some(grant)=self.account.guest_grant.take() {
+                self.computer_account=None;self.owned_connecting=None;
+                self.connect_with(ctx,None,Some(grant));
+            }
+        } else { self.account.guest_grant=None; }
         if self.command.is_none() {
             if let Some(connection)=self.account.owned_connection.take() {
                 match connection {
@@ -956,10 +1002,10 @@ impl eframe::App for App {
             if let Some(error)=self.connection_error.clone() {
                 egui::TopBottomPanel::top("connection-error").show(ctx,|ui|{
                     ui.horizontal_wrapped(|ui|{
-                        let friendly=friendly_error(&error);
+                        let friendly=if self.guest_error {None} else {friendly_error(&error)};
                         if friendly.is_some() {ui.label(egui::RichText::new(START_FAILED_TITLE).strong().color(design::BAD));}
                         ui.colored_label(design::BAD,friendly.unwrap_or(&error));
-                        if ui.small_button("Retry").clicked() {
+                        if !self.guest_error && ui.small_button("Retry").clicked() {
                             self.connection_error=None;
                             if !self.pair_link.trim().is_empty() {self.start(ctx,false);}
                             else if self.computer.is_some() {self.start(ctx,true);}

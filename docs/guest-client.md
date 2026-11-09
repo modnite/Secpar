@@ -5,8 +5,8 @@ What a client does to use a friend's computer. The host side is in `docs/friends
 ## Steps
 
 1. `GET /v1/friend-computers` lists computers of accepted friends that are online and have Let friends connect on. Each row has `id`, `name`, `platform`, `owner` and `owner_handle`.
-2. `POST /v1/requests` with `{"computer": id, "permissions": [...]}`. Permissions are `view`, `audio`, `gamepad`, `keyboard`, `mouse`, `clipboard`, `files`. The Worker removes `keyboard` and `mouse` for a view only friend and answers `403 input_not_allowed` when nothing else is left. The answer has `id` and `state`.
-3. `state` is `approved` at once when the owner set this friend to connect at any time. Otherwise it is `pending`. Poll `GET /v1/requests/:id` every 2 seconds until it is `approved`. `rejected` and `revoked` are final. A request that stays pending past its `expires` time (a Unix second in the answer) is dead.
+2. `POST /v1/requests` with `{"computer": id, "permissions": [...]}`. Permissions are `view`, `audio`, `gamepad`, `keyboard`, `mouse`, `clipboard`, `files`. The Worker removes `keyboard` and `mouse` for a view only friend and answers `403 input_not_allowed` when nothing else is left. The answer has `id`, `state`, `permissions` and `expires_in` in seconds.
+3. `state` is `approved` at once when the owner set this friend to connect at any time. Otherwise it is `pending`. Poll `GET /v1/requests/:id` every 2 seconds until it is `approved`. `revoked` and `rejected` are final. `GET /v1/requests/:id` has `expires`, a Unix second, and a request still pending after it is dead.
 4. `POST /v1/requests/:id/claim` answers `{"grant", "expires_at", "host": {"pc", "relay", "fingerprint"}}`. The grant lasts 60 seconds and works once. `409 host_not_sharing` means the host went offline or switched friends off. `409 grant_not_available` means it was already claimed.
 5. Open a WebSocket to `<relay with wss>/v1/guest?pc=<host.pc>`. `relay` is an https origin. Use normal certificate checking, not pinning.
 6. Send `{"t":"guest","grant":"<grant>"}` as the first frame. Nothing else may come first. The relay closes the socket with code 4401 otherwise.

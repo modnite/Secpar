@@ -120,6 +120,7 @@ fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Mod
                 }
             }
         }
+        FriendComputersList(state, acts)
         if (state.friends.isEmpty()) Text(FriendsModel.EMPTY, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
         state.friends.forEachIndexed { index, friend ->
             if (index > 0) HorizontalDivider(color = c.border)
@@ -127,6 +128,43 @@ fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Mod
         }
         if (state.blocked.isNotEmpty()) BlockedList(state.blocked, state.working, acts)
         state.note?.let { Text(it, color = c.textDim, style = MaterialTheme.typography.bodySmall) }
+    }
+}
+
+/** Computers of friends that are online and let friends connect. Connect opens the permission choices. */
+@Composable
+private fun FriendComputersList(state: AccountUi, acts: AccountActions) {
+    if (state.friendComputers.isEmpty()) return
+    val c = LocalMidnight.current
+    var picking by remember { mutableStateOf<String?>(null) }
+    var choices by remember { mutableStateOf(GuestChoices()) }
+    Text(FriendsConnect.HEADING, color = c.text, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
+    state.friendComputers.forEach { computer ->
+        val progress = state.guest?.takeIf { it.computerId == computer.id }
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(computer.name, color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(FriendsConnect.owner(computer.ownerHandle), color = c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+            if (progress != null) GhostButton(FriendsConnect.CANCEL, acts.cancelFriendConnect, compact = true)
+            else PrimaryButton(FriendsConnect.CONNECT, { choices = GuestChoices(); picking = if (picking == computer.id) null else computer.id },
+                compact = true, enabled = state.guest == null)
+        }
+        if (progress != null) Text(FriendsConnect.phaseText(progress), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+        else if (picking == computer.id) {
+            FlatCheckbox(choices.view, FriendsConnect.VIEW, { choices = choices.copy(view = it) })
+            FlatCheckbox(choices.audio, FriendsConnect.AUDIO, { choices = choices.copy(audio = it) })
+            FlatCheckbox(choices.input, FriendsConnect.INPUT, { choices = choices.copy(input = it) })
+            FlatCheckbox(choices.controller, FriendsConnect.CONTROLLER, { choices = choices.copy(controller = it) })
+            FlatCheckbox(choices.clipboard, FriendsConnect.CLIPBOARD, { choices = choices.copy(clipboard = it) })
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimaryButton(FriendsConnect.ASK, { picking = null; acts.connectFriend(computer, choices.permissions()) },
+                    enabled = choices.permissions().isNotEmpty())
+                GhostButton(FriendsConnect.CANCEL, { picking = null })
+            }
+        }
+        HorizontalDivider(color = c.border)
     }
 }
 

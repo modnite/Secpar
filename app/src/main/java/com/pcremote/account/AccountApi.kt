@@ -19,9 +19,33 @@ private const val MAX_BODY = 256 * 1024
 private val HEX64 = Regex("[a-f0-9]{64}")
 private val DIRECTORY_QUERY = Regex("q=[a-z0-9_]{1,30}")
 private val UUID = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
+private const val UUID_PATTERN = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"
+private val PERMISSIONS = setOf("view", "audio", "gamepad", "keyboard", "mouse", "clipboard", "files")
+private val REQUEST_STATE = Regex("[a-z_]{1,20}")
+private val GRANT_TEXT = Regex("[A-Za-z0-9_.-]{1,4096}")
+/** Every path this client calls. The account session is never sent anywhere else on the service. */
+private val ALLOWED_PATHS = listOf(
+    Regex("/auth/(device|device/token|logout)"),
+    Regex("/v1/(me|me/visibility|computers|friends|blocks|directory|requests|friend-computers|owner-pairings)"),
+    Regex("/v1/friends/by-username/[a-z0-9_]{3,30}"),
+    Regex("/v1/friends/$UUID_PATTERN(/accept|/settings)?"),
+    Regex("/v1/blocks/$UUID_PATTERN"),
+    Regex("/v1/requests/$UUID_PATTERN(/approve|/claim|/revoke)?"),
+    Regex("/v1/owner-pairings/$UUID_PATTERN"),
+)
+
+/** True for an https URL on the account service with an allowed path, no fragment, and a query only on the directory. */
+internal fun transportAllows(url: String): Boolean {
+    val u = try { URI(url) } catch (_: Exception) { return false }
+    val path = u.rawPath ?: return false
+    val queryOk = u.rawQuery == null || (path == "/v1/directory" && DIRECTORY_QUERY.matches(u.rawQuery))
+    return u.scheme == "https" && u.rawAuthority == "accounts.secpar.win" && queryOk && u.rawFragment == null &&
+        ALLOWED_PATHS.any { it.matches(path) }
+}
 
 enum class AccountError { NETWORK, INVALID_RESPONSE, INVALID_ARGUMENT, SIGN_IN_REQUIRED, EXPIRED, PENDING, SLOW_DOWN, UNAVAILABLE, RATE_LIMITED, REQUEST_FAILED,
-    FRIEND_UNAVAILABLE, REQUEST_GONE, BAD_NAME, INPUT_NOT_ALLOWED, REQUEST_ANSWERED }
+    FRIEND_UNAVAILABLE, REQUEST_GONE, BAD_NAME, INPUT_NOT_ALLOWED, REQUEST_ANSWERED,
+    HOST_NOT_SHARING, GRANT_NOT_AVAILABLE, ACCESS_ENDED }
 class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.NETWORK -> "Could not reach Secpar. Check your connection and try again."
     AccountError.INVALID_RESPONSE -> "Unexpected account response."
@@ -36,6 +60,9 @@ class AccountException(val kind: AccountError) : Exception(when (kind) {
     AccountError.BAD_NAME -> "Enter a username of 3 to 30 letters, numbers or underscores."
     AccountError.INPUT_NOT_ALLOWED -> "This friend may not use the keyboard or mouse."
     AccountError.REQUEST_ANSWERED -> "This request was already answered or has expired."
+    AccountError.HOST_NOT_SHARING -> "This computer is not letting friends connect right now."
+    AccountError.GRANT_NOT_AVAILABLE -> "This request was already used. Ask again."
+    AccountError.ACCESS_ENDED -> "Access to this computer ended or is not allowed."
     AccountError.UNAVAILABLE -> "Computer pairing is no longer available."
     AccountError.REQUEST_FAILED -> "The account request failed. Please try again."
 })
@@ -54,10 +81,7 @@ class OkHttpAccountTransport : AccountTransport {
         .connectTimeout(8, TimeUnit.SECONDS).readTimeout(12, TimeUnit.SECONDS)
         .writeTimeout(12, TimeUnit.SECONDS).callTimeout(20, TimeUnit.SECONDS).build()
     override fun execute(request: AccountRequest): AccountResponse {
-        val u = URI(request.url)
-        val queryOk = u.rawQuery == null || (u.rawPath == "/v1/directory" && DIRECTORY_QUERY.matches(u.rawQuery))
-        if (u.scheme != "https" || u.rawAuthority != "accounts.secpar.win" || !queryOk ||
-            u.rawFragment != null || !u.rawPath.startsWith("/")) throw AccountException(AccountError.INVALID_ARGUMENT)
+        if (!transportAllows(request.url)) throw AccountException(AccountError.INVALID_ARGUMENT)
         val req = Request.Builder().url(request.url).header("Accept", "application/json")
             .apply { request.bearer?.let { header("Authorization", "Bearer $it") } }
             .method(request.method, request.body?.toRequestBody("application/json".toMediaType())).build()
@@ -94,6 +118,17 @@ data class ConnectionRequest(val id: String, val owner: String, val guestHandle:
     val requested: List<String>, val state: String)
 enum class Answer { ALLOW_CONNECTION, DENY_CONNECTION, ACCEPT_FRIEND, DECLINE_FRIEND }
 data class OwnedComputer(val id: String, val name: String, val platform: String, val certificateFp: String?, val linked: Boolean, val online: Boolean)
+/** A computer of an accepted friend that is online and lets friends connect. */
+data class FriendComputer(val id: String, val name: String, val platform: String, val owner: String, val ownerHandle: String)
+/** A request to use a friend's computer. [expires] is a Unix second. [permissions] is what the Worker kept. */
+data class AccessRequest(val id: String, val state: String, val expires: Long, val permissions: List<String>) {
+    val approved get() = state == "approved"
+    val pending get() = state == "pending"
+}
+/** The one-time answer to a claim. It works once and for 60 seconds. */
+class GuestGrant(val grant: String, val expiresAt: Long, val pc: String, val relay: String, val fingerprint: String?) {
+    override fun toString() = "GuestGrant(redacted)"
+}
 class DeviceSignIn(val deviceCode: String, val userCode: String, val verificationUriComplete: String, val expiresIn: Long, val interval: Long) {
     override fun toString() = "DeviceSignIn(redacted)"
 }
@@ -132,6 +167,11 @@ interface AccountService {
     suspend fun friendSetting(id: String, input: String?, connect: String?) {}
     suspend fun requests(): List<ConnectionRequest> = emptyList()
     suspend fun answer(answer: Answer, id: String) {}
+    suspend fun friendComputers(): List<FriendComputer> = emptyList()
+    suspend fun requestAccess(computer: String, permissions: List<String>): AccessRequest = throw AccountException(AccountError.UNAVAILABLE)
+    suspend fun accessStatus(id: String): AccessRequest = throw AccountException(AccountError.UNAVAILABLE)
+    suspend fun claimAccess(id: String): GuestGrant = throw AccountException(AccountError.UNAVAILABLE)
+    suspend fun cancelAccess(id: String) {}
 }
 
 /** The calls the Friends page makes. Paths and verbs match the desktop client. */
@@ -142,7 +182,8 @@ enum class FriendAction(val method: String, val collection: String, val suffix: 
     fun path(id: String) = "/v1/$collection/$id$suffix"
 }
 
-class AccountApi(sessionToken: String? = null, private val transport: AccountTransport = OkHttpAccountTransport()) : AccountService {
+class AccountApi(sessionToken: String? = null, private val transport: AccountTransport = OkHttpAccountTransport(),
+    private val now: () -> Long = { System.currentTimeMillis() / 1000 }) : AccountService {
     @Volatile private var bearer: String? = null
     init { setSession(sessionToken) }
     fun setSession(token: String?) {
@@ -264,6 +305,59 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         }
     }
 
+    override suspend fun friendComputers(): List<FriendComputer> {
+        val rows = call("GET", "/v1/friend-computers") as? JsonArray ?: invalid()
+        valid(rows.size <= 256)
+        return rows.map { row ->
+            val o = row.objectValue()
+            FriendComputer(o.text("id").also { valid(UUID.matches(it)) }, o.text("name").also { valid(safeText(it, 320)) },
+                o.text("platform").also { valid(safeText(it, 16)) }, o.text("owner").also { valid(UUID.matches(it)) },
+                o.text("owner_handle").also { valid(safeText(it, 80)) })
+        }
+    }
+
+    override suspend fun requestAccess(computer: String, permissions: List<String>): AccessRequest {
+        pathId(computer)
+        argument(permissions.isNotEmpty() && permissions.all { it in PERMISSIONS } && permissions.toSet().size == permissions.size)
+        val body = buildJsonObject {
+            put("computer", computer)
+            put("permissions", JsonArray(permissions.map { JsonPrimitive(it) }))
+        }
+        val o = call("POST", "/v1/requests", body).objectValue()
+        val state = o.text("state").also { valid(it == "pending" || it == "approved") }
+        // The Worker answers with expires_in (seconds from now). The docs say expires (a Unix second). Both work.
+        val expires = o.optionalPositive("expires") ?: (now() + (o.optionalPositive("expires_in") ?: 300))
+        val kept = (o["permissions"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.takeIf { p -> p in PERMISSIONS } }
+        return AccessRequest(o.text("id").also { valid(UUID.matches(it)) }, state, minOf(expires, now() + 900), kept ?: permissions)
+    }
+
+    override suspend fun accessStatus(id: String): AccessRequest {
+        pathId(id)
+        val o = call("GET", "/v1/requests/$id").objectValue()
+        valid(o.text("id") == id)
+        val state = o.text("state").also { valid(REQUEST_STATE.matches(it)) }
+        val list = ((o["approved"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: (o["requested"] as? JsonPrimitive)?.takeIf { it.isString }?.content)
+            ?.let { runCatching { Json.parseToJsonElement(it) as? JsonArray }.getOrNull() }
+            ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.takeIf { p -> p in PERMISSIONS } }.orEmpty()
+        return AccessRequest(id, state, minOf(o.positive("expires"), now() + 900), list)
+    }
+
+    override suspend fun claimAccess(id: String): GuestGrant {
+        pathId(id)
+        val o = call("POST", "/v1/requests/$id/claim", obj()).objectValue()
+        val host = o["host"] as? JsonObject ?: invalid()
+        val pc = host.text("pc"); val relay = host.text("relay")
+        valid(com.pcremote.guest.GuestRelay.socketUrl(relay, pc) != null)
+        val fp = (host["fingerprint"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        valid(fp == null || HEX64.matches(fp))
+        return GuestGrant(o.text("grant").also { valid(GRANT_TEXT.matches(it)) }, o.positive("expires_at"), pc, relay, fp)
+    }
+
+    override suspend fun cancelAccess(id: String) {
+        pathId(id)
+        call("POST", "/v1/requests/$id/revoke", obj())
+    }
+
     override suspend fun blocks(): List<AccountUser> {
         val rows = call("GET", "/v1/blocks") as? JsonArray ?: invalid()
         valid(rows.size <= 1024)
@@ -323,6 +417,9 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
                     response.status == 401 || code == "session_expired" || code == "sign_in_required" -> AccountError.SIGN_IN_REQUIRED
                     code == "account_unavailable" -> AccountError.FRIEND_UNAVAILABLE
                     code == "input_not_allowed" -> AccountError.INPUT_NOT_ALLOWED
+                    code == "host_not_sharing" -> AccountError.HOST_NOT_SHARING
+                    code == "grant_not_available" -> AccountError.GRANT_NOT_AVAILABLE
+                    code == "access_expired_or_revoked" || code == "friend_access_required" -> AccountError.ACCESS_ENDED
                     code == "request_not_pending" || code == "request_not_found" -> AccountError.REQUEST_ANSWERED
                     code == "incoming_request_not_found" -> AccountError.REQUEST_GONE
                     code == "device_code_expired_or_used" -> AccountError.EXPIRED
@@ -348,6 +445,7 @@ private fun inputName(value: String, max: Int) = argument(safeText(value, max))
 private fun JsonElement.objectValue() = this as? JsonObject ?: invalid()
 private fun JsonObject.text(key: String) = (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: invalid()
 private fun JsonObject.positive(key: String) = (get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it > 0 } ?: invalid()
+private fun JsonObject.optionalPositive(key: String) = (get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it > 0 }
 private fun JsonObject.optionalChoice(key: String, default: String, other: String): String {
     val value = (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return default
     valid(value == default || value == other)

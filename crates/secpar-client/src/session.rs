@@ -42,6 +42,21 @@ pub enum Event {
     AudioUnavailable(String),
     StreamInfo {width:u32,height:u32,fps:u32},
     Stats {rtt_ms:Option<u16>,mbps:f32,received_fps:f32},
+    /// Host rumble for the controller with this id (0 to 3). Both motors at 0 means stop.
+    Rumble {id:u8,lo:u8,hi:u8},
+    /// A refusal that leaves the session open, such as a message the grant does not allow.
+    Notice(String),
+    /// What the host allows this connection to do, from a friend's `welcome`.
+    Caps(Vec<String>),
+}
+/// Errors that must not end a session: the host refused one message and carries on.
+pub fn soft_error(v:&Value)->Option<&'static str> {
+    match (v["code"].as_str().unwrap_or(""),v["of"].as_str().unwrap_or("")) {
+        ("forbidden",_)=>Some("The computer does not allow that."),
+        ("pad_limit",_)=>Some("This computer allows no more controllers."),
+        ("unsupported","pad")=>Some("Controllers are not available on this computer."),
+        _=>None,
+    }
 }
 #[derive(Clone)]
 pub struct Options {
@@ -254,6 +269,7 @@ pub async fn run(
 ) -> Result<(), String> {
     let mut events=UiEvents::new(events);
     events.emit(Event::Paired(conn.computer.clone()))?;
+    if !conn.caps.is_empty(){events.emit(Event::Caps(conn.caps.clone()))?;}
     events.emit(Event::Status("Finding a stream route".into()))?;
     let direct = conn.direct_host.clone();
     let discover_public = options.discover_public;
@@ -360,6 +376,11 @@ pub async fn run(
                     "clip"=>if clipboard_enabled && v["mime"]=="text/plain" {
                         if let Some(text)=v["data"].as_str().filter(|s|s.len()<=1_000_000){events.emit(Event::Clipboard(text.into()))?;}
                     },
+                    "rumble"=>if let Some(id)=v["id"].as_u64().filter(|id|*id<4){
+                        let motor=|k:&str|v[k].as_u64().unwrap_or(0).min(255) as u8;
+                        events.emit(Event::Rumble{id:id as u8,lo:motor("lo"),hi:motor("hi")})?;
+                    },
+                    "error" if soft_error(&v).is_some()=>events.emit(Event::Notice(soft_error(&v).unwrap_or_default().into()))?,
                     "error" if v["code"]=="audio_unavailable"=>events.emit(Event::AudioUnavailable(v["msg"].as_str().unwrap_or("Host audio is unavailable").into()))?,
                     "error" if matches!(v["of"].as_str(),Some("clip"|"clip.sub"))=>{
                         clipboard_enabled=false;
@@ -429,4 +450,18 @@ pub async fn run(
     let _ = control::send(&mut conn.socket, json!({"t":"stream.stop"})).await;
     let _ = conn.socket.close(None).await;
     result
+}
+
+#[cfg(test)]
+mod guest_tests {
+    use super::*;
+    #[test]
+    fn refusals_of_one_message_do_not_end_the_session() {
+        assert!(soft_error(&json!({"t":"error","code":"forbidden"})).is_some());
+        assert!(soft_error(&json!({"t":"error","code":"pad_limit"})).is_some());
+        assert!(soft_error(&json!({"t":"error","code":"unsupported","of":"pad"})).is_some());
+        for end in [json!({"code":"guest_ended"}),json!({"code":"busy"}),json!({"code":"locked"}),json!({"code":"unsupported","of":"clip"}),json!({})] {
+            assert!(soft_error(&end).is_none(),"{end} must end the session");
+        }
+    }
 }

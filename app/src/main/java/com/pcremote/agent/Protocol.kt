@@ -22,7 +22,11 @@ sealed interface Msg {
     @Serializable @SerialName("ping") data object Ping : Msg
     @Serializable @SerialName("pong") data object Pong : Msg
     @Serializable @SerialName("paired") data class Paired(val token: String, val pc: PcInfo) : Msg
-    @Serializable @SerialName("welcome") data class Welcome(val v: Int, val pc: PcInfo, val caps: List<String>, val locked: Boolean = false) : Msg
+    /** First frame of a friend's socket: the one-time grant from the account service. */
+    @Serializable @SerialName("guest") data class Guest(val grant: String) : Msg {
+        override fun toString() = "Guest(redacted)"
+    }
+    @Serializable @SerialName("welcome") data class Welcome(val v: Int = 1, val pc: PcInfo, val caps: List<String>, val locked: Boolean = false) : Msg
     @Serializable @SerialName("error") data class Error(val code: String, val msg: String = "", val of: String? = null) : Msg
     @Serializable @SerialName("ok") data class Ok(val of: String? = null) : Msg
 

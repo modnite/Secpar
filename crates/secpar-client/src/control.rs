@@ -39,6 +39,8 @@ pub struct Connected {
     pub socket: Socket,
     pub computer: Computer,
     pub direct_host: Option<String>,
+    /// What the host allows this connection to do. Empty for a paired device.
+    pub caps: Vec<String>,
 }
 
 impl Relay {
@@ -289,6 +291,7 @@ impl Connected {
                 socket: ws,
                 computer,
                 direct_host,
+                caps: Vec::new(),
             });
         }
         Err(last)
@@ -339,9 +342,136 @@ impl Connected {
                 socket: ws,
                 computer,
                 direct_host,
+                caps: Vec::new(),
             });
         }
         Err(last)
+    }
+}
+
+/// The relay origin a friend's computer is reached through. It must be a plain https origin.
+/// Returns the wss address of the guest route for one computer.
+pub fn guest_url(relay: &str, pc: &str) -> Result<String, String> {
+    let bad = || "The computer gave an invalid relay address".to_string();
+    if relay.len() > 300 || relay.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(bad());
+    }
+    if pc.is_empty()
+        || pc.len() > 64
+        || !pc.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err("The computer gave an invalid identifier".into());
+    }
+    let mut url = url::Url::parse(relay).map_err(|_| bad())?;
+    if url.scheme() != "https"
+        || url.host_str().is_none_or(str::is_empty)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+    {
+        return Err(bad());
+    }
+    url.set_scheme("wss").map_err(|_| bad())?;
+    url.set_path("/v1/guest");
+    url.query_pairs_mut().append_pair("pc", pc);
+    Ok(url.to_string())
+}
+
+/// Plain words for an `error` frame that ends a friend connection. The host's own text is kept
+/// where it says more than the code does.
+pub fn guest_error(v: &Value) -> String {
+    let msg: String = v["msg"]
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(200)
+        .collect();
+    let msg = msg.trim();
+    match v["code"].as_str().unwrap_or("") {
+        "guest_refused" => "Access was removed, or this computer stopped sharing with friends.".into(),
+        "busy" if !msg.is_empty() => format!("This computer is busy. {msg}"),
+        "busy" => "This computer is busy. Try again later.".into(),
+        "locked" => "This computer is locked.".into(),
+        "forbidden" => "The computer does not allow that.".into(),
+        "guest_ended" if !msg.is_empty() => msg.into(),
+        "guest_ended" => "The owner ended the session.".into(),
+        _ if !msg.is_empty() => msg.into(),
+        _ => "The computer refused the connection.".into(),
+    }
+}
+
+impl Connected {
+    /// Connect to a friend's computer with a grant from the account service. The relay is a
+    /// public service, so its certificate is checked normally and nothing is pinned. A friend has
+    /// no relay ticket, so the returned computer has no TURN route of its own.
+    pub async fn guest(relay: &str, pc: &str, grant: &str, fallback_name: &str) -> Result<Self, String> {
+        let url = guest_url(relay, pc)?;
+        let ws = open(&url, None)
+            .await
+            .map_err(|_| "Could not reach the computer through the relay".to_string())?;
+        Self::guest_over(ws, pc, grant, fallback_name).await
+    }
+    async fn guest_over(mut ws: Socket, pc: &str, grant: &str, fallback_name: &str) -> Result<Self, String> {
+        if grant.is_empty() || grant.len() > 4096 {
+            return Err("The connection grant is invalid".into());
+        }
+        send(&mut ws, json!({"t":"guest","grant":grant})).await?;
+        let welcome = tokio::time::timeout(Duration::from_secs(12), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(t))) => {
+                        let v: Value = serde_json::from_str(&t)
+                            .map_err(|_| "Host sent an invalid response".to_string())?;
+                        match v["t"].as_str() {
+                            Some("welcome") => return Ok(v),
+                            Some("error") => return Err(guest_error(&v)),
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(Message::Ping(p))) => ws
+                        .send(Message::Pong(p))
+                        .await
+                        .map_err(|_| "Connection closed".to_string())?,
+                    Some(Ok(Message::Close(Some(frame)))) => {
+                        return Err(if u16::from(frame.code) == 4401 {
+                            "The relay refused the connection".into()
+                        } else {
+                            "The computer is offline or stopped sharing".into()
+                        })
+                    }
+                    Some(Ok(_)) => {}
+                    _ => return Err("The computer is offline or stopped sharing".into()),
+                }
+            }
+        })
+        .await
+        .map_err(|_| "The computer did not answer".to_string())??;
+        let name = welcome["pc"]["name"]
+            .as_str()
+            .map(|n| n.chars().filter(|c| !c.is_control()).take(80).collect::<String>())
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| fallback_name.to_string());
+        let caps = welcome["caps"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).take(16).map(String::from).collect())
+            .unwrap_or_default();
+        Ok(Self {
+            socket: ws,
+            computer: Computer {
+                id: pc.into(),
+                name,
+                hosts: Vec::new(),
+                port: 0,
+                fingerprint: [0; 32],
+                token: String::new(),
+                relay: None,
+            },
+            direct_host: None,
+            caps,
+        })
     }
 }
 
@@ -426,6 +556,95 @@ mod tests {
             .await
             .is_err());
         server.await.unwrap();
+    }
+
+    #[test]
+    fn guest_url_turns_an_https_origin_into_the_guest_route() {
+        assert_eq!(guest_url("https://relay.example.com", "abc-123_X").unwrap(), "wss://relay.example.com/v1/guest?pc=abc-123_X");
+        assert_eq!(guest_url("https://relay.example.com/", "pc1").unwrap(), "wss://relay.example.com/v1/guest?pc=pc1");
+        assert_eq!(guest_url("https://relay.example.com:8443", "pc1").unwrap(), "wss://relay.example.com:8443/v1/guest?pc=pc1");
+    }
+    #[test]
+    fn guest_url_refuses_bad_relays() {
+        for relay in [
+            "http://relay.example.com",
+            "ws://relay.example.com",
+            "wss://relay.example.com",
+            "ftp://relay.example.com",
+            "relay.example.com",
+            "",
+            "https://",
+            "https://user:pw@relay.example.com",
+            "https://user@relay.example.com",
+            "https://relay.example.com/v1/phone",
+            "https://relay.example.com/?x=1",
+            "https://relay.example.com/#frag",
+            "https://relay.example.com\n",
+            "https://relay .example.com",
+        ] {
+            assert!(guest_url(relay, "pc1").is_err(), "{relay:?} must be refused");
+        }
+    }
+    #[test]
+    fn guest_url_refuses_identifiers_that_could_inject_a_path_or_query() {
+        for pc in ["", "a/b", "a?b=1", "a&dev=x", "a#b", "..", "a b", "a%2fb", "pc\n", &"x".repeat(65)] {
+            assert!(guest_url("https://relay.example.com", pc).is_err(), "{pc:?} must be refused");
+        }
+    }
+    #[test]
+    fn guest_errors_are_put_in_plain_words() {
+        let e = |v: Value| guest_error(&v);
+        assert!(e(json!({"t":"error","code":"guest_refused"})).contains("Access was removed"));
+        assert_eq!(e(json!({"t":"error","code":"locked","msg":"x"})), "This computer is locked.");
+        assert_eq!(e(json!({"t":"error","code":"busy"})), "This computer is busy. Try again later.");
+        assert_eq!(e(json!({"t":"error","code":"busy","msg":"The owner is using the PC."})), "This computer is busy. The owner is using the PC.");
+        assert_eq!(e(json!({"t":"error","code":"guest_ended","msg":"Owner started a stream"})), "Owner started a stream");
+        assert_eq!(e(json!({"t":"error","code":"guest_ended"})), "The owner ended the session.");
+        assert_eq!(e(json!({"t":"error","code":"mystery","msg":"Host says no\u{7}"})), "Host says no");
+        assert_eq!(e(json!({"t":"error"})), "The computer refused the connection.");
+    }
+    async fn guest_server(replies: Vec<Value>) -> (String, tokio::task::JoinHandle<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (s, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(s).await.unwrap();
+            let first = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            for r in replies {
+                ws.send(Message::text(r.to_string())).await.unwrap();
+            }
+            serde_json::from_str(&first).unwrap()
+        });
+        (format!("ws://{addr}/v1/guest?pc=pc1"), task)
+    }
+    #[tokio::test]
+    async fn guest_sends_the_grant_first_and_reads_the_welcome() {
+        let (url, server) = guest_server(vec![json!({"t":"welcome","v":1,"pc":{"id":"pc1","name":"Friend PC"},"caps":["stream","input","pad"]})]).await;
+        let ws = open(&url, None).await.unwrap();
+        let c = Connected::guest_over(ws, "pc1", "the-grant", "Fallback").await.unwrap();
+        assert_eq!(server.await.unwrap(), json!({"t":"guest","grant":"the-grant"}));
+        assert_eq!(c.computer.name, "Friend PC");
+        assert_eq!(c.computer.id, "pc1");
+        assert!(c.computer.relay.is_none() && c.direct_host.is_none() && c.computer.token.is_empty());
+        assert_eq!(c.caps, ["stream", "input", "pad"]);
+    }
+    #[tokio::test]
+    async fn guest_surfaces_a_host_refusal_and_skips_unrelated_frames() {
+        let (url, server) = guest_server(vec![json!({"t":"pong"}), json!({"t":"error","code":"locked","msg":"Locked"})]).await;
+        let ws = open(&url, None).await.unwrap();
+        let e = Connected::guest_over(ws, "pc1", "g", "Fallback").await.err().unwrap();
+        assert_eq!(e, "This computer is locked.");
+        server.await.unwrap();
+        let (url, server) = guest_server(vec![]).await;
+        let ws = open(&url, None).await.unwrap();
+        let e = Connected::guest_over(ws, "pc1", &"x".repeat(4097), "Fallback").await.err().unwrap();
+        assert_eq!(e, "The connection grant is invalid");
+        server.abort();
+    }
+    #[tokio::test]
+    async fn guest_to_a_bad_relay_never_opens_a_socket() {
+        let e = Connected::guest("http://127.0.0.1:9", "pc1", "g", "F").await.err().unwrap();
+        assert_eq!(e, "The computer gave an invalid relay address");
     }
 }
 

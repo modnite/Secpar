@@ -25,6 +25,8 @@ class AccountRuntime private constructor(ctx: Context) {
         val pin = "%04d".format(java.util.Locale.ROOT, SecureRandom().nextInt(10_000))
         val paired = agentPair(scope, uri, Build.MODEL, pin, preferLan = true).getOrThrow()
         PairedPc(paired.pc.id, paired.pc.name, uri.hosts, uri.port, uri.fingerprint, paired.token, paired.pc.macs, relay = paired.relay)
+    }, guestOpen = { grant, computer, permissions, routeId ->
+        com.pcremote.guest.GuestConnector.open(scope, grant, computer.name, computer.ownerHandle, permissions, routeId)
     })
     /** Request notifications are off until the user turns them on. */
     val alerts = kotlinx.coroutines.flow.MutableStateFlow(prefs.getBoolean("alerts", false))

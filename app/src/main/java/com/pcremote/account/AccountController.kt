@@ -27,6 +27,10 @@ data class AccountUi(
     val people: List<DirectoryEntry> = emptyList(),
     /** Connection requests for this account's computers and for this account's own attempts. */
     val requests: List<ConnectionRequest> = emptyList(),
+    /** Computers of accepted friends that are online and let friends connect. */
+    val friendComputers: List<FriendComputer> = emptyList(),
+    /** The request to use a friend's computer that is in progress. */
+    val guest: GuestProgress? = null,
 )
 
 /** Wording shared with the desktop client. */
@@ -51,6 +55,8 @@ class AccountController(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val now: () -> Long = { System.currentTimeMillis() / 1000 },
     private val elapsed: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** Joins a friend's computer with the claimed grant and returns the route of the session. Null disables Connect. */
+    private val guestOpen: (suspend (GuestGrant, FriendComputer, Set<String>, String) -> String)? = null,
 ) {
     private val mutable = MutableStateFlow(AccountUi())
     val state: StateFlow<AccountUi> = mutable
@@ -65,6 +71,8 @@ class AccountController(
     private var pairJob: Job? = null
     private var pairGeneration = 0L
     private var expiryJob: Job? = null
+    private var guestJob: Job? = null
+    private var guestGeneration = 0L
 
     init {
         scope.launch {
@@ -144,6 +152,7 @@ class AccountController(
         val service = api
         val epoch = ++generation
         loginJob?.cancel(); refreshJob?.cancel(); pairJob?.cancel(); expiryJob?.cancel()
+        guestGeneration++; guestJob?.cancel()
         session = null; api = null
         mutable.value = AccountUi(ready = true, busy = true)
         changes.value++
@@ -174,6 +183,7 @@ class AccountController(
                 val friends = runCatching { service.friends() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 val blocked = runCatching { service.blocks() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 val requests = runCatching { service.requests() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                val shared = runCatching { service.friendComputers() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 if (epoch != generation) return@launch
                 val removed = withContext(io) {
                     store.owned(saved).filter { access -> computers.none {
@@ -183,7 +193,7 @@ class AccountController(
                 if (epoch != generation) return@launch
                 mutable.value = state.value.copy(computers = computers, error = null,
                     friends = friends ?: state.value.friends, blocked = blocked ?: state.value.blocked,
-                    requests = requests ?: state.value.requests)
+                    requests = requests ?: state.value.requests, friendComputers = shared ?: state.value.friendComputers)
                 if (removed) changes.value++
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
@@ -246,6 +256,58 @@ class AccountController(
                 requestId?.let { id -> withContext(NonCancellable) { runCatching { service.cancelOwnerPair(id) } } }
             }
         }
+    }
+
+    /**
+     * Asks to use a friend's computer, waits for the owner (every 2 seconds, until the answer or the expiry),
+     * claims the one-time grant, joins the computer and calls [onReady] with the route of the session.
+     */
+    fun connectFriend(computer: FriendComputer, permissions: List<String>, onReady: (String) -> Unit) {
+        val service = api ?: return
+        val open = guestOpen ?: return
+        if (session == null || guestJob?.isActive == true) return
+        val epoch = generation
+        val attempt = ++guestGeneration
+        fun current() = epoch == generation && attempt == guestGeneration
+        fun phase(p: GuestPhase) { if (current()) mutable.value = state.value.copy(guest = GuestProgress(computer.id, computer.ownerHandle, p)) }
+        mutable.value = state.value.copy(guest = GuestProgress(computer.id, computer.ownerHandle, GuestPhase.ASKING), error = null)
+        guestJob = scope.launch {
+            var cancelable = true // the request is still ours to cancel
+            var requestId: String? = null
+            var failure: String? = null
+            try {
+                val first = service.requestAccess(computer.id, permissions)
+                requestId = first.id
+                if (!current()) return@launch
+                phase(GuestPhase.WAITING)
+                when (GuestApproval.wait(service, first, now)) {
+                    Approval.Approved -> Unit
+                    is Approval.Ended -> { cancelable = false; failure = FriendsConnect.declined(computer.ownerHandle); return@launch }
+                    Approval.Expired -> { failure = FriendsConnect.noAnswer(computer.ownerHandle); return@launch }
+                }
+                if (!current()) return@launch
+                phase(GuestPhase.OPENING)
+                val grant = service.claimAccess(first.id)
+                val route = open(grant, computer, first.permissions.toSet(), first.id)
+                cancelable = false
+                if (current()) onReady(route)
+                else { com.pcremote.guest.GuestSessions.find(route)?.conn?.close(); com.pcremote.guest.GuestSessions.remove(route) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                failure = if (e is AccountException && e.kind == AccountError.INPUT_NOT_ALLOWED) FriendsConnect.viewOnly(computer.ownerHandle) else message(e)
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED && current()) signOut()
+            } finally {
+                if (current()) mutable.value = state.value.copy(guest = null, error = failure ?: state.value.error)
+                // A request nobody answered, or one we could not use, would stay open for the owner to allow later.
+                requestId?.takeIf { cancelable }?.let { id -> withContext(NonCancellable) { runCatching { service.cancelAccess(id) } } }
+            }
+        }
+    }
+
+    fun cancelFriendConnection() {
+        guestGeneration++
+        guestJob?.cancel()
+        mutable.value = state.value.copy(guest = null)
     }
 
     fun dismissError() { mutable.value = state.value.copy(error = null) }
@@ -395,5 +457,6 @@ class AccountController(
         }
     }
 
-    private fun message(e: Exception) = (e as? AccountException)?.message ?: "Could not complete the connection. Please try again."
+    private fun message(e: Exception) = (e as? AccountException)?.message ?: (e as? com.pcremote.guest.GuestException)?.message
+        ?: "Could not complete the connection. Please try again."
 }

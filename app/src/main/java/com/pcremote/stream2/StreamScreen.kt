@@ -81,6 +81,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val agent by session.conn.state.collectAsState()
+    com.pcremote.guest.GuestSessionEffects(session, onBack)
     var shareClipboard by remember { mutableStateOf(settings.shareClipboard) }
     com.pcremote.modes.ClipboardSync(session, agent, shareClipboard)
     val toolbar = remember {
@@ -120,7 +121,12 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     // start once the agent is online and the surface exists; stop when either goes away
     val ready = agent is AgentState.Online && surface != null
     DisposableEffect(controller, ready) {
-        if (ready) controller.start(request(ctx, settings).copy(display = savedDisplay(ctx, pcId)))
+        if (ready) {
+            val base = request(ctx, settings).copy(display = savedDisplay(ctx, pcId))
+            // a friend hears the computer only when the grant has audio
+            val friendNoAudio = com.pcremote.guest.GuestSessions.isGuest(pcId) && !com.pcremote.guest.GuestSessions.allows(pcId, "audio")
+            controller.start(if (friendNoAudio) base.copy(audio = false) else base)
+        }
         onDispose { controller.stop(); pipe = null; nextSock.getAndSet(null)?.close() }
     }
     val zoom = remember { ZoomPan() }
@@ -232,7 +238,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
             }
             override fun reopenAudio() { pipe?.reopenAudio() }
             override fun selectDisplay(id: String) {
-                currentController.selectDisplay(id); saveDisplay(ctx, pcId, id); zoom.reset()
+                currentController.selectDisplay(id); if (!com.pcremote.guest.GuestSessions.isGuest(pcId)) saveDisplay(ctx, pcId, id); zoom.reset()
             }
             override fun selectSize(w: Int, h: Int) {
                 settings.resolution = w to h

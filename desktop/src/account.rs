@@ -64,6 +64,64 @@ pub struct OwnedComputer {
     pub linked: u8,
     pub online: u8,
 }
+/// A computer of an accepted friend that is online and lets friends connect.
+#[derive(Clone, Deserialize)]
+pub struct FriendComputer {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub platform: String,
+    pub owner_handle: String,
+}
+/// What a friend session needs once the owner said yes. The grant works once for 60 seconds.
+pub struct Grant {
+    pub relay: String,
+    pub pc: String,
+    pub grant: String,
+    pub name: String,
+    pub owner_handle: String,
+    pub permissions: Vec<String>,
+}
+impl Grant {
+    pub fn allows(&self, permission: &str) -> bool { self.permissions.iter().any(|p| p == permission) }
+}
+/// How a request for a friend's computer is going.
+pub enum Guest {
+    Waiting(String),
+    Refused(String),
+    Grant(Grant),
+}
+pub const PERMISSION_LABELS: [&str; 5] = ["View", "Audio", "Keyboard and mouse", "Controller", "Clipboard"];
+pub const PERMISSION_DEFAULTS: [bool; 5] = [true, true, true, false, false];
+const PERMISSIONS: [&str; 7] = ["view", "audio", "gamepad", "keyboard", "mouse", "clipboard", "files"];
+/// The permission names for the five checkboxes: View, Audio, Keyboard and mouse, Controller, Clipboard.
+pub fn guest_permissions(flags: [bool; 5]) -> Vec<String> {
+    let mut list = Vec::new();
+    for (on, names) in flags.iter().zip([&["view"][..], &["audio"], &["keyboard", "mouse"], &["gamepad"], &["clipboard"]]) {
+        if *on { list.extend(names.iter().map(|n| n.to_string())); }
+    }
+    list
+}
+fn valid_handle(handle: &str) -> bool {
+    (1..=30).contains(&handle.len()) && handle.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+/// The permission list from a request row. The service stores lists as JSON text.
+fn permission_list(value: &Value) -> Option<Vec<String>> {
+    let list: Vec<String> = match value {
+        Value::String(text) => serde_json::from_str(text).ok()?,
+        Value::Array(_) => serde_json::from_value(value.clone()).ok()?,
+        _ => return None,
+    };
+    (list.len() <= 7 && list.iter().all(|p| PERMISSIONS.contains(&p.as_str()))).then_some(list)
+}
+/// Plain words for a request that ended without a session.
+fn guest_refusal(state: &str, owner: &str, was_approved: bool) -> String {
+    match (state, was_approved) {
+        ("rejected" | "revoked", false) => format!("@{owner} said no."),
+        ("rejected" | "revoked", true) => "Access was removed.".into(),
+        _ => "This request was already used. Ask again.".into(),
+    }
+}
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Presence { Online, Offline, Streaming, Locked }
 /// Status text and dot colour for a computer card. Online is OK, streaming is ACCENT, locked and
@@ -111,6 +169,8 @@ pub enum Command {
     Search(String),
     SetVisible(bool),
     Answer(Answer, String),
+    RequestGuest { computer: FriendComputer, permissions: Vec<String> },
+    CancelGuest,
 }
 pub enum Event {
     Host(Result<local_host::State, String>),
@@ -134,6 +194,8 @@ pub enum Event {
     OwnedConnection(OwnedConnection),
     Directory(Result<Vec<Person>, String>),
     Live { friends: Vec<Friend>, requests: Vec<Incoming> },
+    FriendComputers(Vec<FriendComputer>),
+    Guest(Guest),
 }
 
 pub struct Panel {
@@ -154,6 +216,13 @@ pub struct Panel {
     query_at: Option<Instant>,
     people: Vec<Person>,
     requests: Vec<Incoming>,
+    friend_computers: Vec<FriendComputer>,
+    guest_choice: Option<(FriendComputer, [bool; 5])>,
+    guest_waiting: Option<String>,
+    /// Set by the window: a session is open, so no second one starts.
+    pub session_open: bool,
+    /// Taken by the window, which opens the session.
+    pub guest_grant: Option<Grant>,
     busy: bool,
     tx: mpsc::Sender<Command>,
     events: mpsc::Receiver<Event>,
@@ -257,6 +326,11 @@ impl Panel {
             query_at: None,
             people: vec![],
             requests: vec![],
+            friend_computers: Vec::new(),
+            guest_choice: None,
+            guest_waiting: None,
+            session_open: false,
+            guest_grant: None,
             busy: false,
             tx,
             events,
@@ -344,6 +418,10 @@ impl Panel {
                     self.user = None;
                     self.friends.clear();
                     self.requests.clear();
+                    self.friend_computers.clear();
+                    self.guest_choice = None;
+                    self.guest_waiting = None;
+                    self.guest_grant = None;
                     self.people.clear();
                     self.asked = None;
                     self.blocked.clear();
@@ -370,6 +448,10 @@ impl Panel {
                 Event::Directory(Ok(people)) => self.people = people,
                 Event::Directory(Err(note)) => { self.people.clear(); self.note = note; }
                 Event::Live { friends, requests } => { self.friends = friends; self.requests = requests; }
+                Event::FriendComputers(list) => self.friend_computers = list,
+                Event::Guest(Guest::Waiting(owner)) => { self.guest_waiting = Some(owner); self.note.clear(); }
+                Event::Guest(Guest::Refused(note)) => { self.guest_waiting = None; self.note = note; }
+                Event::Guest(Guest::Grant(grant)) => { self.guest_waiting = None; self.note.clear(); self.guest_grant = Some(grant); }
                 Event::Message(note) => self.note = note,
                 Event::Busy(busy) => self.busy = busy,
                 Event::Restored(computer) => self.restored_computer = Some(computer),
@@ -516,6 +598,64 @@ impl Panel {
             });
         }
     }
+    fn friend_computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        egui::CollapsingHeader::new("Friends' computers").default_open(true).show(ui, |ui| {
+            if let Some(owner) = self.guest_waiting.clone() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(format!("Waiting for @{owner}")).truncate());
+                    ui.spinner();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Cancel").clicked() {
+                            let _ = self.tx.try_send(Command::CancelGuest);
+                            self.guest_waiting = None;
+                        }
+                    });
+                });
+                return;
+            }
+            if let Some((computer, mut flags)) = self.guest_choice.clone() {
+                ui.add(egui::Label::new(format!("{} (@{})", computer.name, computer.owner_handle)).truncate());
+                for (flag, label) in flags.iter_mut().zip(PERMISSION_LABELS) {
+                    ui.checkbox(flag, label);
+                }
+                let permissions = guest_permissions(flags);
+                let (mut ask, mut cancel) = (false, false);
+                ui.horizontal(|ui| {
+                    ask = ui.add_enabled(!permissions.is_empty(), egui::Button::new("Request access")).clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+                if ask {
+                    let owner = computer.owner_handle.clone();
+                    if self.tx.try_send(Command::RequestGuest { computer, permissions }).is_ok() {
+                        self.guest_waiting = Some(owner);
+                    } else {
+                        self.note = "An account request is already in progress. Please wait.".into();
+                    }
+                    self.guest_choice = None;
+                } else if cancel {
+                    self.guest_choice = None;
+                } else {
+                    self.guest_choice = Some((computer, flags));
+                }
+                return;
+            }
+            if self.friend_computers.is_empty() {
+                ui.weak("No friends' computers online");
+            }
+            for computer in self.friend_computers.clone() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(&computer.name).truncate());
+                    ui.label(egui::RichText::new(format!("@{}", computer.owner_handle)).size(12.).color(crate::design::MUTED));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(!self.session_open, egui::Button::new("Connect")).clicked() {
+                            self.guest_choice = Some((computer.clone(), PERMISSION_DEFAULTS));
+                        }
+                    });
+                });
+            }
+        });
+    }
     fn people_ui(&mut self, ui: &mut eframe::egui::Ui) {
         use eframe::egui;
         egui::CollapsingHeader::new("Find people").default_open(self.friends.is_empty()).show(ui, |ui| {
@@ -621,6 +761,7 @@ impl Panel {
             }
             ui.add_space(4.);
             self.requests_ui(ui);
+            self.friend_computers_ui(ui);
             self.people_ui(ui);
             ui.add_space(8.);
             if self.friends.is_empty() {
@@ -842,6 +983,12 @@ impl Api {
                 "input_not_allowed" => "This friend may not use the keyboard or mouse.",
                 "request_not_pending" => "This request was already answered or has expired.",
                 "request_not_found" => "This request is no longer available.",
+                "friend_access_required" => "You are not friends with this person any more.",
+                "access_expired_or_revoked" => "Access was removed or the request ran out.",
+                "host_not_sharing" => "This computer is offline or is not sharing with friends.",
+                "grant_not_available" => "This request was already used. Ask again.",
+                "intended_guest_required" => "This request belongs to someone else.",
+                "invalid_permissions" => "Choose what you want to do first.",
                 _ => "The account request failed. Please try again.",
             };
             return Err((status, message.into()));
@@ -920,6 +1067,45 @@ impl Api {
             return Err((StatusCode::BAD_GATEWAY,"Invalid computer list".into()));
         }
         Ok(computers)
+    }
+    async fn friend_computers(&self) -> Result<Vec<FriendComputer>, (StatusCode, String)> {
+        let bad = || (StatusCode::BAD_GATEWAY, "Invalid list of friends' computers".to_string());
+        let list: Vec<FriendComputer> = serde_json::from_value(self.call(Method::GET, "/v1/friend-computers", None).await?).map_err(|_| bad())?;
+        if list.len() > 256 || list.iter().any(|c| path_id(&c.id).is_err() || c.name.len() > 320 || c.platform.len() > 16 || !valid_handle(&c.owner_handle)) {
+            return Err(bad());
+        }
+        Ok(list)
+    }
+    /// Ask a friend for access. Answers the request id, its state and the permissions the service kept.
+    async fn request_access(&self, computer: &str, permissions: &[String]) -> Result<(String, String, u64, Vec<String>), (StatusCode, String)> {
+        let computer = path_id(computer).map_err(|note| (StatusCode::BAD_REQUEST, note))?;
+        if permissions.is_empty() || permissions.iter().any(|p| !PERMISSIONS.contains(&p.as_str())) {
+            return Err((StatusCode::BAD_REQUEST, "Choose what you want to do first.".into()));
+        }
+        let value = self.call(Method::POST, "/v1/requests", Some(json!({"computer": computer, "permissions": permissions}))).await?;
+        let bad = || (StatusCode::BAD_GATEWAY, "Invalid request response".to_string());
+        let id = value["id"].as_str().filter(|id| path_id(id).is_ok()).ok_or_else(bad)?.to_string();
+        let state = value["state"].as_str().ok_or_else(bad)?.to_string();
+        let kept = permission_list(&value["permissions"]).unwrap_or_else(|| permissions.to_vec());
+        Ok((id, state, value["expires_in"].as_u64().unwrap_or(300), kept))
+    }
+    /// The state of a request and the permissions the owner approved, once there are any.
+    async fn request_state(&self, id: &str) -> Result<(String, Option<Vec<String>>), (StatusCode, String)> {
+        let id = path_id(id).map_err(|note| (StatusCode::BAD_REQUEST, note))?;
+        let row = self.call(Method::GET, &format!("/v1/requests/{id}"), None).await?;
+        let state = row["state"].as_str().ok_or((StatusCode::BAD_GATEWAY, "Invalid request response".to_string()))?.to_string();
+        Ok((state, permission_list(&row["approved"])))
+    }
+    async fn claim(&self, id: &str, computer: &FriendComputer, permissions: Vec<String>) -> Result<Grant, (StatusCode, String)> {
+        let id = path_id(id).map_err(|note| (StatusCode::BAD_REQUEST, note))?;
+        let value = self.call(Method::POST, &format!("/v1/requests/{id}/claim"), None).await?;
+        let bad = || (StatusCode::BAD_GATEWAY, "Invalid connection grant".to_string());
+        let grant = value["grant"].as_str().filter(|g| !g.is_empty() && g.len() <= 4096).ok_or_else(bad)?;
+        let pc = value["host"]["pc"].as_str().ok_or_else(bad)?;
+        let relay = value["host"]["relay"].as_str().ok_or_else(bad)?;
+        // The relay and computer id are checked here, so a bad answer never reaches the session.
+        secpar_client::control::guest_url(relay, pc).map_err(|note| (StatusCode::BAD_GATEWAY, note))?;
+        Ok(Grant { relay: relay.into(), pc: pc.into(), grant: grant.into(), name: computer.name.clone(), owner_handle: computer.owner_handle.clone(), permissions })
     }
     async fn live(&self) -> Result<(Vec<Friend>, Vec<Incoming>), (StatusCode, String)> {
         let friends = serde_json::from_value(self.call(Method::GET, "/v1/friends", None).await?)
@@ -1013,6 +1199,14 @@ fn owned_key(owner: &str, id: &str) -> Result<String,String> {
     path_id(owner)?; path_id(id)?;
     Ok(format!("owned-pairing:{owner}:{id}"))
 }
+struct PendingGuest {
+    id: String,
+    computer: FriendComputer,
+    permissions: Vec<String>,
+    expires: Instant,
+    next: Instant,
+    approved: bool,
+}
 struct PendingPair {
     id: String, owner: String, computer: String, fingerprint: [u8;32],
     expires: Instant, next: Instant,
@@ -1097,6 +1291,8 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             ctx.request_repaint();
             let mut api=Api{client,token,base:ORIGIN.into()}; let mut pending: Option<Pending>=None;
             let mut pending_pair: Option<PendingPair> = None;
+            let mut pending_guest: Option<PendingGuest> = None;
+            let mut next_friend_computers = Instant::now();
             let mut signed_owner: Option<String> = None;
             let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
             let mut next_owned = Instant::now();
@@ -1117,6 +1313,34 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 let command=tokio::select! { command=rx.recv()=>{let Some(command)=command else {break};Some(command)}, _=timer.tick()=>None };
                 if let Some(Command::Search(query))=&command {
                     if api.token.is_some() { let _=events.send(Event::Directory(api.search(query).await.map_err(|(_,note)|note))).await; ctx.request_repaint(); }
+                    continue;
+                }
+                if matches!(command,Some(Command::RequestGuest{..})|Some(Command::CancelGuest)) {
+                    pending_guest=None;
+                    if let Some(Command::RequestGuest{computer,permissions})=command {
+                        let refused=match api.request_access(&computer.id,&permissions).await {
+                            Ok((id,state,expires_in,kept))=>{
+                                let mut p=PendingGuest{id,computer,permissions:kept,expires:Instant::now()+Duration::from_secs(expires_in.clamp(1,600)),next:Instant::now()+Duration::from_secs(2),approved:false};
+                                if state=="approved" {
+                                    p.approved=true;
+                                    match api.claim(&p.id,&p.computer,p.permissions.clone()).await {
+                                        Ok(grant)=>{let _=events.send(Event::Guest(Guest::Grant(grant))).await;None},
+                                        Err(e)=>Some(e),
+                                    }
+                                } else {
+                                    let _=events.send(Event::Guest(Guest::Waiting(p.computer.owner_handle.clone()))).await;
+                                    pending_guest=Some(p);
+                                    None
+                                }
+                            }
+                            Err(e)=>Some(e),
+                        };
+                        if let Some((status,note))=refused {
+                            if status==StatusCode::UNAUTHORIZED {api.token=None;signed_owner=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}
+                            else {let _=events.send(Event::Guest(Guest::Refused(note))).await;}
+                        }
+                    }
+                    ctx.request_repaint();
                     continue;
                 }
                 if let Some(command)=command {
@@ -1214,7 +1438,8 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                                 }
                             }else{Err((StatusCode::UNAUTHORIZED,"Sign in to connect to your computers".into()))}
                         }
-                        Command::Refresh=>Ok(String::new()),
+                        Command::Refresh=>{next_friend_computers=Instant::now();Ok(String::new())},
+                        Command::RequestGuest{..}|Command::CancelGuest=>Ok(String::new()),
                         Command::Search(_)=>Ok(String::new()),
                         Command::SetVisible(visible)=>api.call(Method::PUT,"/v1/me/visibility",Some(json!({"visible":visible}))).await.map(|_| String::new()),
                         Command::Answer(answer,id)=>api.answer(answer,&id).await.map(|_| match answer {
@@ -1260,7 +1485,42 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     }
                     ctx.request_repaint();
                 }
-                if api.token.is_none() { pending_pair=None; signed_owner=None; }
+                if api.token.is_none() { pending_pair=None; pending_guest=None; signed_owner=None; next_friend_computers=Instant::now(); }
+                if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
+                    next_friend_computers=Instant::now()+Duration::from_secs(20);
+                    match api.friend_computers().await {
+                        Ok(list)=>{let _=events.send(Event::FriendComputers(list)).await;}
+                        Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;pending_pair=None;pending_guest=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}
+                        Err(_)=>{}
+                    }
+                    ctx.request_repaint();
+                }
+                if pending_guest.as_ref().is_some_and(|p|Instant::now()>=p.next) {
+                    let mut p=pending_guest.take().unwrap();
+                    p.next=Instant::now()+Duration::from_secs(2);
+                    let owner=p.computer.owner_handle.clone();
+                    if Instant::now()>=p.expires {
+                        let _=events.send(Event::Guest(Guest::Refused(format!("@{owner} did not answer.")))).await;
+                    } else {
+                        match api.request_state(&p.id).await {
+                            Ok((state,_)) if state=="pending"=>{pending_guest=Some(p);},
+                            Ok((state,approved)) if state=="approved"=>{
+                                p.approved=true;
+                                if let Some(list)=approved {p.permissions=list;}
+                                match api.claim(&p.id,&p.computer,p.permissions.clone()).await {
+                                    Ok(grant)=>{let _=events.send(Event::Guest(Guest::Grant(grant))).await;},
+                                    Err((status,_)) if status.is_server_error() && status!=StatusCode::BAD_GATEWAY =>{pending_guest=Some(p);},
+                                    Err((_,note))=>{let _=events.send(Event::Guest(Guest::Refused(note))).await;},
+                                }
+                            }
+                            Ok((state,_))=>{let _=events.send(Event::Guest(Guest::Refused(guest_refusal(&state,&owner,p.approved)))).await;},
+                            Err((status,_)) if status.is_server_error()=>{pending_guest=Some(p);},
+                            Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;pending_pair=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;},
+                            Err((_,note))=>{let _=events.send(Event::Guest(Guest::Refused(note))).await;},
+                        }
+                    }
+                    ctx.request_repaint();
+                }
                 if let Some(owner)=signed_owner.as_deref().filter(|_| api.token.is_some() && Instant::now()>=next_owned) {
                     next_owned=Instant::now()+Duration::from_secs(30);
                     if !synchronize_owned(&api,owner,suppressed_owner.as_deref()!=Some(owner),&events).await { api.token=None; signed_owner=None; pending_pair=None;let _=vault::forget(CREDENTIAL); }
@@ -1452,6 +1712,70 @@ mod tests {
                 api.answer(a, id).await.unwrap();
             }
             assert!(api.answer(Answer::AllowConnection, "../../me").await.is_err());
+        });
+        server.join().unwrap();
+    }
+    #[test]
+    fn the_five_checkboxes_become_permission_names() {
+        assert_eq!(guest_permissions(PERMISSION_DEFAULTS), ["view", "audio", "keyboard", "mouse"]);
+        assert_eq!(guest_permissions([true, false, false, true, true]), ["view", "gamepad", "clipboard"]);
+        assert!(guest_permissions([false; 5]).is_empty());
+        assert!(guest_permissions([true; 5]).iter().all(|p| PERMISSIONS.contains(&p.as_str())));
+    }
+    #[test]
+    fn host_refusals_have_plain_words() {
+        assert_eq!(guest_refusal("revoked", "sam", false), "@sam said no.");
+        assert_eq!(guest_refusal("rejected", "sam", false), "@sam said no.");
+        assert_eq!(guest_refusal("revoked", "sam", true), "Access was removed.");
+        assert!(guest_refusal("claimed", "sam", true).contains("already used"));
+    }
+    #[test]
+    fn permission_lists_come_as_text_or_arrays_and_unknown_names_are_dropped() {
+        assert_eq!(permission_list(&json!("[\"audio\",\"view\"]")).unwrap(), ["audio", "view"]);
+        assert_eq!(permission_list(&json!(["view"])).unwrap(), ["view"]);
+        assert!(permission_list(&json!("[\"root\"]")).is_none());
+        assert!(permission_list(&Value::Null).is_none());
+        assert!(valid_handle("river_2") && !valid_handle("a/b") && !valid_handle("") && !valid_handle(&"x".repeat(31)));
+    }
+    #[test]
+    fn the_friend_flow_calls_the_request_routes_in_order() {
+        let id = "d0d12c4d-13f1-4fbc-b113-a89d901ac34b";
+        let pc = "0f0e0d0c-1111-2222-3333-444455556666";
+        let (base, server) = server(vec![
+            ("GET /v1/friend-computers ", format!(r#"[{{"id":"{pc}","name":"Den PC","platform":"windows","owner":"{id}","owner_handle":"sam"}}]"#)),
+            ("POST /v1/requests ", format!(r#"{{"id":"{id}","state":"pending","expires_in":300,"permissions":["view","audio"]}}"#)),
+            (&*Box::leak(format!("GET /v1/requests/{id} ").into_boxed_str()), r#"{"state":"approved","approved":"[\"view\"]"}"#.into()),
+            (&*Box::leak(format!("POST /v1/requests/{id}/claim ").into_boxed_str()), r#"{"grant":"g.r.a","expires_at":1,"host":{"pc":"pc-1","relay":"https://relay.example.com","fingerprint":"aa"}}"#.into()),
+            (&*Box::leak(format!("POST /v1/requests/{id}/claim ").into_boxed_str()), r#"{"grant":"g.r.a","expires_at":1,"host":{"pc":"pc-1","relay":"http://evil.example.com","fingerprint":"aa"}}"#.into()),
+        ]);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let api = api_for(base);
+            let list = api.friend_computers().await.unwrap();
+            assert_eq!((list[0].name.as_str(), list[0].owner_handle.as_str()), ("Den PC", "sam"));
+            let (request, state, expires_in, kept) = api.request_access(pc, &guest_permissions([true, true, false, false, false])).await.unwrap();
+            assert_eq!((request.as_str(), state.as_str(), expires_in, kept.len()), (id, "pending", 300, 2));
+            let (state, approved) = api.request_state(&request).await.unwrap();
+            assert_eq!((state.as_str(), approved.unwrap()), ("approved", vec!["view".to_string()]));
+            let grant = api.claim(&request, &list[0], vec!["view".into()]).await.unwrap();
+            assert_eq!((grant.pc.as_str(), grant.relay.as_str(), grant.grant.as_str()), ("pc-1", "https://relay.example.com", "g.r.a"));
+            assert!(grant.allows("view") && !grant.allows("audio"));
+            // A relay that is not https never becomes a grant.
+            assert!(api.claim(&request, &list[0], vec![]).await.is_err());
+            // Ids and permissions are checked before anything is sent.
+            assert!(api.request_access("../x", &["view".into()]).await.is_err());
+            assert!(api.request_access(pc, &[]).await.is_err());
+            assert!(api.request_access(pc, &["root".into()]).await.is_err());
+            assert!(api.request_state("a/b").await.is_err());
+            assert!(api.claim("a/b", &list[0], vec![]).await.is_err());
+        });
+        server.join().unwrap();
+    }
+    #[test]
+    fn friend_computer_lists_with_odd_rows_are_refused() {
+        let pc = "0f0e0d0c-1111-2222-3333-444455556666";
+        let (base, server) = server(vec![("GET /v1/friend-computers ", format!(r#"[{{"id":"{pc}","name":"x","platform":"windows","owner":"o","owner_handle":"a/b"}}]"#))]);
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            assert!(api_for(base).friend_computers().await.is_err());
         });
         server.join().unwrap();
     }

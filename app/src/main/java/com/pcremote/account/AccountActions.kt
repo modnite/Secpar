@@ -16,6 +16,9 @@ class AccountActions(
     val setVisible: (Boolean) -> Unit = {},
     val friendSetting: (String, String?, String?) -> Unit = { _, _, _ -> },
     val answer: (Answer, String) -> Unit = { _, _ -> },
+    /** Ask to use a friend's computer with these permissions. */
+    val connectFriend: (FriendComputer, List<String>) -> Unit = { _, _ -> },
+    val cancelFriendConnect: () -> Unit = {},
     /** Turn request notifications on or off. */
     val setAlerts: (Boolean) -> Unit = {},
 )

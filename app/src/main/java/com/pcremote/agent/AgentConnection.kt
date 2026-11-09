@@ -138,6 +138,13 @@ class AgentConnection(
     @Volatile private var closed = false
     @Volatile private var handshake: CompletableDeferred<Msg>? = null
     @Volatile private var rxSincePing = true
+    /** A friend's connection: the grant works once, so a dropped socket ends it instead of reconnecting. */
+    @Volatile private var guestMode = false
+    /** The code of the last `error` frame that refused a handshake. */
+    @Volatile var lastError: String? = null
+        private set
+    @Volatile var lastErrorMsg: String = ""
+        private set
     private var token: String? = null
     private var device = ""
     private var pingJob: Job? = null
@@ -207,6 +214,7 @@ class AgentConnection(
         if (id != session || closed) return
         pingJob?.cancel()
         ws = null
+        if (guestMode) { _state.value = AgentState.Closed; return }
         val wasOnline = _state.value is AgentState.Online
         _state.value = AgentState.Connecting
         if (wasOnline && token != null) startReconnect()
@@ -241,7 +249,8 @@ class AgentConnection(
         return withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { hs.await() }.also { handshake = null }
     }
 
-    private fun fail(code: String?, s: Ws) {
+    private fun fail(code: String?, s: Ws, msg: String = "") {
+        lastError = code; lastErrorMsg = msg
         session++ // the close echo from this socket arrives later and must be ignored
         s.close()
         ws = null
@@ -289,6 +298,23 @@ class AgentConnection(
         this.token = token
         this.device = device
         doHello()
+    }
+
+    /**
+     * Joins a friend's computer with a one-time [grant]: the first frame is `guest`, the host answers
+     * `welcome` or `error`. Watch [state] for the result and read [lastError] when it fails.
+     */
+    suspend fun guest(grant: String) {
+        closed = false
+        guestMode = true
+        lastError = null
+        _state.value = AgentState.Connecting
+        val s = connectAny() ?: return
+        when (val r = exchange(s, Msg.Guest(grant))) {
+            is Msg.Welcome -> { _locked.value = r.locked; online(r.pc, r.caps.toSet()) }
+            is Msg.Error -> fail(r.code, s, r.msg)
+            else -> fail(null, s)
+        }
     }
 
     /** First-time pairing with the QR one-time token; returns the long-lived device token. */

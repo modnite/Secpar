@@ -40,6 +40,7 @@ class AgentSession(val pc: PairedPc, val conn: AgentConnection) {
 /** Opens an agent connection for [pcId] while the calling screen is on screen. */
 @Composable
 fun rememberAgentSession(pcId: String): AgentSession? {
+    if (com.pcremote.guest.GuestSessions.isGuest(pcId)) return rememberGuestSession(pcId)
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val accountRevision by com.pcremote.account.AccountRuntime.get(ctx).controller.revision.collectAsState()
@@ -51,6 +52,17 @@ fun rememberAgentSession(pcId: String): AgentSession? {
         // PC → phone files are received in the background, whichever screen is open
         val incoming = scope.launch { session.conn.incoming.collect { if (it is Msg.FileOffer) com.pcremote.modes.TransferHub.get(ctx, pcId).offer(it) } }
         onDispose { hello.cancel(); incoming.cancel(); session.conn.close() }
+    }
+    return session
+}
+
+/** A friend's computer: the socket is already joined, and it is closed when the screen goes away. */
+@Composable
+private fun rememberGuestSession(route: String): AgentSession? {
+    val link = remember(route) { com.pcremote.guest.GuestSessions.find(route) } ?: return null
+    val session = remember(link) { AgentSession(link.pc, link.conn) }
+    DisposableEffect(session) {
+        onDispose { link.conn.close(); com.pcremote.guest.GuestSessions.remove(route) }
     }
     return session
 }

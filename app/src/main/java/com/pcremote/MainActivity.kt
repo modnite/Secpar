@@ -144,8 +144,11 @@ class MainActivity : ComponentActivity() {
     var streamChords: ((com.pcremote.stream2.StreamChord) -> Unit)? = null
     private var chordKey: Int? = null
     var desktopMotion: ((android.view.MotionEvent) -> Boolean)? = null
+    /** Set while a friend's session may use controllers plugged into this device. */
+    var gamepadKey: ((android.view.KeyEvent) -> Boolean)? = null
+    var gamepadMotion: ((android.view.MotionEvent) -> Boolean)? = null
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
-        (desktopCapture?.let { it.forwarding && !it.freePointer } == true && desktopMotion?.invoke(event) == true) || super.dispatchGenericMotionEvent(event)
+        gamepadMotion?.invoke(event) == true || (desktopCapture?.let { it.forwarding && !it.freePointer } == true && desktopMotion?.invoke(event) == true) || super.dispatchGenericMotionEvent(event)
 
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
         if (desktopCapture?.let { it.forwarding && !it.freePointer } == true && event.isFromSource(android.view.InputDevice.SOURCE_MOUSE) && desktopMotion?.invoke(event) == true) return true
@@ -292,6 +295,10 @@ class MainActivity : ComponentActivity() {
                                 friend = account::friendAction, note = account::showNote,
                                 search = account::search, setVisible = account::setVisible,
                                 friendSetting = account::friendSetting, answer = account::answerRequest,
+                                connectFriend = { computer, permissions ->
+                                    account.connectFriend(computer, permissions) { route -> nav.navigate(Routes.mode(route, Mode.SCREEN)) }
+                                },
+                                cancelFriendConnect = account::cancelFriendConnection,
                                 setAlerts = com.pcremote.account.AccountRuntime.get(this@MainActivity)::setAlerts)
                         }
                         val alertsOn by com.pcremote.account.AccountRuntime.get(this@MainActivity).alerts.collectAsState()
@@ -351,6 +358,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (gamepadKey?.invoke(event) == true) return true
         val chords = streamChords
         if (event.keyCode == chordKey) {
             if (event.action == android.view.KeyEvent.ACTION_UP) chordKey = null
