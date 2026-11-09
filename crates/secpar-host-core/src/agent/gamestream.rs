@@ -62,7 +62,7 @@ mod tests {
         let state=Arc::new(State::default());
         (AgentHandle{addr:"127.0.0.1:0".parse().unwrap(),ctx:Arc::new(Ctx{store:Arc::new(Mutex::new(Store(false))),
             relay_url:None,handlers:Arc::new(Platform{state:state.clone(),enabled}),idle:Duration::from_secs(60),
-            sessions:Mutex::default(),events:broadcast::channel(32).0,next_id:AtomicU64::new(0),relay:Mutex::default()})},state)
+            sessions:Mutex::default(),events:broadcast::channel(32).0,next_id:AtomicU64::new(0),relay:Mutex::default(),guest:Default::default()})},state)
     }
     struct Connection {input:mpsc::Sender<Message>,output:mpsc::Receiver<Message>,task:tokio::task::JoinHandle<()>}
     impl Drop for Connection {fn drop(&mut self){self.task.abort();}}

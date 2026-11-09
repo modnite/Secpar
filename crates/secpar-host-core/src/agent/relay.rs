@@ -300,6 +300,7 @@ mod tests {
                 events: broadcast::channel(32).0,
                 next_id: AtomicU64::new(0),
                 relay: Mutex::default(),
+                guest: Default::default(),
             }),
         };
         let (input, mut rx) = mpsc::channel(128);

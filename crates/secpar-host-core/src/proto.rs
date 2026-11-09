@@ -19,6 +19,9 @@ pub enum ClientMsg {
         token: String,
         device: String,
     },
+    /// A friend's first message: the signed grant from `POST /v1/requests/:id/claim`.
+    #[serde(rename = "guest")]
+    Guest { grant: String },
     #[serde(rename = "ping")]
     Ping,
     #[serde(rename = "gamestream.info")]
@@ -168,6 +171,7 @@ impl ClientMsg {
         match self {
             ClientMsg::Pair { .. } => "pair",
             ClientMsg::Hello { .. } => "hello",
+            ClientMsg::Guest { .. } => "guest",
             ClientMsg::Ping => "ping",
             ClientMsg::GameStreamInfo { .. } => "gamestream.info",
             ClientMsg::GameStreamPair { .. } => "gamestream.pair",

@@ -3,6 +3,8 @@
 //! only as fresh as the claim and the owner can change a friend at any time.
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -27,22 +29,27 @@ pub struct Policy {
 #[derive(Deserialize)]
 struct Row {
     id: String,
+    #[serde(default)]
+    handle: String,
     #[serde(flatten)]
     policy: Policy,
 }
 /// Accepted, unblocked friends of the host owner and what each may do.
 #[derive(Clone, Debug, Default)]
-pub struct Roster(HashMap<String, Policy>);
+pub struct Roster(HashMap<String, (Policy, String)>);
 impl Roster {
     pub fn parse(json: &serde_json::Value) -> Result<Self, &'static str> {
         let rows: Vec<Row> = serde_json::from_value(json.clone()).map_err(|_| "Invalid friends response")?;
         if rows.len() > 500 {
             return Err("Invalid friends response");
         }
-        Ok(Self(rows.into_iter().map(|r| (r.id, r.policy)).collect()))
+        Ok(Self(rows.into_iter().map(|r| (r.id, (r.policy, r.handle))).collect()))
     }
     pub fn policy(&self, guest: &str) -> Option<Policy> {
-        self.0.get(guest).copied()
+        self.0.get(guest).map(|(policy, _)| *policy)
+    }
+    pub fn handle(&self, guest: &str) -> Option<&str> {
+        self.0.get(guest).map(|(_, handle)| handle.as_str()).filter(|h| !h.is_empty())
     }
 }
 /// The lease the Worker reports for one claimed request.
@@ -84,11 +91,31 @@ impl Admission {
     }
 }
 /// The permissions of one running guest session. Every video, audio and input path asks the gate.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Gate(BTreeSet<String>);
+/// Clones share state: closing one closes them all, which is how a revoked lease stops a session.
+#[derive(Clone, Debug)]
+pub struct Gate(Arc<GateState>);
+#[derive(Debug)]
+struct GateState {
+    permissions: BTreeSet<String>,
+    open: AtomicBool,
+    input_off: AtomicBool,
+    closed: tokio::sync::Notify,
+    reason: std::sync::Mutex<&'static str>,
+}
+impl PartialEq for Gate {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.permissions == other.0.permissions
+    }
+}
+impl Eq for Gate {}
 impl Gate {
+    fn new(permissions: BTreeSet<String>) -> Self {
+        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), input_off: AtomicBool::new(false), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
+    }
     pub fn has(&self, permission: &str) -> bool {
-        self.0.contains(permission)
+        self.0.open.load(Ordering::SeqCst)
+            && self.0.permissions.contains(permission)
+            && !(self.0.input_off.load(Ordering::SeqCst) && matches!(permission, "keyboard" | "mouse"))
     }
     pub fn view(&self) -> bool {
         self.has("view")
@@ -100,7 +127,43 @@ impl Gate {
         self.has("mouse")
     }
     pub fn permissions(&self) -> &BTreeSet<String> {
-        &self.0
+        &self.0.permissions
+    }
+    /// Ends every permission at once. Never reopens.
+    pub fn close(&self) {
+        self.0.open.store(false, Ordering::SeqCst);
+        self.0.closed.notify_waiters();
+    }
+    /// Closes with the first reason given: ended, owner, locked, offline or revoked.
+    pub fn close_because(&self, reason: &'static str) {
+        if self.is_open() {
+            *self.0.reason.lock().unwrap() = reason;
+        }
+        self.close();
+    }
+    pub fn reason(&self) -> &'static str {
+        *self.0.reason.lock().unwrap()
+    }
+    /// True when both handles share one session.
+    pub fn same(&self, other: &Gate) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+    /// Completes once the gate is closed.
+    pub async fn closed(&self) {
+        loop {
+            let waiting = self.0.closed.notified();
+            if !self.is_open() {
+                return;
+            }
+            waiting.await;
+        }
+    }
+    pub fn is_open(&self) -> bool {
+        self.0.open.load(Ordering::SeqCst)
+    }
+    /// The owner lowered the friend to view only. Keyboard and mouse stop, the rest stays.
+    pub fn strip_input(&self) {
+        self.0.input_off.store(true, Ordering::SeqCst);
     }
 }
 /// `signed` is the permission set of the verified grant.
@@ -128,7 +191,7 @@ pub fn admit(
     if allowed.is_empty() {
         return Err(Denied::NoPermissions);
     }
-    let gate = Gate(allowed);
+    let gate = Gate::new(allowed);
     Ok(match policy.connect {
         Connect::Always => Admission::Allow(gate),
         Connect::Ask => Admission::AskOwner(gate),
@@ -152,6 +215,15 @@ mod tests {
     }
     fn lease(guest: &str, approved: &[&str], active: bool) -> Lease {
         Lease { guest: guest.into(), approved: set(approved), active }
+    }
+    #[test]
+    fn closing_or_lowering_a_gate_reaches_every_clone() {
+        let Admission::Allow(gate) = admit(&roster(), &lease("cat", &["view", "keyboard", "mouse"], true), &set(&["view", "keyboard", "mouse"]), "cat").unwrap() else { panic!() };
+        let other = gate.clone();
+        gate.strip_input();
+        assert!(other.view() && !other.keyboard() && !other.mouse());
+        gate.close();
+        assert!(!other.view() && !other.is_open());
     }
     #[test]
     fn missing_fields_mean_view_only_and_ask() {

@@ -2,8 +2,10 @@
 
 mod session;
 mod gamestream;
+pub mod guest;
 pub mod engine;
 pub mod relay;
+pub use guest::{GuestAdmission, Pass};
 pub use session::{Rx, Tx};
 
 use crate::proto::{ClientMsg, PcInfo, ServerMsg};
@@ -104,6 +106,19 @@ pub trait Handlers: Send + Sync + 'static {
     fn locked(&self) -> bool {
         false
     }
+    /// Friend sessions. None (the default) refuses every guest.
+    fn guests(&self) -> Option<Arc<GuestAdmission>> {
+        None
+    }
+    /// A local reason to refuse friends right now (sharing switched off), as a short message.
+    fn guest_refusal(&self) -> Option<&'static str> {
+        None
+    }
+    /// The platform session for a friend. The agent filters it by `gate`; the platform also
+    /// hands `gate` to its stream and UDP input paths.
+    fn guest_session(&self, _gate: &crate::guest_policy::Gate, _out: Outbox) -> Option<Box<dyn Session>> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -111,6 +126,8 @@ pub enum Event {
     Paired { device: DeviceId },
     Connected { device: DeviceId },
     Disconnected { device: DeviceId },
+    GuestConnected { guest: String, handle: String },
+    GuestDisconnected { guest: String },
 }
 
 pub(crate) enum Out {
@@ -128,6 +145,7 @@ pub(crate) struct Ctx {
     next_id: AtomicU64,
     /// The rendezvous socket's outbox while it's connected.
     relay: Mutex<Option<mpsc::Sender<tokio_tungstenite::tungstenite::Message>>>,
+    pub guest: guest::GuestState,
 }
 
 impl Ctx {
@@ -166,6 +184,16 @@ impl AgentHandle {
                 let _ = tx.send(Out::Close("revoked"));
             }
         }
+    }
+
+    /// Account ids of friends with a running session.
+    pub fn guests(&self) -> Vec<String> {
+        self.ctx.guest.ids()
+    }
+
+    /// Ends a friend's session now.
+    pub fn disconnect_guest(&self, guest: &str) {
+        self.ctx.guest.close_one(guest, "owner");
     }
 
     pub fn events(&self) -> broadcast::Receiver<Event> {
@@ -243,6 +271,7 @@ impl Agent {
             events: broadcast::channel(32).0,
             next_id: AtomicU64::new(0),
             relay: Mutex::default(),
+            guest: Default::default(),
         });
         let c = ctx.clone();
         tokio::spawn(async move {

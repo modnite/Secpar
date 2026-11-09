@@ -198,6 +198,49 @@ impl Account {
             }
         }
     }
+    /// The installed machine registration's computer id, or None when the host is not linked.
+    /// A linked account talking to a fake service, for tests of guest admission.
+    #[cfg(test)]
+    pub(crate) fn linked_for_test(origin: &str) -> Arc<Self> {
+        struct Nothing;
+        impl CredentialStorage for Nothing {
+            fn load(&self) -> Result<Option<Vec<u8>>, String> { Ok(None) }
+            fn save(&self, _: &[u8]) -> Result<(), String> { Ok(()) }
+            fn remove(&self) -> Result<(), String> { Ok(()) }
+        }
+        let registration = Registration {
+            computer: crate::guest_grant::tests::COMPUTER.into(),
+            owner: "fixture".into(),
+            certificate_fp: "ab".repeat(32),
+            credential: format!("h1_{}", "a".repeat(64)),
+        };
+        Arc::new(Self {
+            inner: Mutex::new(Inner { state: view(Some(&registration), true, ""), registration: Some(registration) }),
+            storage: Arc::new(Nothing),
+            fingerprint: "ab".repeat(32),
+            client: Client::new(),
+            origin: origin.into(),
+        })
+    }
+    pub async fn computer(&self) -> Option<String> {
+        self.inner.lock().await.registration.as_ref().map(|r| r.computer.clone())
+    }
+    /// Secpar's grant signing keys, from the fixed HTTPS origin only. Bounded and never cached.
+    pub async fn signing_keys(&self) -> Result<Vec<crate::guest_grant::PublicKey>, String> {
+        #[derive(Deserialize)]
+        struct Keys { keys: Vec<crate::guest_grant::PublicKey> }
+        let mut response = self.client.get(format!("{}/.well-known/jwks.json", self.origin)).send().await
+            .map_err(|_| "Could not reach Secpar accounts")?;
+        if !response.status().is_success() { return Err("Could not read signing keys".into()); }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| "Incomplete signing keys")? {
+            if bytes.len() + chunk.len() > 8192 { return Err("Invalid signing keys".into()); }
+            bytes.extend_from_slice(&chunk);
+        }
+        let keys: Keys = serde_json::from_slice(&bytes).map_err(|_| "Invalid signing keys")?;
+        if keys.keys.is_empty() || keys.keys.len() > 5 { return Err("Invalid signing keys".into()); }
+        Ok(keys.keys)
+    }
     /// Friends of the owner and what each may do. Read fresh on every admission.
     pub async fn roster(&self) -> Result<crate::guest_policy::Roster, String> {
         let registration = self.inner.lock().await.registration.clone().ok_or("Host is not linked")?;
@@ -217,9 +260,10 @@ impl Account {
         request: &str,
         guest: &str,
         signed: &std::collections::BTreeSet<String>,
-    ) -> Result<crate::guest_policy::Admission, String> {
+    ) -> Result<(crate::guest_policy::Admission, String), String> {
         let (roster, lease) = tokio::try_join!(self.roster(), self.lease(request))?;
-        crate::guest_policy::admit(&roster, &lease, signed, guest).map_err(|d| d.message().into())
+        let handle = roster.handle(guest).unwrap_or_default().to_owned();
+        crate::guest_policy::admit(&roster, &lease, signed, guest).map(|a| (a, handle)).map_err(|d| d.message().into())
     }
     pub async fn poll_pairings<F, Fut>(&self, mut make_link: F) -> Result<usize, String>
     where F: FnMut(String) -> Fut, Fut: std::future::Future<Output = Result<String, String>> {
@@ -355,13 +399,14 @@ mod tests {
         Mock::given(method("GET")).and(path(format!("/v1/host/requests/{id}"))).and(header("authorization", bearer))
             .respond_with(lease("cat", &["view","keyboard"], true)).up_to_n_times(1).mount(&server).await;
         let signed: BTreeSet<String> = ["view","keyboard"].map(String::from).into();
-        let got = account.admit_guest(id, "cat", &signed).await.unwrap();
+        let (got, name) = account.admit_guest(id, "cat", &signed).await.unwrap();
+        assert_eq!(name, "cat");
         assert!(matches!(&got, Admission::Allow(g) if g.keyboard() && g.view()));
         // Same signed grant, but the Worker now reports a view only friend: the host drops input.
         server.reset().await;
         Mock::given(method("GET")).and(path("/v1/host/friends")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":"cat","handle":"cat","input":"view","connect":"ask"}]))).mount(&server).await;
         Mock::given(method("GET")).and(path(format!("/v1/host/requests/{id}"))).respond_with(lease("cat", &["view","keyboard"], true)).mount(&server).await;
-        let got = account.admit_guest(id, "cat", &signed).await.unwrap();
+        let (got, _) = account.admit_guest(id, "cat", &signed).await.unwrap();
         assert!(matches!(&got, Admission::AskOwner(g) if !g.keyboard() && g.view()));
         // A lease that is no longer active is refused with a plain message.
         server.reset().await;
