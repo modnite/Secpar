@@ -46,10 +46,10 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
         let text_h = name_h + status_h;
         let row_h = text_h.max(if card.preview.is_some() { previews::HEIGHT } else { design::CONTROL });
         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            design::dot(ui, card.status.map_or(design::ACCENT, |(_, color)| color));
             if let Some(texture) = card.preview {
                 previews::show(ui, texture);
             }
-            design::dot(ui, card.status.map_or(design::ACCENT, |(_, color)| color));
             ui.allocate_ui_with_layout(egui::vec2(text_w, row_h), egui::Layout::top_down(egui::Align::Min), |ui| {
                 ui.set_width(text_w);
                 ui.spacing_mut().item_spacing.y = 2.;
