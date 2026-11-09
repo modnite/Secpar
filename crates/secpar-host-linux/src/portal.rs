@@ -1,7 +1,8 @@
 //! One consented RemoteDesktop session supplies both screen capture and input.
+use crate::pointer::{pick_cursor_mode, CursorMode};
 use ashpd::desktop::{
     remote_desktop::{DeviceType, RemoteDesktop, SelectDevicesOptions},
-    screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
+    screencast::{self, Screencast, SelectSourcesOptions, SourceType},
     PersistMode, Session,
 };
 use std::{
@@ -18,6 +19,8 @@ pub struct Portal {
     pub width: u32,
     pub height: u32,
     pub restore_token: Option<String>,
+    /// Whether the compositor paints the real pointer into the frames.
+    pub cursor: CursorMode,
     pub(crate) remote: RemoteDesktop,
     pub(crate) session: Arc<Session<RemoteDesktop>>,
     remote_fd: OwnedFd,
@@ -51,12 +54,24 @@ impl Portal {
                 .map_err(|_| "Could not request keyboard and pointer access.")?
                 .response()
                 .map_err(|_| "Keyboard and pointer access was cancelled.")?;
+            // The frames carry the real pointer when the compositor can: it is then the true pointer at
+            // its true position and shape. Otherwise the client draws one at the position we track.
+            let offered = cast.available_cursor_modes().await.unwrap_or_default();
+            let mode = pick_cursor_mode(
+                offered.contains(screencast::CursorMode::Embedded),
+                // a portal that does not say anything honours Hidden
+                offered.is_empty() || offered.contains(screencast::CursorMode::Hidden),
+                std::env::var("SECPAR_CURSOR").ok().as_deref(),
+            );
             cast.select_sources(
                 &session,
                 SelectSourcesOptions::default()
                     .set_sources(ashpd::enumflags2::BitFlags::from(SourceType::Monitor))
                     .set_multiple(false)
-                    .set_cursor_mode(CursorMode::Hidden),
+                    .set_cursor_mode(match mode {
+                        CursorMode::Embedded => screencast::CursorMode::Embedded,
+                        CursorMode::Hidden => screencast::CursorMode::Hidden,
+                    }),
             )
             .await
             .map_err(|_| "Could not request a monitor.")?
@@ -89,15 +104,16 @@ impl Portal {
                 .open_pipe_wire_remote(&session, Default::default())
                 .await
                 .map_err(|_| "Could not open the selected PipeWire stream.")?;
-            Ok((node, w as u32, h as u32, token, fd))
+            Ok((node, w as u32, h as u32, token, fd, mode))
         }
         .await;
         match result {
-            Ok((node_id, width, height, restore_token, remote_fd)) => Ok(Arc::new(Self {
+            Ok((node_id, width, height, restore_token, remote_fd, cursor)) => Ok(Arc::new(Self {
                 node_id,
                 width,
                 height,
                 restore_token,
+                cursor,
                 remote,
                 session: Arc::new(session),
                 remote_fd,

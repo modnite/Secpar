@@ -1,8 +1,9 @@
 //! Owner-authenticated PRS media transport; one Linux stream at a time.
 use crate::{
     capture::{Capture, VideoOptions},
-    input::Input,
+    input::{pack_size, Input},
     now_us,
+    pointer::CursorMode,
     portal::Portal,
     store::random,
 };
@@ -21,7 +22,7 @@ use std::{
     collections::HashSet,
     net::{SocketAddr, UdpSocket},
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -232,10 +233,12 @@ impl Stream {
         let (input, input_rx) = mpsc::channel::<ClientMsg>(128);
         let input_portal = portal.clone();
         let input_shared = shared.clone();
+        let picture = Arc::new(AtomicU64::new(pack_size(width, height)));
+        let input_picture = picture.clone();
         let pads = options.pads.clone();
         tokio::spawn(async move {
             let mut input_rx = input_rx;
-            let mut target = Input::new(input_portal);
+            let mut target = Input::new(input_portal, input_picture);
             loop {
                 if input_shared.stop.load(Ordering::Relaxed) {
                     break;
@@ -344,6 +347,7 @@ impl Stream {
         };
         let resize = Arc::new(Mutex::new(None::<(u32, u32)>));
         let (video_resize, video_out, video_ready) = (resize.clone(), out.clone(), ready_template.clone());
+        let video_picture = picture.clone();
         let video_shared = shared.clone();
         std::thread::spawn(move || {
             let _guard = guard;
@@ -356,6 +360,7 @@ impl Stream {
                 if let Some(wanted) = video_resize.lock().unwrap().take() {
                     // the encoder renegotiates on the new size and opens with a keyframe
                     if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
+                        video_picture.store(pack_size(w, h), Ordering::Relaxed);
                         video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
                         video_shared.idr.store(true, Ordering::Relaxed);
                     }
@@ -405,8 +410,11 @@ impl Stream {
                 }
             });
         }
-        // The portal hides the pointer in the video; clients draw this one at the position we send.
-        out.send(ServerMsg::CursorShape { png: STANDARD.encode(include_bytes!("arrow.png")), hx: 1, hy: 1 });
+        // When the frames carry no pointer, clients draw this one at the position we send. When they do,
+        // the video already shows the real pointer and a second one would be a fake.
+        if portal.cursor == CursorMode::Hidden {
+            out.send(ServerMsg::CursorShape { png: STANDARD.encode(include_bytes!("arrow.png")), hx: 1, hy: 1 });
+        }
         out.send(ServerMsg::StreamDisplays {
             list: vec![Display {
                 id: "portal".into(),
