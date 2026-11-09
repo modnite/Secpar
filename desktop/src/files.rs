@@ -579,7 +579,7 @@ impl Panel {
 
     fn upload(&mut self, paths: Vec<PathBuf>) {
         if !self.view.upload {
-            self.message = "Update Secpar on this computer to send files to it.".into();
+            self.message = if self.view.problem.as_deref() == Some(proto::OFF) { proto::OFF } else { "Update Secpar on this computer to send files to it." }.into();
             return;
         }
         for (path, name) in proto::expand(&paths) {
