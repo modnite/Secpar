@@ -181,12 +181,18 @@ fn source_variants(base: &str, fps: u32, native: (u32, u32)) -> Vec<String> {
     // upstream through the converters, pipewiresrc offers it to the compositor and the whole PipeWire
     // stream is renegotiated: new buffers, and on a virtual output KWin even resizes the screen itself.
     // The video then stalls or the encoder is torn down mid-frame. Scaling belongs to `videoscale`.
-    let fixed = pinned(native);
-    let mut all = vec![
-        ("dmabuf", format!("{base} keepalive-time={keepalive} ! video/x-raw(memory:DMABuf),format=DMA_DRM{fixed}")),
-        ("copy", format!("{base} always-copy=true keepalive-time={keepalive} ! video/x-raw{fixed}")),
-        ("plain", format!("{base} keepalive-time={keepalive} ! video/x-raw(ANY){fixed}")),
-    ];
+    // The portal reports a logical size, which on a scaled (HiDPI) display is not the pixel size of the stream.
+    // Pinning to it would then fail to negotiate, so the same sources without a pin follow as a fallback.
+    let mut all = Vec::new();
+    let mut sizes = vec![pinned(native)];
+    if !sizes[0].is_empty() {
+        sizes.push(String::new());
+    }
+    for fixed in &sizes {
+        all.push(("dmabuf", format!("{base} keepalive-time={keepalive} ! video/x-raw(memory:DMABuf),format=DMA_DRM{fixed}")));
+        all.push(("copy", format!("{base} always-copy=true keepalive-time={keepalive} ! video/x-raw{fixed}")));
+        all.push(("plain", format!("{base} keepalive-time={keepalive} ! video/x-raw(ANY){fixed}")));
+    }
     // SECPAR_CAPTURE=dmabuf|copy|plain forces one way of taking the frames (for comparing them)
     if let Ok(only) = std::env::var("SECPAR_CAPTURE") {
         all.retain(|(name, _)| *name == only);
@@ -482,7 +488,7 @@ mod tests {
             assert!(d.contains("capsfilter name=size caps=video/x-raw,format=NV12,framerate=60/1"), "{d}");
         }
         let v = source_variants("pipewiresrc fd=3 path=7", 60, (1366, 768));
-        assert_eq!(v.len(), 3);
+        assert_eq!(v.len(), 6);
         assert!(v[0].contains("memory:DMABuf") && v[1].contains("always-copy=true") && v[2].contains("video/x-raw(ANY)"));
         assert!(v.iter().all(|s| s.contains("keepalive-time=33")), "{v:?}");
     }
@@ -636,8 +642,13 @@ mod tests {
     }
     #[test]
     fn every_source_variant_is_pinned_to_the_display_size() {
-        for variant in source_variants("pipewiresrc fd=3 path=7", 60, (1366, 768)) {
+        let all = source_variants("pipewiresrc fd=3 path=7", 60, (1366, 768));
+        for variant in &all[..3] {
             assert!(variant.contains(",width=1366,height=768"), "{variant}");
+        }
+        // a scaled display reports a logical size that is not the stream's pixel size: unpinned fallbacks follow
+        for variant in &all[3..] {
+            assert!(!variant.contains("width="), "{variant}");
         }
         // an unknown size pins nothing instead of asking for 0x0
         for variant in source_variants("pipewiresrc fd=3 path=7", 60, (0, 0)) {
