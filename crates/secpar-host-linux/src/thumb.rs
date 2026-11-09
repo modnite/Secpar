@@ -306,7 +306,16 @@ impl Source for PortalSource {
             let (p, native) = (portal.clone(), (portal.width, portal.height));
             let started = tokio::task::spawn_blocking(move || {
                 // Copies first (always works), then the plain source.
-                [format!("{base} always-copy=true keepalive-time=2000 ! video/x-raw"), format!("{base} keepalive-time=2000")]
+                // Pinned to the display's size: a small preview size must not travel up to the compositor, which
+                // on a virtual output would shrink the whole screen to it (see `capture::source_variants`).
+                let fixed = crate::capture::pinned(native);
+                // A scaled display reports a logical size that is not the pixel size, so unpinned sources follow.
+                let mut sources = vec![format!("{base} always-copy=true keepalive-time=2000 ! video/x-raw{fixed}"), format!("{base} keepalive-time=2000 ! video/x-raw(ANY){fixed}")];
+                if !fixed.is_empty() {
+                    sources.push(format!("{base} always-copy=true keepalive-time=2000 ! video/x-raw"));
+                    sources.push(format!("{base} keepalive-time=2000"));
+                }
+                sources
                     .iter()
                     .find_map(|source| PipelineSnapshot::start(source, native, Some(p.clone())).ok())
             })
