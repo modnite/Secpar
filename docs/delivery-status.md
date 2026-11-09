@@ -1,5 +1,19 @@
 # Secpar delivery record
 
+## DESKTOP FILES (branch claude/desktop-files, based on 3.16.4, not released)
+
+The desktop app has a Files page. Pick a computer, browse it with breadcrumbs and Back,
+download a file or folder to a save folder, upload files or folders (picker or drag and drop),
+see progress and plain errors. Files a computer offers (Send to Secpar) are received too, on the
+Files connection or on a quiet one opened while streaming. SHA-256 is checked both ways.
+Protocol and state machine: crates/secpar-client/src/files.rs (Engine, no I/O, 27 tests).
+Page: desktop/src/files.rs. Pickers: desktop/src/dialogs.rs (Windows common dialogs through
+windows-sys, kdialog or zenity on Linux). No new crates.
+The Computers page no longer lists the computer you host from.
+Verified against real hosts with crates/secpar-client/examples/files_probe.rs (250 KB, 800 KB,
+10 MB, both directions, SHA-256 compared) and through the real page with the ui-review
+live hook: Windows host on this PC and a Linux host on OMV. See desktop/README.md.
+
 ## LINUX HOST PARITY (branch feat/linux-host-parity, not released)
 
 The Linux host now offers `thumb`, `media`, `pad`, `files` and `fsbrowse` like the
