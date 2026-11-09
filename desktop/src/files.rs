@@ -1,15 +1,21 @@
 //! The Files page: browse a computer's files, download from it, upload to it. One background
 //! connection per open computer, like the previews. All protocol work is in
 //! `secpar_client::files`. This module keeps the page state and draws it.
+use crate::account::OwnedConnection;
 use crate::{design, dialogs};
 use eframe::egui::{self, Color32, RichText};
 use secpar_client::control::{Computer, Connected};
 use secpar_client::files::{self as proto, Entry, Notice, Phase, Request, Transfer};
 use secpar_client::pairing::Pairing;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// The account worker gives up on a pairing after 120 seconds. This is the page's own limit, so
+/// no failure can leave it connecting for good.
+const PENDING_LIMIT: Duration = Duration::from_secs(135);
 
 const ROW: f32 = 30.;
 /// Transfer rows shown at once. The rest are counted.
@@ -36,6 +42,35 @@ pub struct Pick {
 pub enum Action {
     /// Open this account computer. The account worker hands over its credential.
     Owned(String),
+}
+
+/// What a failed connection means for the person, in plain words. The second value is true when the
+/// computer refused the saved credential, so asking the account for a new one can fix it.
+pub fn explain(error: &str, name: &str) -> (String, bool) {
+    let name = if name.is_empty() { "the computer" } else { name };
+    let lower = error.to_lowercase();
+    if lower.contains("refused or revoked") {
+        return (format!("{name} no longer accepts this device."), true);
+    }
+    let unreachable = ["offline", "timed out", "secure connection", "no connection address", "did not answer", "did not respond", "connection closed", "connection to the computer was lost"];
+    if unreachable.iter().any(|k| lower.contains(k)) {
+        return (format!("Can't reach {name}. Check that it is on, online and running Secpar."), false);
+    }
+    if lower.contains("pairing was refused") {
+        return (format!("{name} did not accept the pairing. Open Secpar there and try again."), false);
+    }
+    if lower.contains("identity") {
+        return (format!("{name} does not match what your account has on record. Refresh the list and try again."), false);
+    }
+    (error.to_string(), false)
+}
+
+/// The account computer a connection from the account worker is for, and how to reach it.
+pub fn owned_source(connection: OwnedConnection) -> (String, String, Source) {
+    match connection {
+        OwnedConnection::Cached { owner, id, computer } => (owner, id, Source::Saved(computer)),
+        OwnedConnection::Pair { owner, id, pairing } => (owner, id, Source::Pair(pairing)),
+    }
 }
 
 /// How to reach the computer.
@@ -275,6 +310,11 @@ pub struct Panel {
     chosen: Option<String>,
     /// An account computer waiting for the account worker to hand over its credential.
     pending: Option<String>,
+    pending_since: Option<Instant>,
+    /// A refused saved credential to drop before asking the account again.
+    stale: Option<(String, String)>,
+    /// The account computer that already got one automatic new credential.
+    renewed: Option<String>,
     name: String,
     session: Option<Session>,
     pub view: View,
@@ -303,6 +343,9 @@ impl Panel {
             save_changed: None,
             chosen: None,
             pending: None,
+            pending_since: None,
+            stale: None,
+            renewed: None,
             name: String::new(),
             session: None,
             view: View::default(),
@@ -388,7 +431,7 @@ impl Panel {
                 v.problem = Some(proto::OFF.into());
                 v.upload = false;
             }
-            "files-closed" => v.conn = Conn::Closed("Could not establish a secure connection".into()),
+            "files-closed" => v.conn = Conn::Closed(explain("Could not establish a secure connection", "Linux laptop").0),
             _ => {
                 v.conn = Conn::Online;
                 v.path = "/home/player/Documents".into();
@@ -421,6 +464,21 @@ impl Panel {
     pub fn take_paired(&mut self) -> Option<(String, String, Computer)> {
         self.paired.take()
     }
+    /// The saved credential of an account computer that refused it: (account, computer).
+    pub fn take_stale(&mut self) -> Option<(String, String)> {
+        self.stale.take()
+    }
+    /// A connection from the account worker. Opens it if this page asked for that computer and
+    /// `signed_in` is the account it belongs to.
+    pub fn receive(&mut self, connection: OwnedConnection, signed_in: Option<&str>, name_of: impl Fn(&str) -> String) -> bool {
+        let (owner, id, source) = owned_source(connection);
+        if !self.wants(&id) || signed_in != Some(owner.as_str()) {
+            return false;
+        }
+        let name = name_of(&id);
+        self.open(&id, &name, Some(owner), source);
+        true
+    }
     /// True while this page waits for the account worker's answer about `id`.
     pub fn wants(&self, id: &str) -> bool {
         self.pending.as_deref() == Some(id)
@@ -433,6 +491,7 @@ impl Panel {
         self.name = name.to_string();
         self.chosen = Some(id.to_string());
         self.pending = None;
+        self.pending_since = None;
         self.message.clear();
         self.view.conn = Conn::Connecting;
         #[cfg(feature = "ui-review")]
@@ -493,6 +552,7 @@ impl Panel {
         self.name = name.to_string();
         self.chosen = Some(id.to_string());
         self.pending = Some(id.to_string());
+        self.pending_since = Some(Instant::now());
         self.message.clear();
         self.view.conn = Conn::Connecting;
     }
@@ -502,6 +562,7 @@ impl Panel {
             let _ = session.tx.send(Request::Stop);
         }
         self.pending = None;
+        self.pending_since = None;
         // What already finished stays listed until it is cleared.
         let mut finished = std::mem::take(&mut self.view.transfers);
         finished.retain(Transfer::finished);
@@ -516,6 +577,7 @@ impl Panel {
     /// Reports a failure to get a credential from the account worker.
     pub fn fail(&mut self, why: &str) {
         if self.pending.take().is_some() {
+            self.pending_since = None;
             self.view.conn = Conn::Closed(why.to_string());
         }
     }
@@ -529,6 +591,7 @@ impl Panel {
     pub fn poll(&mut self) {
         let mut follow = vec![];
         let mut ended = false;
+        let mut renew = None;
         if let Some(session) = self.session.as_mut() {
             while let Ok(event) = session.events.try_recv() {
                 match event {
@@ -538,13 +601,27 @@ impl Panel {
                         }
                     }
                     Event::Failed(why) => {
-                        self.view.conn = Conn::Closed(why);
+                        let (text, refused) = explain(&why, &self.name);
+                        match session.owner.clone() {
+                            // The saved credential is out of date, for example after the computer
+                            // was set up again. Get a new one through the account, once.
+                            Some(owner) if refused && self.renewed.as_deref() != Some(session.id.as_str()) => {
+                                self.renewed = Some(session.id.clone());
+                                renew = Some((owner, session.id.clone()));
+                            }
+                            _ => self.view.conn = Conn::Closed(text),
+                        }
                         ended = true;
                     }
                 }
             }
             while let Ok(notice) = session.notices.try_recv() {
-                if let Some(request) = self.view.apply(notice) {
+                let lost = matches!(&notice, Notice::Closed(why) if why != "Disconnected");
+                let applied = self.view.apply(notice);
+                if let (true, Conn::Closed(why)) = (lost, &mut self.view.conn) {
+                    *why = explain(why, &self.name).0;
+                }
+                if let Some(request) = applied {
                     follow.push(request);
                 }
             }
@@ -559,6 +636,14 @@ impl Panel {
         self.run_script();
         if ended {
             self.session = None;
+        }
+        if let Some((owner, id)) = renew {
+            let name = self.name.clone();
+            self.wait_for(&id, &name);
+            self.stale = Some((owner, id));
+        }
+        if self.pending_since.is_some_and(|since| since.elapsed() > PENDING_LIMIT) {
+            self.fail("Secpar did not get an answer from the computer through your account. Try again.");
         }
         if let Some(rx) = &self.dialog {
             if let Ok(picked) = rx.try_recv() {
@@ -606,8 +691,8 @@ impl Panel {
         self.poll();
         // A failed account request ends the wait.
         if self.pending.is_some() && !note.is_empty() && !note.starts_with("Pairing with") {
-            let note = note.to_string();
-            self.fail(&note);
+            let why = explain(note, &self.name).0;
+            self.fail(&why);
         }
         let mut action = None;
         design::page_header(ui, "Files", |ui| {
@@ -661,13 +746,15 @@ impl Panel {
                         }
                     }
                 });
-            connect = ui.add_enabled(chosen.as_ref().is_some_and(|p| p.ready), design::primary("Open")).clicked();
+            let failed = matches!(&self.view.conn, Conn::Closed(why) if !why.is_empty());
+            connect = ui.add_enabled(chosen.as_ref().is_some_and(|p| p.ready), design::primary(if failed { "Retry" } else { "Open" })).clicked();
         });
         self.chosen = chosen.as_ref().map(|p| p.id.clone());
         let pick = chosen?;
         if !connect {
             return None;
         }
+        self.renewed = None;
         match pick.saved {
             Some(computer) => {
                 self.open(&pick.id, &pick.name, None, Source::Saved(computer));
@@ -1221,3 +1308,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "files_owned_tests.rs"]
+mod owned_tests;

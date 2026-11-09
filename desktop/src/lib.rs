@@ -835,14 +835,13 @@ impl eframe::App for App {
         self.account.poll();
         self.files.poll();
         if let Some(connection) = self.account.files_connection.take() {
-            let (owner, computer_id, source) = match connection {
-                account::OwnedConnection::Cached { owner, computer } => (owner, computer.id.clone(), files::Source::Saved(computer)),
-                account::OwnedConnection::Pair { owner, id, pairing } => (owner, id, files::Source::Pair(pairing)),
-            };
-            if self.files.wants(&computer_id) && self.account.user.as_ref().is_some_and(|user| user.id == owner) {
-                let name = self.account.computers.iter().find(|c| c.id == computer_id).map(|c| c.name.clone()).unwrap_or_default();
-                self.files.open(&computer_id, &name, Some(owner), source);
-            }
+            let signed_in = self.account.user.as_ref().map(|user| user.id.clone());
+            let computers = &self.account.computers;
+            self.files.receive(connection, signed_in.as_deref(), |id| computers.iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_default());
+        }
+        if let Some((owner, id)) = self.files.take_stale() {
+            self.account.forget_owned(owner, id.clone());
+            self.account.connect_owned_for_files(id);
         }
         if let Some((owner, id, computer)) = self.files.take_paired() {
             self.account.remember_owned(owner, id, computer);
@@ -859,7 +858,7 @@ impl eframe::App for App {
         if self.command.is_none() {
             if let Some(connection)=self.account.owned_connection.take() {
                 match connection {
-                    account::OwnedConnection::Cached{owner,computer} if self.account.user.as_ref().is_some_and(|user|user.id==owner) => {
+                    account::OwnedConnection::Cached{owner,computer,..} if self.account.user.as_ref().is_some_and(|user|user.id==owner) => {
                         self.computer_account=Some(owner);self.owned_connecting=None;self.computer=Some(computer);self.connect(ctx,None);
                     }
                     account::OwnedConnection::Pair{owner,id,pairing} if self.account.user.as_ref().is_some_and(|user|user.id==owner) => {

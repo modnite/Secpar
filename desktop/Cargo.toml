@@ -86,3 +86,9 @@ required-features = ["tray-review"]
 
 [dev-dependencies]
 secpar-stream = { path = "../crates/secpar-stream" }
+base64 = "0.23.1"
+futures-util = { version = "0.3.34", features = ["sink"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
+ring = "0.17.14"
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }

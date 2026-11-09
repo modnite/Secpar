@@ -56,7 +56,8 @@ pub fn remote_computers<'a>(computers: &'a [OwnedComputer], local: Option<&str>)
 }
 pub fn pairing_with(name: &str) -> String { format!("Pairing with {name}…") }
 pub enum OwnedConnection {
-    Cached { owner: String, computer: Computer },
+    /// `id` is the account's id for the computer. The credential's own id is the host's, a different one.
+    Cached { owner: String, id: String, computer: Computer },
     Pair { owner: String, id: String, pairing: Pairing },
 }
 pub enum Action {
@@ -79,6 +80,7 @@ pub enum Command {
     ForgetComputer,
     ConnectOwned(String),
     RememberOwned { owner: String, id: String, computer: Computer },
+    ForgetOwned { owner: String, id: String },
 }
 pub enum Event {
     Host(Result<local_host::State, String>),
@@ -267,6 +269,10 @@ impl Panel {
     }
     pub fn remember_owned(&mut self, owner: String, id: String, computer: Computer) {
         self.send(Command::RememberOwned { owner, id, computer });
+    }
+    /// Drops a saved credential the computer no longer accepts, so the next connection pairs again.
+    pub fn forget_owned(&mut self, owner: String, id: String) {
+        self.send(Command::ForgetOwned { owner, id });
     }
     /// Takes new preview frames and tells the preview worker which computers to watch. A computer
     /// being streamed, this computer and offline ones get no preview.
@@ -706,7 +712,7 @@ struct Pending {
     next: Instant,
     interval: Duration,
 }
-struct Api {
+pub(crate) struct Api {
     client: Client,
     token: Option<String>,
     base: String,
@@ -899,7 +905,47 @@ fn owned_key(owner: &str, id: &str) -> Result<String,String> {
     path_id(owner)?; path_id(id)?;
     Ok(format!("owned-pairing:{owner}:{id}"))
 }
-struct PendingPair {
+/// The credential saved for an account computer by an earlier connection.
+fn saved_owned(owner: &str, id: &str) -> Option<Computer> {
+    let key = owned_key(owner, id).ok()?;
+    serde_json::from_str(&vault::load(&key).ok().flatten()?).ok()
+}
+/// Opens an account computer: reuses a saved credential that still matches the identity the account
+/// has on record, or asks the computer for a new one through the account.
+async fn connect_owned(api: &Api, owner: &str, id: &str, saved: &impl Fn(&str, &str) -> Option<Computer>, pending_pair: &mut Option<PendingPair>, events: &mpsc::Sender<Event>) -> Result<String, (StatusCode, String)> {
+    let computers = api.computers().await?;
+    let Some(computer) = computers.into_iter().find(|c| c.id == id && c.linked == 1) else {
+        return Err((StatusCode::NOT_FOUND, "This computer is no longer linked to your account".into()));
+    };
+    let Some(fingerprint) = computer.certificate_fp.as_deref().and_then(|fp| secpar_client::pairing::fingerprint(fp).ok()) else {
+        return Err((StatusCode::BAD_GATEWAY, "This computer has no verified host identity".into()));
+    };
+    if let Some(credential) = saved(owner, id).filter(|saved| saved.fingerprint == fingerprint) {
+        *pending_pair = None;
+        let _ = events.send(Event::OwnedConnection(OwnedConnection::Cached { owner: owner.into(), id: id.into(), computer: credential })).await;
+        return Ok(String::new());
+    }
+    let value = api.call(Method::POST, "/v1/owner-pairings", Some(json!({"computer": id, "device": crate::device_name()}))).await?;
+    let Some(request) = value["id"].as_str().filter(|id| path_id(id).is_ok()) else {
+        return Err((StatusCode::BAD_GATEWAY, "Invalid pairing response".into()));
+    };
+    *pending_pair = Some(PendingPair { id: request.into(), owner: owner.into(), computer: id.into(), fingerprint, expires: Instant::now() + Duration::from_secs(120), next: Instant::now() + Duration::from_secs(2) });
+    let _ = events.send(Event::Message(pairing_with(&computer.name))).await;
+    Ok(String::new())
+}
+#[cfg(test)]
+impl Api {
+    /// A client for a scripted account worker on a local port.
+    pub(crate) fn for_test(base: String) -> Self {
+        Api { client: Client::new(), token: Some("d".repeat(64)), base }
+    }
+}
+/// `connect_owned` with the saved credential given directly, for tests.
+#[cfg(test)]
+pub(crate) async fn connect_owned_for_test(api: &Api, owner: &str, id: &str, saved: Option<Computer>, pending_pair: &mut Option<PendingPair>, events: &mpsc::Sender<Event>) -> Result<String, (StatusCode, String)> {
+    connect_owned(api, owner, id, &|_: &str, _: &str| saved.clone(), pending_pair, events).await
+}
+pub(crate) struct PendingPair {
     id: String, owner: String, computer: String, fingerprint: [u8;32],
     expires: Instant, next: Instant,
 }
@@ -1015,38 +1061,16 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                                 }
                             }
                         }
+                        Command::ForgetOwned{owner,id}=>{
+                            if signed_owner.as_deref()==Some(&owner) { if let Ok(key)=owned_key(&owner,&id) { let _=vault::forget(&key); } }
+                            Ok(String::new())
+                        }
                         Command::ConnectOwned(id)=>{
                             if let Some(old)=pending_pair.take() { let _=api.call(Method::DELETE,&format!("/v1/owner-pairings/{}",old.id),None).await; }
-                            if let Some(owner)=signed_owner.clone().filter(|_| api.token.is_some()) {
-                                match api.computers().await {
-                                    Ok(computers)=>match computers.into_iter().find(|c| c.id==id && c.linked==1) {
-                                        Some(computer)=>{
-                                            let fp=computer.certificate_fp.as_deref().and_then(|fp| secpar_client::pairing::fingerprint(fp).ok());
-                                            if let Some(fingerprint)=fp {
-                                                let saved=owned_key(&owner,&id).ok().and_then(|key| vault::load(&key).ok().flatten()).and_then(|value|serde_json::from_str::<Computer>(&value).ok()).filter(|saved|saved.fingerprint==fingerprint);
-                                                if let Some(computer)=saved {
-                                                    pending_pair=None;
-                                                    let _=events.send(Event::OwnedConnection(OwnedConnection::Cached{owner,computer})).await;
-                                                    Ok(String::new())
-                                                } else {
-                                                    match api.call(Method::POST,"/v1/owner-pairings",Some(json!({"computer":id,"device":crate::device_name()}))).await {
-                                                        Ok(value)=>{
-                                                            if let Some(request)=value["id"].as_str().filter(|id|path_id(id).is_ok()) {
-                                                                pending_pair=Some(PendingPair{id:request.into(),owner,computer:id,fingerprint,expires:Instant::now()+Duration::from_secs(120),next:Instant::now()+Duration::from_secs(2)});
-                                                                let _=events.send(Event::Message(pairing_with(&computer.name))).await;
-                                                                Ok(String::new())
-                                                            }else{Err((StatusCode::BAD_GATEWAY,"Invalid pairing response".into()))}
-                                                        }
-                                                        Err(e)=>Err(e)
-                                                    }
-                                                }
-                                            }else{Err((StatusCode::BAD_GATEWAY,"This computer has no verified host identity".into()))}
-                                        }
-                                        None=>Err((StatusCode::NOT_FOUND,"This computer is no longer linked to your account".into()))
-                                    }
-                                    Err(e)=>Err(e)
-                                }
-                            }else{Err((StatusCode::UNAUTHORIZED,"Sign in to connect to your computers".into()))}
+                            match signed_owner.clone().filter(|_| api.token.is_some()) {
+                                Some(owner)=>connect_owned(&api,&owner,&id,&saved_owned,&mut pending_pair,&events).await,
+                                None=>Err((StatusCode::UNAUTHORIZED,"Sign in to connect to your computers".into())),
+                            }
                         }
                         Command::Refresh=>Ok(String::new()),
                         Command::Action(action)=>{

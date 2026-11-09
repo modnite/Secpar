@@ -3838,9 +3838,11 @@ dependencies = [
 name = "secpar-desktop"
 version = "3.16.5"
 dependencies = [
+ "base64",
  "cpal",
  "dbus",
  "eframe",
+ "futures-util",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",
@@ -3851,7 +3853,9 @@ dependencies = [
  "opus",
  "qrcode",
  "raw-window-handle",
+ "rcgen",
  "reqwest",
+ "ring",
  "rustls",
  "secpar-client",
  "secpar-clipboard",
@@ -3863,6 +3867,8 @@ dependencies = [
  "sha2",
  "tauri-winres",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "tray-icon",
  "windows-sys 0.61.2",
 ]
