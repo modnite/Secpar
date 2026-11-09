@@ -4,6 +4,7 @@ use std::time::Instant;
 mod client_settings;
 mod video;
 mod picture;
+mod previews;
 mod gpu;
 mod audio;
 mod audio_worker;
@@ -37,7 +38,7 @@ use secpar_client::{
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
-fn device_name() -> String {
+pub(crate) fn device_name() -> String {
     let name=std::env::var("COMPUTERNAME").or_else(|_|std::env::var("HOSTNAME")).ok();
     #[cfg(unix)]
     let name=name.or_else(||std::fs::read_to_string("/etc/hostname").ok());
@@ -801,6 +802,8 @@ impl eframe::App for App {
         }
         self.poll(ctx);
         self.account.poll();
+        let streaming = if self.command.is_some() { self.owned_connecting.as_ref().map(|(_, id)| id.clone()).or_else(|| self.computer.as_ref().map(|c| c.id.clone())) } else { None };
+        self.account.sync_previews(ctx, streaming.as_deref());
         if std::mem::take(&mut self.account.signed_out) && self.computer_account.is_some() {
             self.clipboard=None;self.audio_route.output(None);self.audio=None;self.capture(ctx,false); self.send(Command::Stop);
             self.computer=None; self.computer_account=None; self.owned_connecting=None;
