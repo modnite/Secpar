@@ -9,7 +9,8 @@ use crate::{
     uinput,
 };
 use secpar_host_core::{
-    agent::{Agent, AgentHandle, BoxFut, Handlers, Outbox, Session},
+    agent::{Agent, AgentHandle, BoxFut, Event, GuestAdmission, Handlers, Outbox, Session},
+    guest_policy::Gate,
     files::{self, Incoming, Outgoing},
     media::Cmd,
     pad::{self, PadState, Pads},
@@ -54,6 +55,12 @@ struct Backend {
     agent: Mutex<Option<AgentHandle>>,
     active: Arc<secpar_host_core::limits::StreamSlots>,
     account: Result<Arc<secpar_host_core::account::Account>, String>,
+    /// None when this host is not linked to an account that could vouch for a friend.
+    guests: Option<Arc<GuestAdmission>>,
+    /// One count of virtual controllers for the whole PC, owner and friends together.
+    pad_budget: Arc<pad::Budget>,
+    /// Names of friends with a running session, by account id.
+    friends: Mutex<std::collections::HashMap<String, String>>,
     /// Files this PC offered to phones, by transfer id, until accepted or rejected.
     outgoing: Outgoing,
     /// Controllers kept for a few seconds after a phone drops, so a game does not lose them.
@@ -73,7 +80,24 @@ impl Backend {
         let host = Self::new(store, identity, account);
         let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),"0.0.0.0:48999".parse().unwrap(),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
         if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
+        let mut events = handle.events();
         *host.agent.lock().unwrap() = Some(handle);
+        let names = Arc::downgrade(&host);
+        tokio::spawn(async move {
+            while let Ok(event) = events.recv().await {
+                let Some(host) = names.upgrade() else { break };
+                match event {
+                    Event::GuestConnected { guest, handle } => {
+                        let who = if handle.is_empty() { "A friend".to_string() } else { format!("@{handle}") };
+                        host.friends.lock().unwrap().insert(guest, who);
+                    }
+                    Event::GuestDisconnected { guest } => {
+                        host.friends.lock().unwrap().remove(&guest);
+                    }
+                    _ => {}
+                }
+            }
+        });
         let weak = Arc::downgrade(&host);
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(Duration::from_secs(3));
@@ -83,6 +107,11 @@ impl Backend {
                 let Some(host) = weak.upgrade() else { break };
                 let Ok(account) = &host.account else { continue };
                 let owner = account.state().await.owner;
+                let presence = {
+                    let store = host.store.lock().unwrap();
+                    secpar_host_core::account::Presence::new(store.config().friends, store.id(), crate::rendezvous::url())
+                };
+                account.set_presence(presence).await;
                 host.sync_account_owner(owner.clone());
                 if let Some(owner) = owner {
                     let _ = account.poll_pairings(|id| {
@@ -98,7 +127,11 @@ impl Backend {
         let store = Arc::new(Mutex::new(store));
         let active: Arc<secpar_host_core::limits::StreamSlots> = Arc::default();
         let busy = active.clone();
+        let guests = account.as_ref().ok().map(|a| GuestAdmission::new(a.clone()));
         Arc::new(Self {
+            guests,
+            pad_budget: Arc::default(),
+            friends: Default::default(),
             thumbs: Arc::new(Thumbs::new(Arc::new(thumb::PortalSource { store: store.clone() }), move || busy.count() > 0)),
             store,
             identity,
@@ -141,9 +174,15 @@ impl Backend {
                     .as_ref()
                     .map(|a| a.connected())
                     .unwrap_or_default();
+                let guests = self.agent.lock().unwrap().as_ref().map(|a| a.guests()).unwrap_or_default();
+                let names = self.friends.lock().unwrap();
+                let friends: Vec<Value> = guests
+                    .iter()
+                    .map(|id| json!({"id":id,"name":names.get(id).cloned().unwrap_or_else(|| "A friend".into()),"connected":true}))
+                    .collect();
                 let store = self.store.lock().unwrap();
                 Ok(
-                    json!({"name":self.name,"devices":store.devices().iter().map(|d|json!({"id":d.id,"name":d.name,"connected":connected.contains(&d.id)})).collect::<Vec<_>>(),"locked":false,"streaming":(self.active.count() > 0)}),
+                    json!({"name":self.name,"devices":store.devices().iter().map(|d|json!({"id":d.id,"name":d.name,"connected":connected.contains(&d.id)})).collect::<Vec<_>>(),"friends":friends,"locked":false,"streaming":(self.active.count() > 0)}),
                 )
             }
             // `displays` stays empty: the portal picks the monitor, so there is nothing to switch here.
@@ -178,6 +217,12 @@ impl Backend {
                 let id = args["id"].as_str().ok_or("Missing device")?;
                 let agent = self.agent.lock().unwrap();
                 agent.as_ref().ok_or("Host is not running")?.revoke(id);
+                Ok(Value::Null)
+            }
+            "disconnect_friend" => {
+                let id = args["id"].as_str().ok_or("Missing friend")?;
+                let agent = self.agent.lock().unwrap();
+                agent.as_ref().ok_or("Host is not running")?.disconnect_guest(id);
                 Ok(Value::Null)
             }
             "host_account_state" => Ok(json!(self.account.as_ref().map_err(Clone::clone)?.state().await)),
@@ -224,6 +269,23 @@ impl Handlers for Backend {
         caps
     }
     fn session(&self, device: &str, out: Outbox) -> Box<dyn Session> {
+        self.build(device, out, None)
+    }
+    fn guests(&self) -> Option<Arc<GuestAdmission>> {
+        self.guests.clone()
+    }
+    fn guest_refusal(&self) -> Option<&'static str> {
+        (!self.store.lock().unwrap().config().friends).then_some("Friends are switched off on this PC.")
+    }
+    fn guest_locked(&self) -> bool {
+        crate::lock::locked_or_unknown()
+    }
+    fn guest_session(&self, gate: &Gate, guest: &str, out: Outbox) -> Option<Box<dyn Session>> {
+        Some(self.build(&format!("guest:{guest}"), out, Some(gate.clone())))
+    }
+}
+impl Backend {
+    fn build(&self, device: &str, out: Outbox, gate: Option<Gate>) -> Box<dyn Session> {
         let (cancel, _) = watch::channel(false);
         let pads = if uinput::available() {
             let rumble = out.clone();
@@ -234,7 +296,12 @@ impl Handlers for Backend {
                         rumble.send(ServerMsg::Rumble { id, lo, hi });
                     }),
                 )
-                .for_device(device, self.lingering.clone()),
+                .for_device(device, self.lingering.clone())
+                .with_budget(
+                    self.pad_budget.clone(),
+                    if gate.is_some() { pad::Who::Friend } else { pad::Who::Owner },
+                    if gate.is_some() { pad::MAX_PER_FRIEND } else { pad::MAX_CONTROLLERS },
+                ),
             )
         } else {
             None
@@ -258,6 +325,7 @@ impl Handlers for Backend {
                 let store = self.store.clone();
                 Arc::new(move || crate::rendezvous::turn_server(&store, base)) as stream::RelayProvider
             }),
+            gate,
         })
     }
 }
@@ -284,6 +352,8 @@ struct OwnerSession {
     cancel: watch::Sender<bool>,
     /// TURN credentials from the rendezvous Worker, when remote access is built in.
     relay: Option<stream::RelayProvider>,
+    /// Set for a friend's session. The agent filters first; this is the second check.
+    gate: Option<Gate>,
 }
 impl OwnerSession {
     fn stop(&self) {
@@ -363,6 +433,12 @@ impl Session for OwnerSession {
         self.incoming.chunk(b)
     }
     fn on_msg(&mut self, msg: ClientMsg) -> Option<ServerMsg> {
+        if self.gate.is_some()
+            && matches!(msg, ClientMsg::Power { .. } | ClientMsg::Unlock { .. } | ClientMsg::FsList { .. } | ClientMsg::FsGet { .. }
+                | ClientMsg::Net | ClientMsg::MediaSub { .. } | ClientMsg::MediaCmd { .. } | ClientMsg::ThumbSub { .. })
+        {
+            return Some(ServerMsg::error("forbidden", "This is not allowed for a friend.", Some(msg.t())));
+        }
         match msg {
             ClientMsg::MediaSub { on } => {
                 if let Some(task) = self.media_task.take() {
@@ -497,6 +573,7 @@ impl Session for OwnerSession {
                     audio,
                     relay: self.relay.clone(),
                     pads: self.pads.clone(),
+                    gate: self.gate.clone(),
                 });
                 None
             }

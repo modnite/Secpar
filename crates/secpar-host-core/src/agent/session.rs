@@ -199,7 +199,7 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
             (session, gamestream, Some(Registration(ctx.clone(), sid)), None, None)
         }
         Some((adm, pass)) => {
-            let Some(inner) = ctx.handlers.guest_session(&pass.gate, outbox) else {
+            let Some(inner) = ctx.handlers.guest_session(&pass.gate, &pass.guest, outbox) else {
                 pass.gate.close();
                 return fail(&mut ws, "guest_refused", "This PC does not accept friends yet.").await;
             };
@@ -271,11 +271,17 @@ async fn admit_guest(ctx: &Arc<Ctx>, grant: &str) -> Result<(Arc<guest::GuestAdm
         Ok(pass) => pass,
         Err(e) => return refuse("guest_refused", &e),
     };
-    if ctx.handlers.locked() {
+    if ctx.handlers.guest_locked() {
         return refuse("locked", "This PC is locked.");
     }
-    if ctx.guest.owner_streams.load(std::sync::atomic::Ordering::SeqCst) > 0 || ctx.guest.any() {
+    if ctx.guest.owner_streams.load(std::sync::atomic::Ordering::SeqCst) > 0 {
         return refuse("busy", "This PC is in use.");
+    }
+    if ctx.guest.has(&pass.guest) {
+        return refuse("busy", "You are already connected to this PC.");
+    }
+    if ctx.guest.count() >= guest::MAX_FRIENDS {
+        return refuse("busy", "Three friends are already connected.");
     }
     if adm.consume(&pass).is_err() {
         return refuse("guest_refused", "This grant was already used.");
@@ -306,8 +312,13 @@ mod guest_tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    const GUEST: &str = "00000000-0000-4000-8000-0000000000aa";
-    const REQUEST: &str = "00000000-0000-4000-8000-0000000000bb";
+    /// Friend `n` and the request it claimed. Friend 0 is the one most tests use.
+    fn guest_id(n: u8) -> String {
+        format!("00000000-0000-4000-8000-0000000000a{n}")
+    }
+    fn request_id(n: u8) -> String {
+        format!("00000000-0000-4000-8000-0000000000b{n}")
+    }
 
     struct Store;
     impl crate::PairingStore for Store {
@@ -346,7 +357,7 @@ mod guest_tests {
         fn guests(&self) -> Option<Arc<guest::GuestAdmission>> {
             Some(self.admission.clone())
         }
-        fn guest_session(&self, gate: &Gate, _: Outbox) -> Option<Box<dyn Session>> {
+        fn guest_session(&self, gate: &Gate, _: &str, _: Outbox) -> Option<Box<dyn Session>> {
             self.gates.lock().unwrap().push(gate.clone());
             Some(Box::new(Recorder(self.seen.clone())))
         }
@@ -384,20 +395,27 @@ mod guest_tests {
     }
     async fn friends(server: &MockServer, input: &str, connect: &str) {
         Mock::given(method("GET")).and(path("/v1/host/friends"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id":GUEST,"handle":"cat","input":input,"connect":connect}])))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::Value::Array(
+                (0..4u8).map(|n| serde_json::json!({"id":guest_id(n),"handle":format!("friend{n}"),"input":input,"connect":connect})).collect(),
+            )))
             .mount(server).await;
     }
     async fn lease(server: &MockServer, active: bool) {
-        Mock::given(method("GET")).and(path(format!("/v1/host/requests/{REQUEST}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(
-                {"id":REQUEST,"guest":GUEST,"approved":["keyboard","view"],"state":"claimed","expires":1,"active":active})))
-            .mount(server).await;
+        for n in 0..4u8 {
+            Mock::given(method("GET")).and(path(format!("/v1/host/requests/{}", request_id(n))))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(
+                    {"id":request_id(n),"guest":guest_id(n),"approved":["keyboard","view"],"state":"claimed","expires":1,"active":active})))
+                .mount(server).await;
+        }
     }
     fn token() -> String {
+        token_for(0)
+    }
+    fn token_for(n: u8) -> String {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
         let (token, _) = signed(|_, c| {
-            c["sub"] = GUEST.into();
-            c["jti"] = REQUEST.into();
+            c["sub"] = guest_id(n).into();
+            c["jti"] = request_id(n).into();
             c["aud"] = COMPUTER.into();
             c["iat"] = now.into();
             c["exp"] = (now + 30).into();
@@ -487,7 +505,7 @@ mod guest_tests {
     }
 
     #[tokio::test]
-    async fn a_locked_pc_or_a_second_friend_is_refused_and_the_grant_is_not_spent() {
+    async fn a_locked_pc_is_refused_and_the_grant_is_not_spent() {
         let r = rig("full", "always", true).await;
         r.host.locked.store(true, Ordering::SeqCst);
         let grant = token();
@@ -498,9 +516,58 @@ mod guest_tests {
         let mut again = connect(&r.ctx);
         again.say(serde_json::json!({"t":"guest","grant":grant})).await;
         assert_eq!(again.next().await.unwrap()["t"], "welcome");
-        let mut second = connect(&r.ctx);
-        second.say(serde_json::json!({"t":"guest","grant":token()})).await;
-        assert_eq!(second.next().await.unwrap()["code"], "busy");
+    }
+
+    #[tokio::test]
+    async fn three_friends_connect_at_once_and_a_fourth_waits() {
+        let r = rig("full", "always", true).await;
+        let mut seats = Vec::new();
+        for n in 0..3u8 {
+            let mut c = connect(&r.ctx);
+            c.say(serde_json::json!({"t":"guest","grant":token_for(n)})).await;
+            assert_eq!(c.next().await.unwrap()["t"], "welcome", "friend {n}");
+            seats.push(c);
+        }
+        assert_eq!(r.ctx.guest.count(), 3);
+        let fourth_grant = token_for(3);
+        let mut fourth = connect(&r.ctx);
+        fourth.say(serde_json::json!({"t":"guest","grant":fourth_grant})).await;
+        let refused = fourth.next().await.unwrap();
+        assert_eq!((refused["code"].as_str(), refused["msg"].as_str()), (Some("busy"), Some("Three friends are already connected.")));
+        // The refused grant was not spent: a seat opens and the same grant works.
+        drop(seats.remove(0));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut retry = connect(&r.ctx);
+        retry.say(serde_json::json!({"t":"guest","grant":fourth_grant})).await;
+        assert_eq!(retry.next().await.unwrap()["t"], "welcome");
+    }
+
+    #[tokio::test]
+    async fn one_friend_cannot_hold_two_seats() {
+        let r = rig("full", "always", true).await;
+        let mut first = connect(&r.ctx);
+        first.say(serde_json::json!({"t":"guest","grant":token()})).await;
+        assert_eq!(first.next().await.unwrap()["t"], "welcome");
+        let mut twice = connect(&r.ctx);
+        twice.say(serde_json::json!({"t":"guest","grant":token()})).await;
+        assert_eq!(twice.next().await.unwrap()["msg"], "You are already connected to this PC.");
+    }
+
+    #[tokio::test]
+    async fn the_owner_streaming_closes_every_friend() {
+        let r = rig("full", "always", true).await;
+        let mut seats = Vec::new();
+        for n in 0..3u8 {
+            let mut c = connect(&r.ctx);
+            c.say(serde_json::json!({"t":"guest","grant":token_for(n)})).await;
+            c.next().await.unwrap();
+            seats.push(c);
+        }
+        let mut owner = OwnerWatch { inner: Box::new(Recorder(Default::default())), ctx: r.ctx.clone(), streaming: false };
+        owner.on_msg(start());
+        for c in seats.iter_mut() {
+            assert_eq!(c.next().await.unwrap()["msg"], "The owner ended this session.");
+        }
     }
 
     #[tokio::test]

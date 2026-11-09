@@ -36,17 +36,89 @@ pub trait Target: Send {
     fn update(&mut self, s: &PadState) -> bool;
 }
 
+/// Games read at most four XInput controllers. This is the one count for the whole PC, so a
+/// friend cannot push the owner's controller out, and friends cannot fill every slot.
+pub const MAX_CONTROLLERS: usize = 4;
+/// Most controllers all friends together may use. One slot stays for the owner.
+pub const MAX_FRIEND_CONTROLLERS: usize = 3;
+/// Most controllers one friend may use.
+pub const MAX_PER_FRIEND: usize = 2;
+
+#[derive(Default)]
+pub struct Budget {
+    total: std::sync::atomic::AtomicUsize,
+    friends: std::sync::atomic::AtomicUsize,
+}
+
+/// Who a session's controllers count against.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Who {
+    Owner,
+    Friend,
+}
+
+struct Permit(Arc<Budget>, Who);
+impl Drop for Permit {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.0.total.fetch_sub(1, SeqCst);
+        if self.1 == Who::Friend {
+            self.0.friends.fetch_sub(1, SeqCst);
+        }
+    }
+}
+impl Budget {
+    /// A slot, or None when the PC is out of controllers for this kind of session.
+    fn take(self: &Arc<Self>, who: Who) -> Option<Permit> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut total = self.total.load(SeqCst);
+        loop {
+            if total >= MAX_CONTROLLERS {
+                return None;
+            }
+            match self.total.compare_exchange(total, total + 1, SeqCst, SeqCst) {
+                Ok(_) => break,
+                Err(now) => total = now,
+            }
+        }
+        if who == Who::Friend && self.friends.fetch_add(1, SeqCst) >= MAX_FRIEND_CONTROLLERS {
+            self.friends.fetch_sub(1, SeqCst);
+            self.total.fetch_sub(1, SeqCst);
+            return None;
+        }
+        Some(Permit(self.clone(), who))
+    }
+    pub fn in_use(&self) -> usize {
+        self.total.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// A plugged controller that gives its slot back when it goes away, lingering or not.
+struct Counted(Box<dyn Target>, Permit);
+impl Target for Counted {
+    fn update(&mut self, s: &PadState) -> bool {
+        self.0.update(s)
+    }
+}
+
 /// One session's controllers, ids 0..=3.
 pub struct Pads {
     bus: Arc<dyn Bus>,
     on_rumble: Arc<dyn Fn(u8, u8, u8) + Send + Sync>,
     targets: [Option<Box<dyn Target>>; 4],
     device: Option<(String, Lingering)>,
+    budget: Option<(Arc<Budget>, Who, usize)>,
 }
 
 impl Pads {
     pub fn new(bus: Arc<dyn Bus>, on_rumble: Box<dyn Fn(u8, u8, u8) + Send + Sync>) -> Self {
-        Pads { bus, on_rumble: on_rumble.into(), targets: Default::default(), device: None }
+        Pads { bus, on_rumble: on_rumble.into(), targets: Default::default(), device: None, budget: None }
+    }
+
+    /// Counts this session against the PC's controller budget; `each` caps this session alone.
+    pub fn with_budget(mut self, budget: Arc<Budget>, who: Who, each: usize) -> Self {
+        self.budget = Some((budget, who, each));
+        self
     }
 
     /// Ties these controllers to a phone: its lingering controllers from a previous connection
@@ -59,10 +131,24 @@ impl Pads {
 
     /// Creates the controller on first use, then updates it.
     pub fn pad(&mut self, id: u8, s: &PadState) -> Result<(), &'static str> {
+        let plugged = self.targets.iter().flatten().count();
         let slot = self.targets.get_mut(id as usize).ok_or("bad_request")?;
         if slot.is_none() {
             let cb = self.on_rumble.clone();
-            *slot = Some(self.bus.plug(id, Box::new(move |lo, hi| cb(id, lo, hi))).ok_or("internal")?);
+            let permit = match &self.budget {
+                Some((budget, who, each)) => {
+                    if plugged >= *each {
+                        return Err("pad_limit");
+                    }
+                    Some(budget.take(*who).ok_or("pad_limit")?)
+                }
+                None => None,
+            };
+            let target = self.bus.plug(id, Box::new(move |lo, hi| cb(id, lo, hi))).ok_or("internal")?;
+            *slot = Some(match permit {
+                Some(permit) => Box::new(Counted(target, permit)),
+                None => target,
+            });
         }
         if slot.as_mut().is_some_and(|t| t.update(s)) {
             Ok(())
@@ -152,6 +238,41 @@ mod tests {
     fn rig() -> (Pads, Arc<Log>) {
         let log = Arc::new(Log::default());
         (Pads::new(Arc::new(FakeBus(log.clone())), Box::new(|_, _, _| {})), log)
+    }
+
+    #[test]
+    fn friends_get_two_each_three_together_and_the_owner_keeps_one() {
+        let log = Arc::new(Log::default());
+        let bus: Arc<dyn Bus> = Arc::new(FakeBus(log.clone()));
+        let budget = Arc::new(Budget::default());
+        let new = |who, each| Pads::new(bus.clone(), Box::new(|_, _, _| {})).with_budget(budget.clone(), who, each);
+        let (mut a, mut b, mut owner) = (new(Who::Friend, MAX_PER_FRIEND), new(Who::Friend, MAX_PER_FRIEND), new(Who::Owner, 4));
+        assert_eq!(a.pad(0, &st(1)), Ok(()));
+        assert_eq!(a.pad(1, &st(1)), Ok(()));
+        assert_eq!(a.pad(2, &st(1)), Err("pad_limit"), "two per friend");
+        assert_eq!(b.pad(0, &st(1)), Ok(()));
+        assert_eq!(b.pad(1, &st(1)), Err("pad_limit"), "three for all friends");
+        assert_eq!(owner.pad(0, &st(1)), Ok(()), "the owner still has a slot");
+        assert_eq!(owner.pad(1, &st(1)), Err("pad_limit"), "four for the whole PC");
+        assert_eq!(budget.in_use(), 4);
+        a.off(0);
+        assert_eq!(budget.in_use(), 3);
+        assert_eq!(b.pad(1, &st(1)), Ok(()), "a freed slot is reusable");
+        drop((a, b, owner));
+        assert_eq!(budget.in_use(), 0, "dropping a session gives everything back");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lingering_controller_keeps_its_slot_until_it_is_removed() {
+        let log = Arc::new(Log::default());
+        let bus: Arc<dyn Bus> = Arc::new(FakeBus(log.clone()));
+        let budget = Arc::new(Budget::default());
+        let mut p = Pads::new(bus, Box::new(|_, _, _| {})).with_budget(budget.clone(), Who::Friend, 2);
+        p.pad(0, &st(1)).unwrap();
+        p.linger(Duration::from_secs(5));
+        assert_eq!(budget.in_use(), 1);
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        assert_eq!(budget.in_use(), 0);
     }
 
     #[test]

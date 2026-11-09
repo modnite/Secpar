@@ -106,6 +106,11 @@ pub trait Handlers: Send + Sync + 'static {
     fn locked(&self) -> bool {
         false
     }
+    /// Whether a friend must be refused or stopped because the desktop is locked. Unlike
+    /// `locked`, a host that cannot tell should answer true.
+    fn guest_locked(&self) -> bool {
+        self.locked()
+    }
     /// Friend sessions. None (the default) refuses every guest.
     fn guests(&self) -> Option<Arc<GuestAdmission>> {
         None
@@ -116,7 +121,7 @@ pub trait Handlers: Send + Sync + 'static {
     }
     /// The platform session for a friend. The agent filters it by `gate`; the platform also
     /// hands `gate` to its stream and UDP input paths.
-    fn guest_session(&self, _gate: &crate::guest_policy::Gate, _out: Outbox) -> Option<Box<dyn Session>> {
+    fn guest_session(&self, _gate: &crate::guest_policy::Gate, _guest: &str, _out: Outbox) -> Option<Box<dyn Session>> {
         None
     }
 }

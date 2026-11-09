@@ -957,6 +957,14 @@ export async function handle(
       if (method === "POST" && grant[2] === "claim") {
         if (row.guest !== me.id) deny(403, "intended_guest_required");
         if (!active) deny(403, "access_expired_or_revoked");
+        // The host must be online, switched on for friends, and have said where to reach it.
+        const host = await q(
+          env,
+          "SELECT pc,relay,certificate_fp FROM host_keys WHERE computer=? AND sharing=1 AND last_seen>? AND pc IS NOT NULL AND relay IS NOT NULL",
+          row.computer,
+          seconds() - 90,
+        ).first<{ pc: string; relay: string; certificate_fp: string }>();
+        if (!host) deny(409, "host_not_sharing");
         const key = await signing(env);
         const claimed = await q(
           env,
@@ -978,7 +986,11 @@ export async function handle(
           .setIssuedAt()
           .setExpirationTime(expires)
           .sign(key.privateKey);
-        return response({ grant: token, expires_at: expires });
+        return response({
+          grant: token,
+          expires_at: expires,
+          host: { pc: host.pc, relay: host.relay, fingerprint: host.certificate_fp },
+        });
       }
       if (method === "POST" && grant[2] === "revoke") {
         await q(

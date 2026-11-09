@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Friends who may be connected at once.
+pub const MAX_FRIENDS: usize = 3;
+
 /// How often the host asks the Worker whether the lease is still good.
 const RECHECK: Duration = Duration::from_secs(10);
 /// Consecutive failed rechecks before the session ends. Offline for this long stops output.
@@ -105,8 +108,14 @@ pub(crate) struct GuestState {
 }
 
 impl GuestState {
+    pub fn count(&self) -> usize {
+        self.sessions.lock().unwrap().len()
+    }
     pub fn any(&self) -> bool {
-        !self.sessions.lock().unwrap().is_empty()
+        self.count() > 0
+    }
+    pub fn has(&self, guest: &str) -> bool {
+        self.sessions.lock().unwrap().iter().any(|(g, _)| g == guest)
     }
     pub fn ids(&self) -> Vec<String> {
         self.sessions.lock().unwrap().iter().map(|(g, _)| g.clone()).collect()
@@ -166,7 +175,7 @@ async fn watch(ctx: Arc<Ctx>, admission: Arc<GuestAdmission>, pass: Pass) {
         if !pass.gate.is_open() {
             return;
         }
-        if ctx.handlers.locked() {
+        if ctx.handlers.guest_locked() {
             pass.gate.close_because("locked");
             return;
         }

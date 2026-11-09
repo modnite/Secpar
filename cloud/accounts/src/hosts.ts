@@ -35,8 +35,25 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
     if(path==="/v1/host/status" && method==="GET") return json(publicMachine);
     if(path==="/v1/host/heartbeat" && method==="POST") {
       await api.limit(request,env,"host_heartbeat",120);
-      await q(env,"UPDATE host_keys SET last_seen=? WHERE computer=?",now(),machine.computer).run();
-      return json({...publicMachine,sharing:false}); // Sharing is deliberately disabled until host enforcement exists.
+      // Old hosts send nothing, which means not sharing. A host sharing with friends says so
+      // every beat, so switching it off or going offline removes it from friends' lists.
+      let presence:Record<string,unknown>={};
+      if((request.headers.get("content-type")??"").includes("json")) {
+        try { presence=await request.json() as Record<string,unknown>; } catch { api.fail(400,"invalid_presence"); }
+      }
+      const sharing=presence.sharing===true;
+      let pc:string|null=null, relay:string|null=null;
+      if(sharing) {
+        if(typeof presence.pc!=="string"||!/^[a-f0-9-]{36}$/.test(presence.pc)) api.fail(400,"invalid_presence");
+        pc=presence.pc;
+        try {
+          const url=new URL(String(presence.relay));
+          if(url.protocol!=="https:"||url.username||url.password||url.search||url.hash||url.pathname!=="/") throw new Error("relay");
+          relay=url.origin;
+        } catch { api.fail(400,"invalid_presence"); }
+      }
+      await q(env,"UPDATE host_keys SET last_seen=?,sharing=?,pc=NULLIF(?,''),relay=NULLIF(?,'') WHERE computer=?",now(),sharing?1:0,pc??"",relay??"",machine.computer).run();
+      return json({...publicMachine,sharing});
     }
     if(path==="/v1/host/link" && method==="DELETE") {
       await unlink(env,machine.computer);
@@ -121,7 +138,7 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
     return json({unlinked:true});
   }
   if(path==="/v1/friend-computers"&&method==="GET") {
-    const rows=await q(env,"SELECT c.id,c.name,c.platform,c.owner FROM computers c JOIN host_keys k ON k.computer=c.id JOIN friends f ON (f.a=? AND f.b=c.owner) OR (f.b=? AND f.a=c.owner) WHERE f.state='accepted' AND k.sharing=1 AND k.last_seen>? AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.owner=? AND b.blocked=c.owner) OR (b.owner=c.owner AND b.blocked=?))",me.id,me.id,now()-90,me.id,me.id).all();
+    const rows=await q(env,"SELECT c.id,c.name,c.platform,c.owner,o.handle AS owner_handle FROM computers c JOIN accounts o ON o.id=c.owner JOIN host_keys k ON k.computer=c.id JOIN friends f ON (f.a=? AND f.b=c.owner) OR (f.b=? AND f.a=c.owner) WHERE f.state='accepted' AND k.sharing=1 AND k.last_seen>? AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.owner=? AND b.blocked=c.owner) OR (b.owner=c.owner AND b.blocked=?))",me.id,me.id,now()-90,me.id,me.id).all();
     return json(rows.results);
   }
   return null;

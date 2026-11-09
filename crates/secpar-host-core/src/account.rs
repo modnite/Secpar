@@ -37,9 +37,32 @@ struct RemoteState {
     owner: String,
     certificate_fp: String,
 }
+/// What the heartbeat tells the service so friends can find this host. Off until a platform
+/// turns it on, and off again whenever the owner switches friends off.
+#[derive(Clone, Default, PartialEq, Serialize)]
+pub struct Presence {
+    pub sharing: bool,
+    /// The host's rendezvous id and the relay Worker's origin.
+    pub pc: String,
+    pub relay: String,
+}
+impl Presence {
+    /// Sharing needs a relay the service will accept: a plain https origin. Anything else means off,
+    /// so a misconfigured address can never make the heartbeat fail.
+    pub fn new(friends_on: bool, pc: &str, relay: Option<&str>) -> Self {
+        let origin = relay.map(|r| r.trim_end_matches('/')).filter(|r| {
+            r.strip_prefix("https://").is_some_and(|host| !host.is_empty() && !host.contains(['/', '?', '#', '@', ' ']))
+        });
+        match origin {
+            Some(origin) if friends_on && valid_id(pc) => Self { sharing: true, pc: pc.into(), relay: origin.into() },
+            _ => Self::default(),
+        }
+    }
+}
 struct Inner {
     registration: Option<Registration>,
     state: State,
+    presence: Presence,
 }
 pub struct Account {
     inner: Mutex<Inner>,
@@ -71,12 +94,18 @@ impl Account {
             inner: Mutex::new(Inner {
                 registration,
                 state,
+                presence: Presence::default(),
             }),
             storage,
             fingerprint: fingerprint.into(),
             client,
             origin: ORIGIN.into(),
         }))
+    }
+    /// Call whenever the owner's friends setting or the relay address changes. Takes effect on
+    /// the next heartbeat.
+    pub async fn set_presence(&self, presence: Presence) {
+        self.inner.lock().await.presence = presence;
     }
     pub async fn state(&self) -> State {
         self.inner.lock().await.state.clone()
@@ -179,8 +208,10 @@ impl Account {
     async fn heartbeat(&self) {
         let mut inner = self.inner.lock().await;
         if let Some(registration) = &inner.registration {
+            let presence = inner.presence.clone();
+            let body = presence.sharing.then(|| serde_json::to_value(&presence).unwrap_or_default());
             match self
-                .request(registration, Method::POST, "/v1/host/heartbeat")
+                .request_json(registration, Method::POST, "/v1/host/heartbeat", body)
                 .await
             {
                 Ok(_) => inner.state = view(Some(registration), true, ""),
@@ -215,7 +246,7 @@ impl Account {
             credential: format!("h1_{}", "a".repeat(64)),
         };
         Arc::new(Self {
-            inner: Mutex::new(Inner { state: view(Some(&registration), true, ""), registration: Some(registration) }),
+            inner: Mutex::new(Inner { state: view(Some(&registration), true, ""), registration: Some(registration), presence: Presence::default() }),
             storage: Arc::new(Nothing),
             fingerprint: "ab".repeat(32),
             client: Client::new(),
@@ -317,7 +348,7 @@ fn validate(value: &Registration, fingerprint: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{matchers::{header, method, path}, Mock, MockServer, ResponseTemplate};
+    use wiremock::{matchers::{body_bytes, body_json, header, method, path}, Mock, MockServer, ResponseTemplate};
     #[derive(Default)]
     struct Memory(std::sync::Mutex<Option<Vec<u8>>>);
     impl CredentialStorage for Memory {
@@ -331,7 +362,7 @@ mod tests {
     fn account(server: &MockServer, storage: Arc<Memory>) -> Account {
         // Each fixture must initialize TLS without depending on another test.
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-        Account { inner: Mutex::new(Inner { registration: None, state: State::default() }), storage, fingerprint: registration().certificate_fp, client: Client::new(), origin: server.uri() }
+        Account { inner: Mutex::new(Inner { registration: None, state: State::default(), presence: Presence::default() }), storage, fingerprint: registration().certificate_fp, client: Client::new(), origin: server.uri() }
     }
     #[test]
     fn accepts_only_machine_credentials_bound_to_this_identity() {
@@ -415,6 +446,36 @@ mod tests {
         assert_eq!(account.admit_guest(id, "cat", &signed).await.unwrap_err(), Denied::LeaseInactive.message());
         // A request id that is not a UUID never becomes a path.
         assert!(account.lease("../../host/link").await.is_err());
+    }
+    #[test]
+    fn presence_is_on_only_for_a_plain_https_relay_and_a_real_id() {
+        let pc = "00000000-0000-4000-8000-0000000000c1";
+        let on = Presence::new(true, pc, Some("https://relay.example/"));
+        assert!(on.sharing && on.relay == "https://relay.example" && on.pc == pc);
+        for relay in [None, Some("http://relay.example"), Some("https://relay.example/v1"), Some("https://u@relay.example"), Some("https://")] {
+            assert!(!Presence::new(true, pc, relay).sharing, "{relay:?}");
+        }
+        assert!(!Presence::new(false, pc, Some("https://relay.example")).sharing);
+        assert!(!Presence::new(true, "nope", Some("https://relay.example")).sharing);
+    }
+    #[tokio::test]
+    async fn the_heartbeat_says_whether_friends_are_on_and_nothing_else_secret() {
+        let server = MockServer::start().await; let account = account(&server, Arc::default());
+        account.inner.lock().await.registration = Some(registration());
+        Mock::given(method("POST")).and(path("/v1/host/heartbeat")).and(body_json(serde_json::json!({"sharing":true,"pc":"00000000-0000-4000-8000-0000000000c1","relay":"https://relay.example"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"computer":registration().computer,"owner":"fixture","certificate_fp":registration().certificate_fp,"name":"x","platform":"windows","last_seen":1,"sharing":true})))
+            .expect(1).mount(&server).await;
+        account.set_presence(Presence::new(true, "00000000-0000-4000-8000-0000000000c1", Some("https://relay.example"))).await;
+        account.heartbeat().await;
+        assert!(account.state().await.online);
+        server.verify().await;
+        server.reset().await;
+        Mock::given(method("POST")).and(path("/v1/host/heartbeat")).and(body_bytes(Vec::<u8>::new()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"computer":registration().computer,"owner":"fixture","certificate_fp":registration().certificate_fp,"name":"x","platform":"windows","last_seen":1,"sharing":false})))
+            .expect(1).mount(&server).await;
+        account.set_presence(Presence::default()).await;
+        account.heartbeat().await;
+        server.verify().await;
     }
     #[tokio::test]
     async fn hostile_job_identifiers_never_reach_the_pairing_callback() {

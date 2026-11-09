@@ -20,12 +20,14 @@ pub struct Host {
     pub net: Arc<Mutex<net::NetStatus>>,
     /// None when the host is not linked to an account that could vouch for a friend.
     guests: Option<Arc<GuestAdmission>>,
+    /// One count of virtual controllers for the whole PC, owner and friends together.
+    pad_budget: Arc<pad::Budget>,
 }
 
 impl Host {
     pub fn new(store: Arc<Mutex<Store>>, guests: Option<Arc<GuestAdmission>>) -> Self {
         let pads = pad::ViGEm::connect().map(|b| Arc::new(b) as Arc<dyn pad::Bus>);
-        Host { store, outgoing: Outgoing::default(), pads, lingering: Default::default(), net: Arc::default(), guests }
+        Host { store, outgoing: Outgoing::default(), pads, lingering: Default::default(), net: Arc::default(), guests, pad_budget: Arc::default() }
     }
 
     fn build(&self, device: &str, out: Outbox, gate: Option<Gate>) -> Box<dyn Session> {
@@ -36,6 +38,11 @@ impl Host {
                 out.send(ServerMsg::Rumble { id, lo, hi });
             }))
             .for_device(device, self.lingering.clone())
+            .with_budget(
+                self.pad_budget.clone(),
+                if gate.is_some() { pad::Who::Friend } else { pad::Who::Owner },
+                if gate.is_some() { pad::MAX_PER_FRIEND } else { pad::MAX_CONTROLLERS },
+            )
         });
         Box::new(HostSession {
             input: input::Input::new(input::SendInputEmitter),
@@ -88,8 +95,8 @@ impl Handlers for Host {
         (!self.store.lock().unwrap().config().friends).then_some("Friends are switched off on this PC.")
     }
 
-    fn guest_session(&self, gate: &Gate, out: Outbox) -> Option<Box<dyn Session>> {
-        Some(self.build("guest", out, Some(gate.clone())))
+    fn guest_session(&self, gate: &Gate, guest: &str, out: Outbox) -> Option<Box<dyn Session>> {
+        Some(self.build(&format!("guest:{guest}"), out, Some(gate.clone())))
     }
 }
 

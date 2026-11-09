@@ -1,9 +1,11 @@
 # Guest admission boundary
 
 Host enrollment is deployed; the desktop can link/unlink the local Windows host.
-Friend streaming is still disabled. `crate::guest_grant` verifies the account grant
-format and provides a bounded, atomic one-use admission cache. It is not wired to
-an incoming transport and is not sufficient to authorize a session on its own.
+Both hosts accept friend sessions through `secpar_host_core::agent` (the `guest` first
+message). `crate::guest_grant` verifies the account grant and spends it once. A valid
+signature is not enough: the agent also checks the online lease, the friend list, the
+local Let friends connect switch, the lock state and the seat count before it starts.
+The list below is what each of those checks must keep doing.
 
 Before exposing a guest connection path:
 

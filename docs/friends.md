@@ -33,7 +33,21 @@ The host checks again with `secpar_host_core::guest_policy`. `Account::admit_gue
 - `Allow` means start without a prompt. `AskOwner` means the host must show its own consent first.
 - Each running session holds a `Gate`. Video, audio and input paths ask the gate.
 
-Windows and Linux hosts share this code. Neither host accepts friend sessions yet, so nothing calls `admit_guest`. See `docs/guest-access.md`.
+Windows and Linux hosts share this code and both accept friend sessions. See `docs/guest-access.md` for the checks and `docs/guest-client.md` for how a client connects.
+
+## Friends on a host
+
+Up to three friends can be connected at once. One friend holds one seat. A fourth friend gets `busy` and can try again when a seat opens. Friends share the PC's three streaming slots with the owner's devices.
+
+The owner wins. When the owner starts a stream, every friend is disconnected. A friend cannot start a stream while the owner streams.
+
+A friend is stopped at once when the PC locks or the lock state cannot be read, when the owner removes or blocks them, when the owner lowers them to view only (keyboard and mouse stop), or when the host cannot reach the account service for 30 seconds. The Let friends connect switch in the host settings turns all of this off, and the host stops telling the service it is available.
+
+The Friends list on the Worker shows a computer only while its host says it is online and sharing. The host says so with every heartbeat, along with the id and address of its relay Worker.
+
+## Controllers
+
+A friend's USB or Bluetooth controller appears on the host as a virtual Xbox 360 controller (ViGEm on Windows, uinput on Linux). Games read at most four, so the host keeps one count for the whole PC. A friend may use two, friends together may use three, and one slot stays free for the owner. The next `pad` is answered with `pad_limit`.
 
 ## Notifications
 

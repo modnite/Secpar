@@ -111,6 +111,8 @@ pub struct Config {
     pub max_quality: String,
     pub allow_files: bool,
     pub allow_clip: bool,
+    /// Friends may connect (they still need approval unless set to connect at any time).
+    pub friends: bool,
     pub anywhere: bool,
     pub files_dir: String,
 }
@@ -122,6 +124,7 @@ impl Default for Config {
             max_quality: "auto".into(),
             allow_files: false,
             allow_clip: true,
+            friends: true,
             anywhere: false,
             files_dir: String::new(),
         }

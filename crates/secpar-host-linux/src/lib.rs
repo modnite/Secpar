@@ -13,6 +13,8 @@ pub mod identity;
 #[cfg(target_os = "linux")]
 pub mod input;
 #[cfg(target_os = "linux")]
+pub mod lock;
+#[cfg(target_os = "linux")]
 pub mod media;
 #[cfg(target_os = "linux")]
 pub mod portal;

@@ -16,6 +16,9 @@ struct Device {
 struct State {
     name: String,
     devices: Vec<Device>,
+    /// Friends with a running session. Not paired devices.
+    #[serde(default)]
+    friends: Vec<Device>,
     locked: bool,
 }
 enum Command {
@@ -23,6 +26,7 @@ enum Command {
     Pair,
     Patch(Value),
     Revoke(String),
+    Disconnect(String),
 }
 enum Event {
     State(Result<(State, Value), String>),
@@ -87,6 +91,12 @@ impl Panel {
                                     Err(e) => Event::Error(e),
                                 }
                             }
+                            Command::Disconnect(id) => {
+                                match local_host::call("disconnect_friend", json!({"id":id})).await {
+                                    Ok(_) => Event::State(snapshot().await),
+                                    Err(e) => Event::Error(e),
+                                }
+                            }
                         };
                         if events.send(event).await.is_err() {
                             break;
@@ -110,9 +120,10 @@ impl Panel {
                     name: "Pixel 8".into(),
                     connected: false,
                 }],
+                friends: Vec::new(),
                 locked: false,
             }),
-            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"anywhere":false},"displays":[],"pad":{"ok":true,"text":"Gamepad ready"}}),
+            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"friends":true,"anywhere":false},"displays":[],"pad":{"ok":true,"text":"Gamepad ready"}}),
             error: String::new(),
             busy: false,
             pairing: sample
@@ -146,6 +157,12 @@ impl Panel {
             self.busy = false;
             match event {
                 Event::State(Ok((state, config))) => {
+                    // A friend who just connected gets a notice. The first read after launch does not.
+                    if let Some(old) = &self.state {
+                        for f in state.friends.iter().filter(|f| !old.friends.iter().any(|o| o.id == f.id)) {
+                            crate::alerts::info("Friend connected", &format!("{} is using this PC.", f.name));
+                        }
+                    }
                     self.state = Some(state);
                     self.settings = config;
                     self.error.clear();
@@ -250,6 +267,17 @@ impl Panel {
             } else if let Some(state) = self.state.clone() {
                 if state.devices.is_empty() {
                     ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
+                }
+                for friend in &state.friends {
+                    ui.horizontal(|ui| {
+                        design::dot(ui, design::ACCENT);
+                        ui.label(format!("{} (friend)", friend.name));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked() {
+                                self.send(Command::Disconnect(friend.id.clone()));
+                            }
+                        });
+                    });
                 }
                 for device in state.devices {
                     ui.horizontal(|ui| {
@@ -396,6 +424,7 @@ impl Panel {
                 ui.label(egui::RichText::new("Device access").strong());
                 self.setting_toggle(ui, &config, "allow_files", "Receive and browse files", "Allow paired devices to send files to this computer and to browse it.");
                 self.setting_toggle(ui, &config, "allow_clip", "Allow clipboard sharing", "Allow clipboard exchange with paired devices.");
+                self.setting_toggle(ui, &config, "friends", "Let friends connect", "Friends you added still need your approval unless you set them to connect at any time.");
                 ui.add_space(4.);
                 ui.horizontal(|ui| {
                     design::dot(ui, if pad_ok { design::ACCENT } else { design::MUTED });
@@ -455,6 +484,7 @@ impl Panel {
                     ui.label(egui::RichText::new("Device access").strong());
                     self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
                     self.setting_toggle(ui,&config,"allow_clip","Allow clipboard sharing","Allow clipboard exchange with paired devices.");
+                    self.setting_toggle(ui,&config,"friends","Let friends connect","Friends you added still need your approval unless you set them to connect at any time.");
                 });
                 design::surface().inner_margin(10).show(&mut columns[1], |ui| {
                     ui.set_width(ui.available_width());

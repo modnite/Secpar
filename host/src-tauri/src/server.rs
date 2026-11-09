@@ -90,6 +90,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             let Some(app) = weak.upgrade() else { break };
             let Ok(account) = &app.account else { continue };
             let owner = account.state().await.owner;
+            let presence = {
+                let store = app.store.lock().unwrap();
+                secpar_host_core::account::Presence::new(store.config().friends, store.pc_id(), crate::remote::url())
+            };
+            account.set_presence(presence).await;
             let revoked = app.store.lock().unwrap().set_account_owner(owner.clone());
             for device in revoked { app.agent.revoke(&device); }
             if let Some(owner) = owner {

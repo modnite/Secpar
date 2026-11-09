@@ -188,6 +188,21 @@ pub fn show(alert: Alert, answers: tokio::sync::mpsc::Sender<crate::account::Com
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn show(_alert: Alert, _answers: tokio::sync::mpsc::Sender<crate::account::Command>) {}
 
+/// A plain notice with no buttons. Windows hosts toast from the tray, so only Linux needs this.
+#[cfg(target_os = "linux")]
+pub fn info(title: &str, body: &str) {
+    let (title, body) = (title.to_owned(), body.to_owned());
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("notify-send")
+            .args(["-a", "Secpar", "--", &title, &body])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+}
+#[cfg(not(target_os = "linux"))]
+pub fn info(_title: &str, _body: &str) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

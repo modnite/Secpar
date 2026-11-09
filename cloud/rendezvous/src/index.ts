@@ -2,6 +2,7 @@
 // its phones, and hands out TURN credentials. Protocol: docs/remote-protocol.md.
 import { DurableObject } from "cloudflare:workers";
 import { b64urlDecode, freshTs, hostSig, phoneSig, sameHex } from "./auth";
+import { firstFrameOk, isWelcome, MAX_GUESTS, MAX_PENDING_GUESTS, PENDING_SECONDS } from "./guest";
 
 export interface Env {
   ROOM: DurableObjectNamespace<Room>;
@@ -14,7 +15,7 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    if (!["/v1/host", "/v1/phone", "/v1/turn"].includes(url.pathname)) {
+    if (!["/v1/host", "/v1/phone", "/v1/guest", "/v1/turn"].includes(url.pathname)) {
       return new Response("PC Remote rendezvous", { status: url.pathname === "/" ? 200 : 404 });
     }
     const pc = url.searchParams.get("pc") ?? "";
@@ -23,7 +24,7 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-type Attach = { role: "host" } | { role: "phone"; cid: number; dev: string };
+type Attach = { role: "host" } | { role: "phone"; cid: number; dev: string; guest?: { since: number; authed: boolean } };
 
 export class Room extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -51,6 +52,7 @@ export class Room extends DurableObject<Env> {
     const pc = q("pc")!;
     const ts = q("ts");
     const now = Math.floor(Date.now() / 1000);
+    if (url.pathname === "/v1/guest") return this.guest(req, now);
     if (!freshTs(ts, now)) return new Response("stale", { status: 401 });
 
     if (url.pathname === "/v1/host") {
@@ -117,9 +119,46 @@ export class Room extends DurableObject<Env> {
     return new Response(await r.text(), { headers: { "Content-Type": "application/json" } });
   }
 
+  // A friend's socket. No ticket: the host checks the signed grant in the first frame.
+  private async guest(req: Request, now: number): Promise<Response> {
+    if (req.headers.get("Upgrade") !== "websocket") return new Response("websocket only", { status: 426 });
+    if (!(await this.key())) return new Response("unknown pc", { status: 404 });
+    const open = this.ctx.getWebSockets("guest");
+    const pending = open.filter((g) => !((g.deserializeAttachment() as Attach & { guest?: { authed: boolean } }).guest?.authed));
+    if (open.length >= MAX_GUESTS || pending.length >= MAX_PENDING_GUESTS) return new Response("busy", { status: 429 });
+    const [client, server] = Object.values(new WebSocketPair());
+    const host = this.host();
+    if (!host) {
+      server.accept();
+      server.close(4404, "pc_offline");
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    const cid = ((await this.ctx.storage.get<number>("nextCid")) ?? 0) + 1;
+    await this.ctx.storage.put("nextCid", cid);
+    this.ctx.acceptWebSocket(server, ["phone", "guest", `c${cid}`]);
+    server.serializeAttachment({ role: "phone", cid, dev: "", guest: { since: now, authed: false } } satisfies Attach);
+    host.send(JSON.stringify({ c: cid, o: "open" }));
+    await this.ctx.storage.setAlarm(Date.now() + PENDING_SECONDS * 1000);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // Closes guest sockets the host never accepted.
+  async alarm(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    let waiting = false;
+    for (const g of this.ctx.getWebSockets("guest")) {
+      const a = g.deserializeAttachment() as Attach & { guest?: { since: number; authed: boolean } };
+      if (a.guest?.authed) continue;
+      if (now - (a.guest?.since ?? 0) >= PENDING_SECONDS - 1) g.close(4408, "not accepted");
+      else waiting = true;
+    }
+    if (waiting) await this.ctx.storage.setAlarm(Date.now() + 2000);
+  }
+
   async webSocketMessage(ws: WebSocket, msg: string | ArrayBuffer): Promise<void> {
     const a = ws.deserializeAttachment() as Attach;
     if (a.role === "phone") {
+      if (a.guest && !a.guest.authed && !firstFrameOk(msg)) return ws.close(4401, "unauthorized");
       const host = this.host();
       if (!host) return ws.close(4404, "pc_offline");
       if (typeof msg === "string") host.send(JSON.stringify({ c: a.cid, m: msg }));
@@ -150,7 +189,13 @@ export class Room extends DurableObject<Env> {
     const p = typeof e.c === "number" ? this.ctx.getWebSockets(`c${e.c}`)[0] : undefined;
     if (!p) return;
     if (e.o === "close") p.close(1000, "closed by pc");
-    else if (typeof e.m === "string") p.send(e.m);
+    else if (typeof e.m === "string") {
+      const pa = p.deserializeAttachment() as Attach;
+      if (pa.role === "phone" && pa.guest && !pa.guest.authed && isWelcome(e.m)) {
+        p.serializeAttachment({ ...pa, guest: { ...pa.guest, authed: true } } satisfies Attach);
+      }
+      p.send(e.m);
+    }
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {

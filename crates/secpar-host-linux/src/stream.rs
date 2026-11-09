@@ -96,6 +96,8 @@ pub struct Options {
     pub relay: Option<RelayProvider>,
     /// The session's virtual controllers: `pad` events that arrive over the media channel go here.
     pub pads: SharedPads,
+    /// Set for a friend: frames and input stop when it closes, and input is filtered by it.
+    pub gate: Option<secpar_host_core::guest_policy::Gate>,
 }
 /// Shared between the control connection and the media channel (both carry `pad`).
 pub type SharedPads = Arc<Mutex<Option<secpar_host_core::pad::Pads>>>;
@@ -175,6 +177,7 @@ impl Stream {
         let input_portal = portal.clone();
         let input_shared = shared.clone();
         let pads = options.pads.clone();
+        let input_gate = options.gate.clone();
         tokio::spawn(async move {
             let mut input_rx = input_rx;
             let mut target = Input::new(input_portal);
@@ -183,6 +186,10 @@ impl Stream {
                     break;
                 }
                 tokio::select! {msg=input_rx.recv()=>match msg {Some(msg)=>{
+                    // The UDP input path asks the same gate as the control connection.
+                    if let Some(g)=&input_gate {
+                        if !matches!(secpar_host_core::agent::guest::verdict(&msg,g),secpar_host_core::agent::guest::Verdict::Allow) {continue}
+                    }
                     if let Some(pad) = pad_message(&msg) {
                         pad.apply(&pads);
                         continue;
@@ -287,10 +294,14 @@ impl Stream {
         let resize = Arc::new(Mutex::new(None::<(u32, u32)>));
         let (video_resize, video_out, video_ready) = (resize.clone(), out.clone(), ready_template.clone());
         let video_shared = shared.clone();
+        let video_gate = options.gate.clone();
         std::thread::spawn(move || {
             let _guard = guard;
             let mut id = 0u32;
             while !video_shared.stop.load(Ordering::Relaxed) {
+                if video_gate.as_ref().is_some_and(|g| !g.view()) {
+                    break;
+                }
                 if video_shared.peer.lock().unwrap().is_none() {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
@@ -316,6 +327,12 @@ impl Stream {
                     keyframe: frame.key,
                     codec,
                 };
+                if video_gate.as_ref().is_some_and(|g| !g.view() || crate::lock::locked_or_unknown()) {
+                    if let Some(g) = &video_gate {
+                        g.close_because("locked");
+                    }
+                    break;
+                }
                 let packets = packetize(id, &fh, &frame.data, 15);
                 let count = packets.len().div_ceil(4).max(1);
                 let start = Instant::now();

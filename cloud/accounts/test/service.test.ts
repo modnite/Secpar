@@ -43,6 +43,7 @@ class Database {
     this.db.exec(readFileSync(new URL("../migrations/0004_owner_pairings.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0005_usernames.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0006_directory_and_friend_settings.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0007_host_presence.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -98,7 +99,12 @@ async function computer() {
     platform: "windows",
   });
   expect(r.status).toBe(201);
-  return (await r.json()).id as string;
+  const id = (await r.json()).id as string;
+  // A host that is online and sharing, so claims in these tests have somewhere to point.
+  db.db
+    .prepare("INSERT INTO host_keys(computer,thumbprint,certificate_fp,credential_hash,last_seen,sharing,pc,relay) VALUES(?,?,?,?,?,1,?,?)")
+    .run(id, `thumb-${id}`, "ab".repeat(32), `cred-${id}`, Math.floor(Date.now() / 1000), "00000000-0000-4000-8000-0000000000c1", "https://relay.example");
+  return id;
 }
 async function invitation(host: string) {
   const r = await call("/v1/requests", "bob", "POST", {
@@ -810,6 +816,7 @@ describe("host enrollment and machine scope",()=>{
   });
   it("rotates only machine credentials and revokes existing guest leases on relinking",async()=>{
     await friendship();const host=await enrolledHost();
+    await machine("/v1/host/heartbeat",host.credential,"POST",{sharing:true,pc:"00000000-0000-4000-8000-0000000000c1",relay:"https://relay.example"});
     const request=await invitation(host.computer);
     await call(`/v1/requests/${request}/approve`,"alice","POST",{permissions:["view"]});
     await call(`/v1/requests/${request}/claim`,"bob","POST");
@@ -1281,5 +1288,51 @@ describe("per-friend host settings", () => {
   });
   it("gives a host its friends only with the machine credential", async () => {
     expect((await call("/v1/host/friends", "alice")).status).toBe(401);
+  });
+});
+
+describe("host presence for friends", () => {
+  const PC = "00000000-0000-4000-8000-0000000000c1";
+  it("lists a host only while it says it is sharing and tells the claiming friend where it is", async () => {
+    await friendship();
+    const host = await enrolledHost();
+    const beat = (data?: unknown) => machine("/v1/host/heartbeat", host.credential, "POST", data);
+    expect(await (await beat()).json()).toMatchObject({ sharing: false });
+    expect(await (await call("/v1/friend-computers", "bob")).json()).toEqual([]);
+    expect((await (await beat({ sharing: true, pc: PC, relay: "https://relay.example" })).json()).sharing).toBe(true);
+    expect((await (await call("/v1/friend-computers", "bob")).json()).map((c: { id: string }) => c.id)).toEqual([host.computer]);
+    const made = await (await call("/v1/requests", "bob", "POST", { computer: host.computer, permissions: ["view"] })).json();
+    expect((await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view"] })).status).toBe(200);
+    const claimed = await (await call(`/v1/requests/${made.id}/claim`, "bob", "POST")).json();
+    expect(claimed.host).toEqual({ pc: PC, relay: "https://relay.example", fingerprint: host.certificate_fp });
+  });
+  it("refuses a claim when the host stopped sharing and keeps the grant for later", async () => {
+    await friendship();
+    const host = await enrolledHost();
+    const beat = (data?: unknown) => machine("/v1/host/heartbeat", host.credential, "POST", data);
+    await beat({ sharing: true, pc: PC, relay: "https://relay.example" });
+    const made = await (await call("/v1/requests", "bob", "POST", { computer: host.computer, permissions: ["view"] })).json();
+    await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view"] });
+    await beat({ sharing: false });
+    expect(await (await call("/v1/friend-computers", "bob")).json()).toEqual([]);
+    const refused = await call(`/v1/requests/${made.id}/claim`, "bob", "POST");
+    expect([refused.status, (await refused.json()).error]).toEqual([409, "host_not_sharing"]);
+    await beat({ sharing: true, pc: PC, relay: "https://relay.example" });
+    expect((await call(`/v1/requests/${made.id}/claim`, "bob", "POST")).status).toBe(200);
+  });
+  it("rejects presence that is not a plain https origin or a lowercase id", async () => {
+    const host = await enrolledHost();
+    const beat = (data: unknown) => machine("/v1/host/heartbeat", host.credential, "POST", data);
+    for (const bad of [
+      { sharing: true, pc: PC, relay: "http://relay.example" },
+      { sharing: true, pc: PC, relay: "https://relay.example/path" },
+      { sharing: true, pc: PC, relay: "https://user:pass@relay.example" },
+      { sharing: true, pc: PC, relay: "https://relay.example/?x=1" },
+      { sharing: true, pc: "not-an-id", relay: "https://relay.example" },
+      { sharing: true, relay: "https://relay.example" },
+    ]) {
+      expect((await beat(bad)).status).toBe(400);
+    }
+    expect(db.db.prepare("SELECT sharing FROM host_keys").get()!.sharing).toBe(0);
   });
 });
