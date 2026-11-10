@@ -70,6 +70,10 @@ class HomeModelTest {
     @Test fun `with nothing saved every account computer is listed`() {
         assertEquals(listOf("account:x"), ComputerList.rows(emptyList(), listOf(owned("x", "fp"))).map { it.key })
         assertTrue(ComputerList.rows(emptyList(), emptyList()).isEmpty())
+        val shared = com.pcremote.account.FriendComputer("f", "Studio", "linux", "o", "jamie", "always", keyboard = true, mouse = false)
+        assertEquals(listOf("friend:f"), ComputerList.rows(emptyList(), emptyList(), listOf(shared)).map { it.key })
+        assertEquals("Any time · Keyboard only", ComputerList.access(shared))
+        assertEquals("Ask first · View only", ComputerList.access(shared.copy(connect = "ask", keyboard = false)))
     }
 
     @Test fun `a card without a fingerprint never hides an account computer`() {

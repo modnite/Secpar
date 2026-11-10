@@ -146,8 +146,9 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
     return json({unlinked:true});
   }
   if(path==="/v1/friend-computers"&&method==="GET") {
-    const rows=await q(env,"SELECT c.id,c.name,c.platform,c.owner,o.handle AS owner_handle FROM computers c JOIN accounts o ON o.id=c.owner JOIN host_keys k ON k.computer=c.id JOIN friends f ON (f.a=? AND f.b=c.owner) OR (f.b=? AND f.a=c.owner) WHERE f.state='accepted' AND k.sharing=1 AND k.last_seen>? AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.owner=? AND b.blocked=c.owner) OR (b.owner=c.owner AND b.blocked=?))",me.id,me.id,now()-90,me.id,me.id).all();
-    return json(rows.results);
+    const rows=await q(env,"SELECT c.id,c.name,c.platform,c.owner,o.handle AS owner_handle,COALESCE(s.connect,'ask') AS connect,"+EFFECTIVE+" FROM computers c JOIN accounts o ON o.id=c.owner JOIN host_keys k ON k.computer=c.id JOIN friends f ON (f.a=? AND f.b=c.owner) OR (f.b=? AND f.a=c.owner) LEFT JOIN friend_settings s ON s.owner=c.owner AND s.friend=? WHERE f.state='accepted' AND k.sharing=1 AND k.last_seen>? AND NOT EXISTS(SELECT 1 FROM blocks b WHERE (b.owner=? AND b.blocked=c.owner) OR (b.owner=c.owner AND b.blocked=?))",me.id,me.id,me.id,now()-90,me.id,me.id).all();
+    // What the owner lets this account do there, so a client can say so before asking.
+    return json(flags(rows.results));
   }
   return null;
 }

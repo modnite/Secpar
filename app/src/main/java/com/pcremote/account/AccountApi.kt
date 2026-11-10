@@ -121,7 +121,9 @@ data class ConnectionRequest(val id: String, val owner: String, val guestHandle:
 enum class Answer { ALLOW_CONNECTION, DENY_CONNECTION, ACCEPT_FRIEND, DECLINE_FRIEND }
 data class OwnedComputer(val id: String, val name: String, val platform: String, val certificateFp: String?, val linked: Boolean, val online: Boolean)
 /** A computer of an accepted friend that is online and lets friends connect. */
-data class FriendComputer(val id: String, val name: String, val platform: String, val owner: String, val ownerHandle: String)
+data class FriendComputer(val id: String, val name: String, val platform: String, val owner: String, val ownerHandle: String,
+    /** What the owner lets this account do there. An older service leaves these out. */
+    val connect: String = "ask", val keyboard: Boolean = false, val mouse: Boolean = false)
 /** A request to use a friend's computer. [expires] is a Unix second. [permissions] is what the Worker kept. */
 data class AccessRequest(val id: String, val state: String, val expires: Long, val permissions: List<String>) {
     val approved get() = state == "approved"
@@ -326,7 +328,10 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
             val o = row.objectValue()
             FriendComputer(o.text("id").also { valid(UUID.matches(it)) }, o.text("name").also { valid(safeText(it, 320)) },
                 o.text("platform").also { valid(safeText(it, 16)) }, o.text("owner").also { valid(UUID.matches(it)) },
-                o.text("owner_handle").also { valid(safeText(it, 80)) })
+                o.text("owner_handle").also { valid(safeText(it, 80)) },
+                o.optionalChoice("connect", "ask", "always"),
+                (o["keyboard"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false,
+                (o["mouse"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false)
         }
     }
 

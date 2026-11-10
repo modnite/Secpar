@@ -1,5 +1,6 @@
 package com.pcremote.home
 
+import com.pcremote.account.FriendComputer
 import com.pcremote.account.OwnedComputer
 import com.pcremote.agent.AgentState
 import com.pcremote.agent.PairedPc
@@ -62,6 +63,8 @@ sealed interface ComputerRow {
     val key: String
     data class Saved(val card: PcCardUi) : ComputerRow { override val key get() = "saved:" + card.id }
     data class FromAccount(val computer: OwnedComputer) : ComputerRow { override val key get() = "account:" + computer.id }
+    /** A computer a friend shares. */
+    data class Friends(val computer: FriendComputer) : ComputerRow { override val key get() = "friend:" + computer.id }
 }
 
 object ComputerList {
@@ -69,10 +72,22 @@ object ComputerList {
      * Saved computers first, then account computers that are not already saved here. An account
      * computer counts as saved when a card carries the same certificate fingerprint.
      */
-    fun rows(cards: List<PcCardUi>, owned: List<OwnedComputer>): List<ComputerRow> {
+    fun rows(cards: List<PcCardUi>, owned: List<OwnedComputer>, shared: List<FriendComputer> = emptyList()): List<ComputerRow> {
         val known = cards.mapNotNull { it.fingerprint.takeIf(String::isNotEmpty) }.toSet()
         return cards.map { ComputerRow.Saved(it) } +
-            owned.filter { it.certificateFp == null || it.certificateFp !in known }.map { ComputerRow.FromAccount(it) }
+            owned.filter { it.certificateFp == null || it.certificateFp !in known }.map { ComputerRow.FromAccount(it) } +
+            shared.filter { s -> cards.none { it.id == s.id } && owned.none { it.id == s.id } }.map { ComputerRow.Friends(it) }
+    }
+
+    /** What the owner lets you do on a friend's computer, in the words of the Friends page. */
+    fun access(c: FriendComputer): String {
+        val control = when {
+            c.keyboard && c.mouse -> "Keyboard and mouse"
+            c.keyboard -> "Keyboard only"
+            c.mouse -> "Mouse only"
+            else -> "View only"
+        }
+        return "${if (c.connect == "always") "Any time" else "Ask first"} · $control"
     }
 
     fun status(card: PcCardUi): ComputerStatus = when {

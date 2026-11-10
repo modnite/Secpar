@@ -33,6 +33,9 @@ import com.pcremote.BuildConfig
 import com.pcremote.R
 import com.pcremote.account.AccountActions
 import com.pcremote.account.AccountUi
+import com.pcremote.account.FriendComputer
+import com.pcremote.account.FriendsConnect
+import com.pcremote.account.GuestChoices
 import com.pcremote.account.OwnedComputer
 import com.pcremote.account.SignInPanel
 import com.pcremote.agent.AgentConnection
@@ -158,7 +161,7 @@ private fun ComputersPage(
     account: AccountUi, acts: AccountActions,
 ) {
     val c = LocalMidnight.current
-    val rows = remember(cards, account.computers) { ComputerList.rows(cards, account.computers) }
+    val rows = remember(cards, account.computers, account.friendComputers) { ComputerList.rows(cards, account.computers, account.friendComputers) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = PageMargin, end = PageMargin, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item("title") {
@@ -185,6 +188,7 @@ private fun ComputersPage(
             when (row) {
                 is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)
                 is ComputerRow.FromAccount -> AccountCard(row.computer, account.connecting, acts)
+                is ComputerRow.Friends -> FriendCard(row.computer, account, acts)
             }
         }
     }
@@ -251,6 +255,22 @@ private fun AccountCard(computer: OwnedComputer, connecting: String?, acts: Acco
         CardTitle(computer.name, ComputerList.platform(computer.platform), status)
         if (connecting == computer.id) GhostButton(stringResource(R.string.pcr_cancel), acts.cancelConnect)
         else PrimaryButton(stringResource(R.string.pcr_connect), { acts.connect(computer) }, enabled = computer.linked && connecting == null)
+    }
+}
+
+/** A computer a friend shares. Connect asks with the usual choices. The owner's settings trim what they allow. */
+@Composable
+private fun FriendCard(computer: FriendComputer, account: AccountUi, acts: AccountActions) {
+    val c = LocalMidnight.current
+    val progress = account.guest?.takeIf { it.computerId == computer.id }
+    CardFrame {
+        CardTitle(computer.name, ComputerList.platform(computer.platform), ComputerStatus.ONLINE)
+        Text(FriendsConnect.owner(computer.ownerHandle) + " · " + ComputerList.access(computer), color = c.textDim,
+            style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (progress != null) {
+            Text(FriendsConnect.phaseText(progress), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+            GhostButton(FriendsConnect.CANCEL, acts.cancelFriendConnect)
+        } else PrimaryButton(stringResource(R.string.pcr_connect), { acts.connectFriend(computer, GuestChoices().permissions()) }, enabled = account.guest == null)
     }
 }
 

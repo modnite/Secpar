@@ -1332,6 +1332,11 @@ describe("host presence for friends", () => {
     expect(await (await call("/v1/friend-computers", "bob")).json()).toEqual([]);
     expect((await (await beat({ sharing: true, pc: PC, relay: "https://relay.example" })).json()).sharing).toBe(true);
     expect((await (await call("/v1/friend-computers", "bob")).json()).map((c: { id: string }) => c.id)).toEqual([host.computer]);
+    // The friend also learns what the owner lets them do there.
+    expect((await (await call("/v1/friend-computers", "bob")).json())[0]).toMatchObject({ connect: "ask", keyboard: false, mouse: false });
+    await call("/v1/friends/bob/settings", "alice", "PUT", { connect: "always", mouse: true });
+    expect((await (await call("/v1/friend-computers", "bob")).json())[0]).toMatchObject({ connect: "always", keyboard: false, mouse: true });
+    await call("/v1/friends/bob/settings", "alice", "PUT", { connect: "ask", mouse: false });
     const made = await (await call("/v1/requests", "bob", "POST", { computer: host.computer, permissions: ["view"] })).json();
     expect((await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view"] })).status).toBe(200);
     const claimed = await (await call(`/v1/requests/${made.id}/claim`, "bob", "POST")).json();

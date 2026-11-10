@@ -87,6 +87,25 @@ pub struct FriendComputer {
     #[serde(default)]
     pub platform: String,
     pub owner_handle: String,
+    /// What the owner lets this account do there. An older service leaves these out.
+    #[serde(default = "default_connect")]
+    pub connect: String,
+    #[serde(default)]
+    pub keyboard: bool,
+    #[serde(default)]
+    pub mouse: bool,
+}
+impl FriendComputer {
+    /// The owner's settings for you, in the words of the friends list.
+    pub fn access(&self) -> String {
+        let control = match (self.keyboard, self.mouse) {
+            (true, true) => "Keyboard and mouse",
+            (true, false) => "Keyboard only",
+            (false, true) => "Mouse only",
+            (false, false) => "View only",
+        };
+        format!("{} · {control}", if self.connect == "always" { "Any time" } else { "Ask first" })
+    }
 }
 /// What a friend session needs once the owner said yes. The grant works once for 60 seconds.
 pub struct Grant {
@@ -466,7 +485,7 @@ impl Panel {
         use crate::design;
         for computer in self.friend_computers.clone() {
             let platform = match computer.platform.as_str() { "windows" => "Windows", "linux" => "Linux", "macos" => "macOS", _ => "" };
-            let status = format!("@{} · Online", computer.owner_handle);
+            let status = format!("@{} · {}", computer.owner_handle, computer.access());
             let enabled = !self.busy && !self.session_open;
             let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: None, connect: Some(enabled), menu: None });
             if clicked {
