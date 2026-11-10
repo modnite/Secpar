@@ -1,0 +1,19 @@
+# Development tools for measuring the Linux host against a headless KDE session. Not part of the product.
+[package]
+name = "secpar-linux-perf"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+secpar-host-linux = { path = "../../crates/secpar-host-linux" }
+secpar-client = { path = "../../crates/secpar-client" }
+secpar-host-core = { path = "../../crates/secpar-host-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+serde_json = "1"
+gstreamer = "0.24.5"
+gstreamer-app = "0.24.5"
+libc = "0.2"
+
+[workspace]

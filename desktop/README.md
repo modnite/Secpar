@@ -41,6 +41,27 @@ The native worker pins its account origin, permits HTTPS only, refuses redirects
 Build the separate `secpar-desktop-review` binary with `--features ui-review`. Set `EFRAME_SCREENSHOT_TO` to an absolute PNG path and `SECPAR_REVIEW_SIZE` to `640x400` or `800x600`. Set `SECPAR_REVIEW_PAGE` to `computers`, `friends` or `friends-sample`. The sample page uses fictional names and says Layout sample. Screenshot mode disables account networking and credential-store access and exits after the native renderer exports the frame. Review code is excluded from ordinary builds.
 
 
+## Files
+
+The Files page browses another computer and moves files both ways. Pick a computer, press Open,
+click folders or the path above the list, and press Download on a file or folder. Upload files
+with the button or by dropping files or folders on the window. Downloads go to the Save to
+folder (default Downloads/Secpar, Change picks another). Uploads land in the computer's
+received-files folder and the row says where. Each file is checked with SHA-256 and only gets its
+final name when it matches. A computer with file transfer turned off shows that in plain words.
+Your own computer is not listed anywhere you can connect, because you cannot connect to yourself.
+
+Files the other computer offers (Send to Secpar) are saved in the same folder. While you stream to
+a computer, a quiet second connection to it receives them.
+
+Layout pages for the screenshot review: `files-sample`, `files-empty`, `files-off`, `files-closed`,
+`owned-sample` (other computers only), `owned-only-sample` (no other computers).
+To review the real page against a real host build with `--features ui-review`, set
+`SECPAR_REVIEW_PAGE=files-live`, `SECPAR_REVIEW_FILES_LINK` (a file holding a one-time pairing link),
+`SECPAR_REVIEW_FILES_SAVE` (a download folder) and `SECPAR_REVIEW_FILES_SCRIPT`, for example
+`cd:/home/me;get:notes.txt;put:/tmp/a.bin;wait:1500;idle`. The screenshot is taken when the
+script ends. `crates/secpar-client/examples/files_probe.rs` does the same transfers without a window.
+
 ## Linking the local Windows host
 
 Under Hosting → Settings → Account link, choose Link my account after signing in

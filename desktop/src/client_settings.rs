@@ -12,11 +12,13 @@ pub struct Settings {
     pub width:u32, pub height:u32, pub fps:u32, pub kbps:u32,
     pub audio:bool, pub clipboard:bool, pub shortcut:CaptureShortcut,
     pub decoder:video::Preference,
+    /// Where Files downloads go. Empty means Downloads/Secpar.
+    pub files_dir:String,
     #[serde(skip)] pub active_decoder:Option<String>,
     #[serde(skip)] note:String,
 }
 impl Default for Settings {
-    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),active_decoder:None,note:String::new()}}
+    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),files_dir:String::new(),active_decoder:None,note:String::new()}}
 }
 /// Host native first, then largest to smallest. The stream menu uses the same list.
 pub(crate) const RESOLUTIONS:[(u32,u32);6]=[(0,0),(3840,2160),(2560,1440),(1920,1080),(1280,720),(854,480)];

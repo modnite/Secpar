@@ -3923,11 +3923,13 @@ dependencies = [
 
 [[package]]
 name = "secpar-desktop"
-version = "3.16.3"
+version = "3.16.7"
 dependencies = [
+ "base64",
  "cpal",
  "dbus",
  "eframe",
+ "futures-util",
  "gilrs",
  "gstreamer",
  "gstreamer-app",
@@ -3939,6 +3941,7 @@ dependencies = [
  "opus",
  "qrcode",
  "raw-window-handle",
+ "rcgen",
  "reqwest",
  "ring",
  "rustls",
@@ -3952,13 +3955,15 @@ dependencies = [
  "sha2",
  "tauri-winres",
  "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
  "tray-icon",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "secpar-host"
-version = "3.16.3"
+version = "3.16.7"
 dependencies = [
  "base64",
  "futures-util",

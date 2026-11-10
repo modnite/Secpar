@@ -42,6 +42,10 @@ fn machine_name() -> String {
         .take(64)
         .collect()
 }
+/// The control port. Tests that must not touch a real host on this machine set `SECPAR_HOST_PORT`.
+fn host_port() -> u16 {
+    std::env::var("SECPAR_HOST_PORT").ok().and_then(|p| p.parse().ok()).filter(|p| *p != 0).unwrap_or(48999)
+}
 pub async fn call(command: &str, args: Value) -> Result<Value, String> {
     let backend = HOST
         .get_or_try_init(|| async { Backend::start(config_directory()?).await })
@@ -78,7 +82,7 @@ impl Backend {
         let account = crate::account::open(&directory, &identity.fingerprint());
         if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
         let host = Self::new(store, identity, account);
-        let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),"0.0.0.0:48999".parse().unwrap(),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on port 48999. Check whether another Secpar instance is open.")?;
+        let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),std::net::SocketAddr::from(([0, 0, 0, 0], host_port())),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on its port. Check whether another Secpar instance is open.")?;
         if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
         let mut events = handle.events();
         *host.agent.lock().unwrap() = Some(handle);
@@ -160,7 +164,7 @@ impl Backend {
         if addresses.is_empty() { return Err("Connect this computer to a network before pairing".into()); }
         let otp = self.store.lock().unwrap().owner_otp(id,owner)?;
         let mut link = url::Url::parse("secpar://pair").unwrap();
-        link.query_pairs_mut().append_pair("n",&self.name).append_pair("h",&addresses.join(",")).append_pair("p","48999").append_pair("fp",&self.identity.fingerprint()).append_pair("t",&otp);
+        link.query_pairs_mut().append_pair("n",&self.name).append_pair("h",&addresses.join(",")).append_pair("p",&host_port().to_string()).append_pair("fp",&self.identity.fingerprint()).append_pair("t",&otp);
         self.add_relay_bootstrap(&mut link);
         Ok(link.to_string())
     }
@@ -206,7 +210,7 @@ impl Backend {
                 link.query_pairs_mut()
                     .append_pair("n", &self.name)
                     .append_pair("h", &addresses.join(","))
-                    .append_pair("p", "48999")
+                    .append_pair("p", &host_port().to_string())
                     .append_pair("fp", &self.identity.fingerprint())
                     .append_pair("t", &store.new_otp());
                 drop(store);
@@ -419,6 +423,7 @@ impl OwnerSession {
                     out.send(ready);
                 }
                 Err(e) => {
+                    eprintln!("secpar: the stream could not start: {e}");
                     out.send(ServerMsg::StreamError {
                         code: "capture_failed".into(),
                         msg: e,

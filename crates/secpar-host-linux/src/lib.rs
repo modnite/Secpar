@@ -18,6 +18,7 @@ pub mod lock;
 pub mod media;
 #[cfg(target_os = "linux")]
 pub mod portal;
+pub mod pointer;
 #[cfg(target_os = "linux")]
 mod push;
 pub mod rendezvous;

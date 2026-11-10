@@ -19,11 +19,16 @@ pub fn qr_payload(name: &str, ips: &[String], port: u16, fp: &str, otp: &str) ->
     )
 }
 
+/// The most addresses a pairing link carries. The client refuses a link with more.
+pub const MAX_ADDRESSES: usize = 16;
+
 /// LAN IPv4s, best first: private ranges, then adapters with a gateway. Loopback and link-local dropped.
+/// At most [`MAX_ADDRESSES`], each once.
 pub fn rank_ips(mut ips: Vec<(Ipv4Addr, bool)>) -> Vec<String> {
     ips.retain(|(ip, _)| !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified());
     ips.sort_by_key(|(ip, gw)| (!ip.is_private(), !gw));
-    ips.into_iter().map(|(ip, _)| ip.to_string()).collect()
+    let mut seen = std::collections::HashSet::new();
+    ips.into_iter().filter(|(ip, _)| seen.insert(*ip)).map(|(ip, _)| ip.to_string()).take(MAX_ADDRESSES).collect()
 }
 
 fn version(v: &str) -> Option<Vec<u64>> {
@@ -355,6 +360,17 @@ mod tests {
             rank_ips(ips),
             vec!["192.168.0.126", "10.0.0.5", "192.168.56.1", "172.20.0.1", "100.101.1.2", "172.32.0.1"]
         );
+    }
+
+    #[test]
+    fn a_link_never_carries_more_than_the_client_accepts() {
+        let mut ips: Vec<(Ipv4Addr, bool)> = (1..=30).map(|n| (Ipv4Addr::new(172, 20, n, 1), false)).collect();
+        ips.push((Ipv4Addr::new(192, 168, 0, 126), true));
+        ips.push((Ipv4Addr::new(192, 168, 0, 126), true));
+        let listed = rank_ips(ips);
+        assert_eq!(listed.len(), MAX_ADDRESSES);
+        assert_eq!(listed[0], "192.168.0.126");
+        assert_eq!(listed.iter().filter(|a| *a == "192.168.0.126").count(), 1);
     }
 
     #[test]

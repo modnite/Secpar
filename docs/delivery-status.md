@@ -1,5 +1,71 @@
 # Secpar delivery record
 
+## SLOW CONNECTION SETUP (branch claude/slow-connect, based on 3.16.6, not released)
+
+Report: the Windows desktop took very long to connect to a Linux host (Files, previews, stream).
+Android and the Linux desktop were fast.
+
+Cause: `Connected::pair` and `reconnect` tried the addresses of a computer one after another, 6 s
+each, and the relay only after all of them. Windows waits about 21 s for a SYN to a dead address
+and the client cut that at 6 s, so every dead address cost 6 s. A Linux host listed its Docker,
+Podman and libvirt bridges and VPN addresses after the real one, and a long list made the link
+unusable (the client refuses more than 16 addresses). Android already raced its routes with a
+200 ms stagger and a 2 s limit. A Linux client waits just as long on a dead address that has a
+route (measured on OMV). The Linux desktop was probably fast against a Windows host because that host
+lists two or three live addresses (not measured from the user's laptop).
+
+Fix (client, crates/secpar-client/src/route.rs and control.rs):
+- Routes start staggered (200 ms for the first four, 100 ms after) and run side by side. A failure
+  starts the next at once. The first to finish wins and the rest are dropped.
+- A TCP connect to a LAN address stops after 2.5 s, the whole open after 5 s. The relay opens at
+  1 s, or at 0 when the last connection used it or the link asks for it. A working LAN never
+  contacts it.
+- Only one route at a time may speak after it opens, so a one-time pairing code is spent once.
+- Names (the relay) are resolved and IPv6 and IPv4 race, so a dead IPv6 route cannot hold up IPv4.
+- The route that worked is remembered per computer (in memory) and tried first next time.
+  Files, previews and the stream all go through the same code.
+- After `paired` on a LAN address the client waits 750 ms (was 2 s) for the remote-access
+  credentials. A host with remote access sends them in the same breath.
+- `Timing` holds every delay, so tests run in tens of milliseconds.
+
+Fix (hosts): the Linux host leaves out Docker, Podman, libvirt and other bridge interfaces (unless
+nothing else is left) and interfaces that are down. Both hosts cut the list to 16 and list each
+address once. The link format is unchanged. `SECPAR_HOST_PORT` lets a test host use another port.
+
+Measured, Windows client to a Linux host on OMV (isolated test host) with dead addresses ahead
+of the real one, 3 runs each, ms. Before then after.
+- 3 dead first: pair 20053, 20037, 20028 then 1373, 1378, 1370. Reconnect 18025, 18035, 18020
+  then 618, 605, 612 (new process). Same process, route remembered: 2 to 4.
+- 15 dead first (one run before): pair 92183 then 2558, 2570, 2571. Reconnect 90091 and 90156
+  then 1807, 1814, 1816.
+- Real address first, 15 bridges behind it: pair 2009 to 2021 then 759 to 769 (the rest is the
+  remote-credentials wait). Reconnect 2 to 6, unchanged.
+Installed Windows host on this PC with 3 dead addresses ahead: pair about 18030 then 617 to 621,
+reconnect 18021 to 18038 then 3 to 5. A link as the Windows host really advertises it was already
+fast and stays so (pair 8, reconnect 4).
+Linux client on OMV, 3 blackholed addresses ahead: pair 20008 to 20010 then 1355 and 1356,
+reconnect 18005 to 18008 then 1 to 2 (route remembered).
+
+Tests: route.rs (7, paused clock), control.rs route_tests (9, real sockets with listeners that
+never answer) and one name test. Not verified: the user's own laptop link (its address list is
+unknown), the relay path over the real Worker, the desktop pages on screen, the remembered route
+across app restarts (it is not stored).
+Dev tool: crates/secpar-client/examples/connect_probe.rs times pair and reconnect against a host.
+
+## DESKTOP FILES (branch claude/desktop-files, based on 3.16.4, not released)
+
+The desktop app has a Files page. Pick a computer, browse it with breadcrumbs and Back,
+download a file or folder to a save folder, upload files or folders (picker or drag and drop),
+see progress and plain errors. Files a computer offers (Send to Secpar) are received too, on the
+Files connection or on a quiet one opened while streaming. SHA-256 is checked both ways.
+Protocol and state machine: crates/secpar-client/src/files.rs (Engine, no I/O, 27 tests).
+Page: desktop/src/files.rs. Pickers: desktop/src/dialogs.rs (Windows common dialogs through
+windows-sys, kdialog or zenity on Linux). No new crates.
+The Computers page no longer lists the computer you host from.
+Verified against real hosts with crates/secpar-client/examples/files_probe.rs (250 KB, 800 KB,
+10 MB, both directions, SHA-256 compared) and through the real page with the ui-review
+live hook: Windows host on this PC and a Linux host on OMV. See desktop/README.md.
+
 ## LINUX HOST PARITY (branch feat/linux-host-parity, not released)
 
 The Linux host now offers `thumb`, `media`, `pad`, `files` and `fsbrowse` like the
@@ -849,3 +915,19 @@ This list is a work record, not a claim that the app family is complete.
   Compact600x420 and360x640 screenshots saved with synthetic names. Additional
   cancellation-generation/expiry fixes unit-tested after the instrumented gate;
   final production APK still needs rebuilding and matching native account release.
+
+- Linux host latency and resize (branch claude/linux-perf, not released). The 3.16.5
+  lag came from the VA encoders, not from the embedded pointer. They ask upstream if
+  the source is live when the caps arrive, pipewiresrc says no at that moment, and the
+  encoder then holds every frame back by four. The chain now answers that query itself.
+  Loopback pointer jump to decoded frame on the headless KDE session (Intel iHD,
+  1366x768): 223 ms before, 76 ms after (about 35 ms of that is the test decoder).
+  3.16.4 has the same delay on all content, the client drawn pointer only hid it.
+  A client size change used to reach pipewiresrc, which reconnected its stream. On a
+  virtual KWin output that resized the screen and the video stalled (3.16.4 too). The
+  source is pinned to the display size, reconfigure events stop at the queue, a VA
+  encoder gets a new chain on a size change instead of renegotiating (destroying its
+  context aborts the process on the iHD driver), and a panic in the video thread ends
+  the stream with an error. The abort itself was not reproduced here: this iHD does not
+  abort. Real Android app on emulator-5556, HEVC, nine live size changes: host stays up
+  and every size is right. Tools and numbers: test/linux-perf/README.md.

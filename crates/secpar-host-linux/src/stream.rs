@@ -1,8 +1,9 @@
 //! Owner-authenticated PRS media transport; one Linux stream at a time.
 use crate::{
     capture::{Capture, VideoOptions},
-    input::Input,
+    input::{pack_size, Input},
     now_us,
+    pointer::CursorMode,
     portal::Portal,
     store::random,
 };
@@ -21,7 +22,7 @@ use std::{
     collections::HashSet,
     net::{SocketAddr, UdpSocket},
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -101,18 +102,29 @@ pub struct Options {
 }
 /// Shared between the control connection and the media channel (both carry `pad`).
 pub type SharedPads = Arc<Mutex<Option<secpar_host_core::pad::Pads>>>;
-/// This host's IPv4 addresses, best first. The phone tries them in this order and waits two
-/// seconds on each dead one, so the order decides how fast it connects.
+/// The most addresses a pairing link carries. The client refuses a link with more.
+pub const MAX_ADDRESSES: usize = 16;
+
+/// This host's IPv4 addresses, best first, at most [`MAX_ADDRESSES`]. A client tries them side by
+/// side, but every dead one still costs a socket and, on a slow path, time.
 pub fn local_addresses() -> Vec<String> {
     let found = get_if_addrs::get_if_addrs()
         .unwrap_or_default()
         .into_iter()
+        .filter(|i| !is_down(&i.name))
         .filter_map(|i| match i.ip() {
             std::net::IpAddr::V4(ip) => Some((i.name, ip)),
             _ => None,
         })
         .collect();
     rank_addresses(found, default_route_interface().as_deref())
+}
+
+/// The kernel reports the interface as down, or its cable is out. An address stays configured
+/// on such an interface, but nothing can reach it.
+fn is_down(name: &str) -> bool {
+    std::fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+        .is_ok_and(|state| matches!(state.trim(), "down" | "lowerlayerdown" | "notpresent"))
 }
 
 /// Interfaces a phone cannot be on: containers, VMs and their bridges.
@@ -123,12 +135,16 @@ fn is_virtual(name: &str) -> bool {
 }
 
 /// Loopback and link-local dropped. Real network first, private ranges before others, the default
-/// route's interface first of those; container bridges last. Stable, so each address appears once.
+/// route's interface first of those. Container and VM bridges are left out, unless nothing else is
+/// left. Stable, so each address appears once, and cut to [`MAX_ADDRESSES`].
 pub fn rank_addresses(mut found: Vec<(String, std::net::Ipv4Addr)>, default: Option<&str>) -> Vec<String> {
     found.retain(|(_, ip)| !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local());
+    if found.iter().any(|(name, _)| !is_virtual(name)) {
+        found.retain(|(name, _)| !is_virtual(name));
+    }
     found.sort_by_key(|(name, ip)| (is_virtual(name), !ip.is_private(), Some(name.as_str()) != default));
     let mut seen = HashSet::new();
-    found.into_iter().filter(|(_, ip)| seen.insert(*ip)).map(|(_, ip)| ip.to_string()).collect()
+    found.into_iter().filter(|(_, ip)| seen.insert(*ip)).map(|(_, ip)| ip.to_string()).take(MAX_ADDRESSES).collect()
 }
 
 /// The interface the IPv4 default route leaves through, from `/proc/net/route`.
@@ -150,7 +166,7 @@ mod address_order_tests {
     }
 
     #[test]
-    fn real_network_comes_first_and_bridges_last() {
+    fn real_network_comes_first_and_bridges_are_left_out() {
         let found = vec![
             ("docker0".into(), ip("172.17.0.1")),
             ("lo".into(), ip("127.0.0.1")),
@@ -159,12 +175,27 @@ mod address_order_tests {
             ("enp0s25".into(), ip("10.0.0.5")),
             ("wlan0".into(), ip("169.254.3.4")),
             ("br-1a2b".into(), ip("172.18.0.1")),
+            ("virbr0".into(), ip("192.168.122.1")),
         ];
-        assert_eq!(
-            rank_addresses(found.clone(), Some("wlan0")),
-            ["192.168.1.20", "10.0.0.5", "100.101.102.103", "172.17.0.1", "172.18.0.1"]
-        );
+        assert_eq!(rank_addresses(found.clone(), Some("wlan0")), ["192.168.1.20", "10.0.0.5", "100.101.102.103"]);
         assert_eq!(rank_addresses(found, None)[0], "192.168.1.20", "without a default route the order is stable");
+    }
+
+    #[test]
+    fn bridges_are_kept_when_they_are_all_there_is() {
+        let found = vec![("docker0".into(), ip("172.17.0.1")), ("lo".into(), ip("127.0.0.1")), ("br-1a2b".into(), ip("172.18.0.1"))];
+        assert_eq!(rank_addresses(found, None), ["172.17.0.1", "172.18.0.1"]);
+    }
+
+    #[test]
+    fn a_link_never_carries_more_than_the_client_accepts() {
+        let mut found: Vec<(String, std::net::Ipv4Addr)> = (1..=40).map(|n| (format!("eth{n}"), ip(&format!("10.1.{n}.1")))).collect();
+        found.extend((1..=30).map(|n| (format!("br-{n}"), ip(&format!("172.20.{n}.1")))));
+        let listed = rank_addresses(found, Some("eth7"));
+        assert_eq!(listed.len(), MAX_ADDRESSES);
+        assert_eq!(listed[0], "10.1.7.1", "the default route's address survives the cut as the first");
+        // Pairing::parse in the client refuses more than 16, so a longer list would make the whole link unusable.
+        assert!(listed.len() <= 16);
     }
 
     #[test]
@@ -234,11 +265,13 @@ impl Stream {
         let (input, input_rx) = mpsc::channel::<ClientMsg>(128);
         let input_portal = portal.clone();
         let input_shared = shared.clone();
+        let picture = Arc::new(AtomicU64::new(pack_size(width, height)));
+        let input_picture = picture.clone();
         let pads = options.pads.clone();
         let input_gate = options.gate.clone();
         tokio::spawn(async move {
             let mut input_rx = input_rx;
-            let mut target = Input::new(input_portal);
+            let mut target = Input::new(input_portal, input_picture);
             loop {
                 if input_shared.stop.load(Ordering::Relaxed) {
                     break;
@@ -351,63 +384,80 @@ impl Stream {
         };
         let resize = Arc::new(Mutex::new(None::<(u32, u32)>));
         let (video_resize, video_out, video_ready) = (resize.clone(), out.clone(), ready_template.clone());
+        let video_picture = picture.clone();
         let video_shared = shared.clone();
         let video_gate = options.gate.clone();
         std::thread::spawn(move || {
             let _guard = guard;
-            let mut id = 0u32;
-            while !video_shared.stop.load(Ordering::Relaxed) {
-                if video_gate.as_ref().is_some_and(|g| !g.view()) {
-                    break;
-                }
-                if video_shared.peer.lock().unwrap().is_none() {
-                    std::thread::sleep(Duration::from_millis(5));
-                    continue;
-                }
-                if let Some(wanted) = video_resize.lock().unwrap().take() {
-                    // the encoder renegotiates on the new size and opens with a keyframe
-                    if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
-                        video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
-                        video_shared.idr.store(true, Ordering::Relaxed);
+            let failed = video_out.clone();
+            let ended = video_shared.clone();
+            // A panic in here must end this stream and say why. It would otherwise end only this thread and leave the
+            // session open with a picture that never moves.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let mut id = 0u32;
+                while !video_shared.stop.load(Ordering::Relaxed) {
+                    if video_gate.as_ref().is_some_and(|g| !g.view()) {
+                        break;
                     }
-                }
-                if video_shared.idr.swap(false, Ordering::Relaxed) {
-                    capture.request_keyframe();
-                }
-                let frame = match capture.next_frame(Duration::from_millis(100)) {
-                    Ok(Some(f)) => f,
-                    Ok(None) => continue,
-                    Err(_) => break,
-                };
-                let fh = FrameHeader {
-                    len: frame.data.len() as u32,
-                    capture_us: frame.capture_us,
-                    keyframe: frame.key,
-                    codec,
-                };
-                if video_gate.as_ref().is_some_and(|g| !g.view() || crate::lock::locked_or_unknown()) {
-                    if let Some(g) = &video_gate {
-                        g.close_because("locked");
+                    if video_shared.peer.lock().unwrap().is_none() {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
                     }
-                    break;
-                }
-                let packets = packetize(id, &fh, &frame.data, 15);
-                let count = packets.len().div_ceil(4).max(1);
-                let start = Instant::now();
-                for (index, chunk) in packets.chunks(count).enumerate() {
-                    if let Some(wait) = (start + Duration::from_millis(index as u64))
-                        .checked_duration_since(Instant::now())
-                    {
-                        std::thread::sleep(wait)
+                    if let Some(wanted) = video_resize.lock().unwrap().take() {
+                        // the encoder renegotiates on the new size and opens with a keyframe
+                        if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
+                            eprintln!("secpar: stream is now {w}x{h} (asked for {}x{})", wanted.0, wanted.1);
+                            video_picture.store(pack_size(w, h), Ordering::Relaxed);
+                            video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
+                            video_shared.idr.store(true, Ordering::Relaxed);
+                        }
                     }
-                    for (h, p) in chunk {
-                        video_shared.send(*h, p)
+                    if video_shared.idr.swap(false, Ordering::Relaxed) {
+                        capture.request_keyframe();
                     }
+                    let frame = match capture.next_frame(Duration::from_millis(100)) {
+                        Ok(Some(f)) => f,
+                        Ok(None) => continue,
+                        Err(error) => return Some(error),
+                    };
+                    let fh = FrameHeader {
+                        len: frame.data.len() as u32,
+                        capture_us: frame.capture_us,
+                        keyframe: frame.key,
+                        codec,
+                    };
+                    if video_gate.as_ref().is_some_and(|g| !g.view() || crate::lock::locked_or_unknown()) {
+                        if let Some(g) = &video_gate {
+                            g.close_because("locked");
+                        }
+                        break;
+                    }
+                    let packets = packetize(id, &fh, &frame.data, 15);
+                    let count = packets.len().div_ceil(4).max(1);
+                    let start = Instant::now();
+                    for (index, chunk) in packets.chunks(count).enumerate() {
+                        if let Some(wait) = (start + Duration::from_millis(index as u64))
+                            .checked_duration_since(Instant::now())
+                        {
+                            std::thread::sleep(wait)
+                        }
+                        for (h, p) in chunk {
+                            video_shared.send(*h, p)
+                        }
+                    }
+                    id = id.wrapping_add(1);
                 }
-                id = id.wrapping_add(1);
+                None
+            }));
+            let why = match outcome {
+                Ok(error) => error,
+                Err(_) => Some("Desktop capture stopped unexpectedly.".to_string()),
+            };
+            if let Some(why) = why {
+                failed.send(ServerMsg::error("capture_failed", &why, Some("stream.start")));
             }
-            video_shared.stop.store(true, Ordering::Relaxed);
-            video_shared.send(header(Type::Bye, 0), &[]);
+            ended.stop.store(true, Ordering::Relaxed);
+            ended.send(header(Type::Bye, 0), &[]);
         });
         if options.audio {
             let audio_shared = shared.clone();
@@ -422,8 +472,11 @@ impl Stream {
                 }
             });
         }
-        // The portal hides the pointer in the video; clients draw this one at the position we send.
-        out.send(ServerMsg::CursorShape { png: STANDARD.encode(include_bytes!("arrow.png")), hx: 1, hy: 1 });
+        // When the frames carry no pointer, clients draw this one at the position we send. When they do,
+        // the video already shows the real pointer and a second one would be a fake.
+        if portal.cursor == CursorMode::Hidden {
+            out.send(ServerMsg::CursorShape { png: STANDARD.encode(include_bytes!("arrow.png")), hx: 1, hy: 1 });
+        }
         out.send(ServerMsg::StreamDisplays {
             list: vec![Display {
                 id: "portal".into(),

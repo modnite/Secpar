@@ -1,31 +1,50 @@
 //! Input is confined to the exact consented portal session used for capture.
 use crate::portal::Portal;
 use ashpd::desktop::remote_desktop::{Axis, KeyState};
+use crate::pointer::{absolute, to_stream, CursorMode, Space, Tracker};
 use secpar_host_core::proto::ClientMsg;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 pub struct Input {
     portal: Arc<Portal>,
     keys: BTreeSet<i32>,
     buttons: BTreeSet<i32>,
-    /// Where the remote pointer is, in stream pixels, and whether it moved since the last `take_pos`.
-    pos: (f64, f64),
-    moved: bool,
+    /// Where the remote pointer is. Only reported to the client when the frames do not carry it.
+    tracker: Tracker,
+    /// The encoded picture size, which follows live resizes.
+    stream: Arc<AtomicU64>,
+}
+/// A picture size shared between the video thread and the input task.
+pub fn pack_size(w: u32, h: u32) -> u64 {
+    (w as u64) << 32 | h as u64
 }
 impl Input {
-    pub fn new(portal: Arc<Portal>) -> Self {
+    pub fn new(portal: Arc<Portal>, stream: Arc<AtomicU64>) -> Self {
         Self {
+            tracker: Tracker::new((portal.width, portal.height)),
             portal,
             keys: BTreeSet::new(),
             buttons: BTreeSet::new(),
-            pos: (0.0, 0.0),
-            moved: false,
+            stream,
         }
     }
-    /// The pointer position once after it moved: the client draws the cursor itself (the portal
-    /// hides it in the video, so it can't trail the real pointer by the video latency).
+    /// The pointer position in stream pixels once after it moved. None when the compositor paints the
+    /// pointer into the video itself: the client must then draw nothing of its own.
     pub fn take_pos(&mut self) -> Option<(i32, i32)> {
-        std::mem::take(&mut self.moved).then(|| (self.pos.0.round() as i32, self.pos.1.round() as i32))
+        let pos = self.tracker.take()?;
+        if self.portal.cursor == CursorMode::Embedded {
+            return None;
+        }
+        let packed = self.stream.load(Ordering::Relaxed);
+        let stream = ((packed >> 32) as u32, packed as u32);
+        let space = Space { logical: (self.portal.width, self.portal.height), stream };
+        Some(to_stream(pos, &space))
     }
     pub async fn apply(&mut self, message: ClientMsg) -> Result<(), String> {
         if self.portal.is_closed() {
@@ -42,24 +61,26 @@ impl Input {
         };
         let result = match message.sanitize() {
             ClientMsg::MouseMove { dx, dy } => {
-                let (w, h) = (p.width.saturating_sub(1) as f64, p.height.saturating_sub(1) as f64);
-                self.pos = ((self.pos.0 + dx as f64).clamp(0.0, w), (self.pos.1 + dy as f64).clamp(0.0, h));
-                self.moved = true;
+                // The compositor will not say where its pointer is, so a relative move is only
+                // followed from a place we put it: the middle of the monitor, once per session.
+                if !self.tracker.known() && self.portal.cursor == CursorMode::Hidden {
+                    let center = self.tracker.center();
+                    p.remote
+                        .notify_pointer_motion_absolute(s, p.node_id, center.0, center.1, Default::default())
+                        .await
+                        .map_err(|_| "The desktop portal rejected remote input.")?;
+                    self.tracker.set(center);
+                }
+                self.tracker.relative(dx, dy);
                 p.remote
                     .notify_pointer_motion(s, dx as f64, dy as f64, Default::default())
                     .await
             }
             ClientMsg::MousePos { x, y } => {
-                self.pos = (x as f64 * p.width.saturating_sub(1) as f64, y as f64 * p.height.saturating_sub(1) as f64);
-                self.moved = true;
+                let (ax, ay) = absolute(x, y, (p.width, p.height));
+                self.tracker.set((ax, ay));
                 p.remote
-                    .notify_pointer_motion_absolute(
-                        s,
-                        p.node_id,
-                        x as f64 * (p.width.saturating_sub(1)) as f64,
-                        y as f64 * (p.height.saturating_sub(1)) as f64,
-                        Default::default(),
-                    )
+                    .notify_pointer_motion_absolute(s, p.node_id, ax, ay, Default::default())
                     .await
             }
             ClientMsg::MouseButton { b, down } => {
