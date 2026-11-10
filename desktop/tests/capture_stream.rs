@@ -63,6 +63,7 @@ fn record(name: &str, codec: &str, w: u32, h: u32, seconds: u64) -> Vec<(bool, V
     let mut assembler = secpar_client::receiver::Assembler::default();
     let mut out: Vec<(bool, Vec<u8>)> = Vec::new();
     let mut arrivals: Vec<u64> = Vec::new();
+    let mut capture_ages: Vec<u64> = Vec::new();
     let mut last_arrival: Option<Instant> = None;
     let mut drop_first_key = std::env::var_os("SECPAR_CAPTURE_DROP_FIRST_KEYFRAME").is_some();
     let (mut last_probe, mut last_idr, mut keyed) = (Instant::now() - Duration::from_secs(1), Instant::now() - Duration::from_secs(1), false);
@@ -91,6 +92,9 @@ fn record(name: &str, codec: &str, w: u32, h: u32, seconds: u64) -> Vec<(bool, V
                 keyed = true;
             }
             if keyed {
+                if fh.capture_us > 0 {
+                    capture_ages.push(pc_remote_host::engine::now_us().saturating_sub(fh.capture_us));
+                }
                 let now = Instant::now();
                 if let Some(prev) = last_arrival.replace(now) {
                     arrivals.push(now.duration_since(prev).as_micros() as u64);
@@ -100,6 +104,14 @@ fn record(name: &str, codec: &str, w: u32, h: u32, seconds: u64) -> Vec<(bool, V
         }
     }
     drop(session);
+    // Host and receiver share a monotonic clock in this local fixture. This
+    // includes encoding, packet creation, sending and frame reconstruction.
+    let mut ages:Vec<_>=capture_ages.into_iter().skip(120).collect();
+    if !ages.is_empty() {
+        ages.sort_unstable();let n=ages.len();
+        let get=|p:f64|ages[((n-1) as f64*p).round() as usize];
+        eprintln!("{name} capture_to_receive.steady: n={n} p50={}us p95={}us p99={}us max={}us",get(0.5),get(0.95),get(0.99),ages[n-1]);
+    }
     if !arrivals.is_empty() {
         let mut sorted = arrivals.clone();
         sorted.sort_unstable();
