@@ -61,6 +61,10 @@ fn abs_info(fd: &OwnedFd, code: u16) -> Option<AbsInfo> {
     Some(AbsInfo { value: a.value, min: a.minimum, max: a.maximum, flat: a.flat })
 }
 
+fn is_uinput_path(sys_path: &str) -> bool {
+    sys_path.contains("/devices/virtual/input/")
+}
+
 struct Dev {
     fd: OwnedFd,
     key: u64,
@@ -75,8 +79,9 @@ struct Dev {
 impl Dev {
     fn open(path: &str, key: u64, allow_virtual: Option<&str>) -> Option<Dev> {
         let name = path.rsplit('/').next()?;
-        // Virtual devices (uinput, including Secpar's own host pads) live under /devices/virtual.
-        if allow_virtual.is_none() && fs::canonicalize(format!("/sys/class/input/{name}")).ok()?.to_string_lossy().contains("/devices/virtual/") {
+        // uinput devices (Secpar's own host pads, Steam Input) live under /devices/virtual/input.
+        // Bluetooth pads come through uhid under /devices/virtual/misc/uhid and must be kept.
+        if allow_virtual.is_none() && is_uinput_path(&fs::canonicalize(format!("/sys/class/input/{name}")).ok()?.to_string_lossy()) {
             return None;
         }
         let c = std::ffi::CString::new(path).ok()?;
@@ -264,5 +269,17 @@ impl Source for Evdev {
         for d in &mut self.devices {
             d.rumble(0, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_uinput_path;
+
+    #[test]
+    fn only_uinput_is_skipped_not_bluetooth() {
+        assert!(is_uinput_path("/sys/devices/virtual/input/input23/event21"));
+        assert!(!is_uinput_path("/sys/devices/virtual/misc/uhid/0005:054C:0CE6.0003/input/input30/event25"));
+        assert!(!is_uinput_path("/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2/input/input5/event4"));
     }
 }
