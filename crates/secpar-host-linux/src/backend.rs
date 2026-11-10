@@ -75,6 +75,9 @@ impl Backend {
         let account = crate::account::open(&directory, &identity.fingerprint());
         if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
         let host = Self::new(store, identity, account);
+        // The first look at the GStreamer plugin registry takes a while. Every `welcome` lists the
+        // host's capabilities, so without this the first device to connect waits for it.
+        tokio::task::spawn_blocking(|| { let _ = thumb::available(); });
         let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),std::net::SocketAddr::from(([0, 0, 0, 0], host_port())),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on its port. Check whether another Secpar instance is open.")?;
         if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
         *host.agent.lock().unwrap() = Some(handle);

@@ -674,7 +674,11 @@ fn walk(dir: &Path, prefix: &str, out: &mut Vec<(PathBuf, String)>) {
 /// Runs one connection until `Request::Stop`, the request channel closing or the socket dropping.
 /// Everything the UI needs arrives as `Notice`s; `wake` is called after each batch.
 pub async fn run(conn: Connected, save_dir: PathBuf, mut requests: mpsc::UnboundedReceiver<Request>, notices: mpsc::UnboundedSender<Notice>, wake: Arc<dyn Fn() + Send + Sync>) {
-    let Connected { socket, caps, .. } = conn;
+    let Connected { socket, caps, computer, .. } = conn;
+    let log = crate::connlog::Conn::new(&computer.id);
+    // The first folder listing is what the person waits for: time from asking to the reply.
+    let mut first_asked: Option<std::time::Instant> = None;
+    let mut listed_once = false;
     let (mut tx, mut rx) = socket.split();
     let have = |c: &str| caps.is_empty() || caps.iter().any(|x| x == c);
     let _ = notices.send(Notice::Ready { browse: have("fsbrowse"), upload: have("files") });
@@ -689,11 +693,22 @@ pub async fn run(conn: Connected, save_dir: PathBuf, mut requests: mpsc::Unbound
             biased;
             request = requests.recv() => match request {
                 None | Some(Request::Stop) => { stop = true; outs = engine.request(Request::Stop); }
-                Some(r) => outs = engine.request(r),
+                Some(r) => {
+                    if first_asked.is_none() && !listed_once && matches!(r, Request::List(_)) {
+                        first_asked = Some(std::time::Instant::now());
+                        listed_once = true;
+                    }
+                    outs = engine.request(r)
+                }
             },
             message = rx.next() => match message {
                 Some(Ok(Message::Text(t))) => match serde_json::from_str::<Value>(&t) {
-                    Ok(v) => outs = engine.on_text(&v),
+                    Ok(v) => {
+                        if let Some(asked) = first_asked.take_if(|_| matches!(v["t"].as_str(), Some("fs.list" | "error"))) {
+                            log.step("first_reply", v["t"].as_str().unwrap_or(""), asked);
+                        }
+                        outs = engine.on_text(&v)
+                    }
                     Err(_) => {}
                 },
                 Some(Ok(Message::Binary(b))) => outs = engine.on_binary(&b),

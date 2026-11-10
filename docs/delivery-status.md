@@ -931,3 +931,14 @@ This list is a work record, not a claim that the app family is complete.
   the stream with an error. The abort itself was not reproduced here: this iHD does not
   abort. Real Android app on emulator-5556, HEVC, nine live size changes: host stays up
   and every size is right. Tools and numbers: test/linux-perf/README.md.
+
+- Files page slow through the account path (branch claude/files-slow, not released). The
+  LAN connection itself takes 40 to 60 ms from a Windows PC to a Linux host (TLS, upgrade
+  and hello are each a few ms). The time went into the account path around it: every
+  Open asked the account for the computer list first, the account worker held commands
+  behind a 30 s sync, pairing was polled every 2 to 3 s, and a second connection was made
+  next to the preview's. Now a saved credential connects at once, the sync and pairing
+  run beside commands, pairing is automatic in the background (300 ms polls), the Files
+  page takes the preview's connection, LAN addresses on this network start first and the
+  last working route is kept on disk. A timing log (docs/account-owned-access.md) shows
+  every step. Numbers and what was not measured are in the commit message.
