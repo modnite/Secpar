@@ -218,7 +218,7 @@ impl Worker {
                 };
                 let began=Instant::now();
                 let codec=frame.header.codec;
-                let mut decoded = if decoder.is_hardware() && !started && !nal::has_parameter_sets(codec,&frame.data) {
+                let mut decoded = if cfg!(windows) && decoder.is_hardware() && !started && !nal::has_parameter_sets(codec,&frame.data) {
                     Err(DecodeError::Invalid)
                 } else {decoder.decode(&frame.data,codec)};
                 if decoder.is_hardware() && budget.exceeded(began.elapsed()) {
@@ -245,7 +245,8 @@ impl Worker {
                     Err(error) => {
                         started=false;
                         if error==DecodeError::Invalid {bad_run+=1;}
-                        if decoder.is_hardware() && (error==DecodeError::Device || bad_run>=3) {
+                        // Linux keeps its old rule: any hardware failure switches to software.
+                        if decoder.is_hardware() && (error==DecodeError::Device || bad_run>=3 || !cfg!(windows)) {
                             bad_run=0;
                             match Backend::new(Preference::Software) {
                                 Ok(software)=>decoder=software,
