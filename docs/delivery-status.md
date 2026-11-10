@@ -1035,3 +1035,15 @@ User playback acceptance: controller input latency improved, but frame pacing is
 still uneven on Linux AND Android when playing games from the Windows host.
 Direct decoder delivery is not a complete pacing fix. Compare shared Windows
 capture/encoding cadence and packet arrival before assuming a Linux-only cause.
+
+## Android audio recovery follow-up (private candidate)
+Android playback no longer flushes solely because AudioTrack's cumulative underrun
+counter increases. Fresh PCM resumes through the existing track; capture-age and
+queue deadlines still bound latency, and stale audio and codec failures retain
+recovery paths. The shared deadline replaces the earlier 40 ms age-only discard.
+All five real Android decoder/output tests passed, including three-minute playback,
+silence, video switching, decoder failure and exact decoded-sample preservation.
+Physical Galaxy S23 validation: steady speaker volume and no cutouts, confirmed
+again by the user. Preserve this audio baseline while addressing frame pacing.
+The private candidate is not a public release. Frame pacing remains unresolved;
+keep the next public release on hold pending its validation.
