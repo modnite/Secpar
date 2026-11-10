@@ -10,6 +10,31 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// Active outgoing file workers for one connection. Cancellation is checked before every chunk.
+#[derive(Default)]
+pub struct Sending(std::sync::Arc<std::sync::Mutex<HashMap<String, std::sync::Weak<std::sync::atomic::AtomicBool>>>>);
+impl Sending {
+    pub fn start(&self, id: &str) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut workers = self.0.lock().unwrap();
+        workers.retain(|_, weak| weak.strong_count() > 0);
+        workers.insert(id.into(), std::sync::Arc::downgrade(&alive));
+        alive
+    }
+    pub fn cancel(&self, id: &str) {
+        if let Some(alive) = self.0.lock().unwrap().remove(id).and_then(|weak| weak.upgrade()) {
+            alive.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+impl Drop for Sending {
+    fn drop(&mut self) {
+        for (_, weak) in self.0.lock().unwrap().drain() {
+            if let Some(alive) = weak.upgrade() { alive.store(false, std::sync::atomic::Ordering::Release); }
+        }
+    }
+}
+
 /// Chunk payload size, per protocol (≤ 256 KiB).
 pub const CHUNK: usize = 256 * 1024;
 
@@ -239,7 +264,7 @@ fn offer_as(outgoing: &Outgoing, path: &Path, name: String) -> std::io::Result<S
     let size = std::fs::metadata(path)?.len();
     let id = format_uuid(&random_id());
     outgoing.lock().unwrap().insert(id.clone(), path.to_path_buf());
-    Ok(ServerMsg::FileOffer { id, name, size })
+    Ok(ServerMsg::FileOffer { id, name, size, batch: None })
 }
 
 /// Most files one folder download offers.
@@ -322,6 +347,33 @@ pub fn stream(path: &Path, id: &[u8; 16], offset: u64, send: &mut dyn FnMut(Vec<
 mod tests {
     use super::*;
     
+    #[test]
+    fn cancelling_an_active_file_stops_chunks_and_keeps_other_sessions_and_later_files() {
+        use std::sync::atomic::Ordering;
+        let sending = Sending::default();
+        let other_session = Sending::default();
+        let active = sending.start("same-id");
+        let other = other_session.start("same-id");
+        let path = tmp("cancel-stream");
+        std::fs::write(&path, vec![3; CHUNK * 3]).unwrap();
+        let mut sent = 0;
+        let result = stream(&path, &[1; 16], 0, &mut |_| {
+            if !active.load(Ordering::Acquire) { return false; }
+            sent += 1;
+            sending.cancel("same-id");
+            true
+        });
+        assert!(result.is_err());
+        assert_eq!(sent, 1, "the cancelled worker must not send another chunk");
+        assert!(other.load(Ordering::Acquire));
+        let later = sending.start("later");
+        assert!(later.load(Ordering::Acquire));
+        drop(sending);
+        assert!(!later.load(Ordering::Acquire), "disconnect also stops outgoing file workers");
+        assert!(other.load(Ordering::Acquire));
+        std::fs::remove_file(path).unwrap();
+    }
+
     fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("secpar-core-files-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);

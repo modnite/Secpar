@@ -2,7 +2,7 @@
 //! assets/icons/lucide. Rasterized from SVG; tinted after DPI-aware downsampling.
 use eframe::egui::{self,Color32,Rect,TextureHandle,TextureOptions};
 #[derive(Clone,Copy,Debug)]
-pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back,Check,Chevron,Keyboard,Mouse,Refresh,SignIn,Download}
+pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back,Check,Chevron,Keyboard,Mouse,Refresh,SignIn,Download,Upload,Folder,File,Close}
 impl Icon {
     fn png(self)->&'static [u8] {match self {
         Self::Window=>include_bytes!("../../assets/icons/lucide/png/maximize.png"),
@@ -21,6 +21,10 @@ impl Icon {
         Self::Refresh=>include_bytes!("../../assets/icons/lucide/png/refresh-cw.png"),
         Self::SignIn=>include_bytes!("../../assets/icons/lucide/png/log-in.png"),
         Self::Download=>include_bytes!("../../assets/icons/lucide/png/download.png"),
+        Self::Upload=>include_bytes!("../../assets/icons/lucide/png/upload.png"),
+        Self::Folder=>include_bytes!("../../assets/icons/lucide/png/folder.png"),
+        Self::File=>include_bytes!("../../assets/icons/lucide/png/file.png"),
+        Self::Close=>include_bytes!("../../assets/icons/lucide/png/x.png"),
         Self::Mouse=>include_bytes!("../../assets/icons/lucide/png/mouse.png"),
     }}
 }

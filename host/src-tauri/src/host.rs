@@ -61,6 +61,7 @@ impl Host {
             store: self.store.clone(),
             incoming: files::incoming(dir.into()),
             outgoing: self.outgoing.clone(),
+            sending: Default::default(),
             clip: None,
             sid: u64::from_le_bytes(crate::store::random::<8>()),
             pads: Arc::new(Mutex::new(pads)),
@@ -82,7 +83,7 @@ impl Handlers for Host {
     }
 
     fn caps(&self) -> Vec<String> {
-        let mut c: Vec<String> = ["input", "power", "media", "files", "clip", "thumb", "net", "stream", "unlock", "fsbrowse"].map(String::from).to_vec();
+        let mut c: Vec<String> = ["input", "power", "media", "files", "clip", "thumb", "net", "stream", "unlock", "fsbrowse", "fsbatch"].map(String::from).to_vec();
         if self.bus().is_some() {
             c.push("pad".into());
         }
@@ -117,6 +118,7 @@ pub struct HostSession {
     store: Arc<Mutex<Store>>,
     incoming: Incoming,
     outgoing: Outgoing,
+    sending: secpar_host_core::files::Sending,
     clip: Option<tokio::task::JoinHandle<()>>,
     /// Tags this phone's clipboard writes so they are not echoed back to it.
     sid: u64,
@@ -365,9 +367,10 @@ impl Session for HostSession {
                     return Some(ServerMsg::FileError { id, code: "denied".into() });
                 };
                 let out = self.out.clone();
+                let alive = self.sending.start(&id);
                 tokio::task::spawn_blocking(move || {
                     let Some(key) = files::parse_uuid(&id) else { return };
-                    match files::stream(&path, &key, offset, &mut |f| out.send_bin_blocking(f)) {
+                    match files::stream(&path, &key, offset, &mut |f| alive.load(std::sync::atomic::Ordering::Acquire) && out.send_bin_blocking(f)) {
                         Ok(sha256) => out.send_after_bin_blocking(ServerMsg::FileEnd { id, sha256 }),
                         Err(_) => out.send(ServerMsg::FileError { id, code: "denied".into() }),
                     };
@@ -379,6 +382,7 @@ impl Session for HostSession {
                 None
             }
             ClientMsg::FileCancel { id } => {
+                self.sending.cancel(&id);
                 self.incoming.cancel(&id);
                 self.outgoing.lock().unwrap().remove(&id);
                 None
@@ -392,13 +396,14 @@ impl Session for HostSession {
                     Err(e) => err("denied", &e.to_string()),
                 }
             }
-            ClientMsg::FsGet { path } => {
+            ClientMsg::FsGet { path, batch } => {
                 if !self.store.lock().unwrap().config().allow_files {
                     return err("unsupported", "file transfer is off on this PC");
                 }
                 let (outgoing, out) = (self.outgoing.clone(), self.out.clone());
                 tokio::task::spawn_blocking(move || match files::offer_tree(&outgoing, std::path::Path::new(&path)) {
-                    Ok(offers) => offers.into_iter().for_each(|m| {
+                    Ok(offers) => offers.into_iter().for_each(|mut m| {
+                        if let ServerMsg::FileOffer { batch: tag, .. } = &mut m { *tag = batch; }
                         out.send(m);
                     }),
                     Err(e) => {

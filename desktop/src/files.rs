@@ -2,7 +2,7 @@
 //! connection per open computer, like the previews. All protocol work is in
 //! `secpar_client::files`. This module keeps the page state and draws it.
 use crate::account::OwnedConnection;
-use crate::{design, dialogs};
+use crate::{design, dialogs, icons::{self, Icon}};
 use eframe::egui::{self, Color32, RichText};
 use secpar_client::control::{Computer, Connected};
 use secpar_client::files::{self as proto, Entry, Notice, Phase, Request, Transfer};
@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 /// no failure can leave it connecting for good.
 const PENDING_LIMIT: Duration = Duration::from_secs(135);
 
-const ROW: f32 = 30.;
+const ROW: f32 = 36.;
 /// Transfer rows shown at once. The rest are counted.
 const VISIBLE: usize = 3;
 /// Finished and failed rows kept, newest last.
@@ -26,7 +26,7 @@ const SMALL: f32 = 12.;
 /// Height of the buttons inside list and transfer rows.
 const SMALL_BUTTON: f32 = 24.;
 /// Height of the first line of a transfer row.
-const LINE: f32 = 26.;
+
 
 /// A computer that can be opened.
 #[derive(Clone)]
@@ -198,7 +198,7 @@ impl View {
     /// One line for when there is no room for rows: what is running and what failed.
     pub fn summary(&self) -> String {
         let running = self.transfers.iter().filter(|t| !t.finished()).count();
-        let failed = self.transfers.iter().filter(|t| t.phase == Phase::Failed).count();
+        let failed = self.transfers.iter().filter(|t| t.phase == Phase::Failed && t.error != "Cancelled").count();
         match (running, failed) {
             (0, 0) => format!("{} finished", self.transfers.len()),
             (0, f) => format!("{f} failed"),
@@ -460,6 +460,12 @@ impl Panel {
                     t("c", "scan 0042.pdf", true, 2_411_724, 0, Phase::Failed, "", "The computer refused the file. File transfer may be turned off there."),
                     t("d", "budget.xlsx", false, 48_213, 0, Phase::Queued, "", ""),
                 ];
+                if page == "files-downloads" {
+                    v.path = "/home/player/Documents/Photos from the coast".into();
+                    v.transfers = (0..8).map(|i| t(&format!("folder-{i}"), &format!("Photos from the coast/photo-{i:03}.jpg"), false, 8_388_608, if i == 0 { 2_097_152 } else { 0 }, if i == 0 { Phase::Active } else { Phase::Queued }, "", "")).collect();
+                    v.transfers.push(t("upload", "notes.txt", true, 812, 400, Phase::Active, "", ""));
+                }
+
             }
         }
         panel
@@ -731,6 +737,12 @@ impl Panel {
             if self.view.conn != Conn::Idle && !matches!(self.view.conn, Conn::Closed(_)) && ui.add(egui::Button::new(if self.view.conn == Conn::Online { "Disconnect" } else { "Cancel" })).clicked() {
                 self.close();
             }
+            if self.view.conn == Conn::Online {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    design::dot(ui, design::OK);
+                    ui.add(egui::Label::new(&self.name).truncate()).on_hover_text(format!("Connected to {}", self.name));
+                });
+            }
         });
         ui.add_space(6.);
         match self.view.conn.clone() {
@@ -748,10 +760,7 @@ impl Panel {
                     ui.label(RichText::new(note).color(design::MUTED));
                 }
             }
-            Conn::Online => {
-                self.connection_row(ui, "Connected", design::OK);
-                self.online(ui);
-            }
+            Conn::Online => self.online(ui),
         }
         action
     }
@@ -804,18 +813,24 @@ impl Panel {
     fn connection_row(&mut self, ui: &mut egui::Ui, status: &str, color: Color32) {
         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), design::CONTROL), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             design::dot(ui, color);
-            ui.label(RichText::new(&self.name).strong());
-            ui.label(RichText::new(status).size(SMALL).color(design::MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(status).size(SMALL).color(design::MUTED));
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(&self.name).strong()).truncate());
+                });
+            });
         });
     }
 
     fn online(&mut self, ui: &mut egui::Ui) {
         let mut requests = vec![];
         // Room for transfer rows after the path bar, the bottom bar and a list worth looking at.
-        let budget = ui.available_height() - 34. - 44. - 90. - 22.;
-        let rows = (budget / 50.).floor().clamp(0., VISIBLE as f32) as usize;
-        // Bottom bar first, so the list takes what is left.
-        egui::TopBottomPanel::bottom("files-bottom").frame(egui::Frame::new()).show_separator_line(false).show_inside(ui, |ui| {
+        let budget = ui.available_height() - 36. - 110. - 64.;
+        let rows = (budget / 76.).floor().clamp(0., VISIBLE as f32) as usize;
+        // Reserve the complete control area even in short windows. The panel's default
+        // half-height limit otherwise clips cancellation while the file list takes its minimum.
+        let bottom_height = if self.view.transfers.is_empty() { 78. } else if rows == 0 { 102. } else { 98. + rows as f32 * 76. };
+        egui::TopBottomPanel::bottom("files-bottom").exact_height(bottom_height).frame(egui::Frame::new()).show_separator_line(false).show_inside(ui, |ui| {
             ui.add_space(6.);
             self.transfers(ui, &mut requests, rows);
             self.bottom_bar(ui);
@@ -836,31 +851,32 @@ impl Panel {
         if !self.view.browse {
             return;
         }
-        let mut go: Option<String> = None;
-        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), design::CONTROL), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            if ui.add_enabled(self.view.can_go_back(), egui::Button::new("Back")).clicked() {
+        let mut go = None;
+        ui.horizontal(|ui| {
+            if icons::button(ui, Icon::Back, "Back", self.view.can_go_back()) {
                 requests.extend(self.view.go_back());
             }
-            let steps = crumbs(&self.view.path);
-            let last = steps.len() - 1;
-            for (i, (label, path)) in steps.into_iter().enumerate() {
-                if i > 0 {
-                    ui.label(RichText::new("›").color(design::MUTED));
-                }
-                let text = RichText::new(label).color(if i == last { design::TEXT } else { design::MUTED });
-                if ui.add(egui::Button::new(text).frame(false)).clicked() && i != last {
-                    go = Some(path);
-                }
-            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add_enabled(!self.view.loading, egui::Button::new("Refresh")).clicked() {
+                if icons::button(ui, Icon::Refresh, "Refresh folder", !self.view.loading) {
                     requests.push(self.view.refresh());
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let steps = crumbs(&self.view.path);
+                    let label = steps.last().map(|s| s.0.as_str()).unwrap_or("Computer");
+                    let response = ui.add_sized([ui.available_width(), 32.], egui::Button::new(label).truncate());
+                    response.clone().on_hover_text(if self.view.path.is_empty() { "Computer" } else { &self.view.path });
+                    egui::Popup::menu(&response).show(|ui| {
+                        for (label, path) in &steps {
+                            if ui.selectable_label(path == &self.view.path, label).clicked() {
+                                go = Some(path.clone());
+                                ui.close();
+                            }
+                        }
+                    });
+                });
             });
         });
-        if let Some(path) = go {
-            requests.push(self.view.go(&path));
-        }
+        if let Some(path) = go { requests.push(self.view.go(&path)); }
         ui.add_space(2.);
     }
 
@@ -898,9 +914,9 @@ impl Panel {
             }
             ui.spacing_mut().item_spacing.y = 0.;
             let columns = Columns::new(ui.available_width());
-            header(ui, &columns);
+            let heading_height = if inner >= 72. { header(ui, &columns); 26. } else { 0. };
             let mut open = None;
-            egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(24.).max_height((inner - 26.).max(24.)).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(0.).max_height((inner - heading_height).max(0.)).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.;
                 for entry in &self.view.entries {
                     match row(ui, &columns, entry) {
@@ -917,9 +933,18 @@ impl Panel {
     }
 
     fn transfers(&mut self, ui: &mut egui::Ui, requests: &mut Vec<Request>, max: usize) {
-        if self.view.transfers.is_empty() {
-            return;
-        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Transfers").size(SMALL).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Cancel downloads").on_hover_text("Cancel all downloads, including pending folder contents. Uploads continue.").clicked() {
+                    requests.push(Request::CancelDownloads);
+                }
+                if self.view.transfers.iter().any(Transfer::finished) && icons::button(ui, Icon::Close, "Clear finished transfers", true) {
+                    self.view.clear_finished();
+                }
+            });
+        });
+        if self.view.transfers.is_empty() { return; }
         if max == 0 {
             ui.label(RichText::new(self.view.summary()).size(SMALL).color(design::MUTED));
             return;
@@ -941,32 +966,23 @@ impl Panel {
     }
 
     fn bottom_bar(&mut self, ui: &mut egui::Ui) {
-        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), design::CONTROL), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add_enabled(self.view.upload && self.dialog.is_none(), design::primary("Upload files")).clicked() {
-                self.pick(false);
-            }
-            if self.view.transfers.iter().any(Transfer::finished) && ui.button("Clear finished").clicked() {
-                self.view.clear_finished();
-            }
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let gap = ui.spacing().item_spacing.x;
-                let change = ui.fonts_mut(|f| f.layout_no_wrap("Change".into(), egui::FontId::proportional(14.), design::TEXT).size().x) + 2. * ui.spacing().button_padding.x;
-                ui.label(RichText::new("Save to").size(SMALL).color(design::MUTED));
-                let text = self.save_dir.to_string_lossy().into_owned();
-                let wanted = ui.fonts_mut(|f| f.layout_no_wrap(text.clone(), egui::FontId::proportional(14.), design::TEXT).size().x);
-                let room = (ui.available_width() - change - gap).max(40.);
-                ui.allocate_ui_with_layout(egui::vec2(wanted.min(room), design::CONTROL), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(egui::Label::new(RichText::new(text)).truncate());
-                });
-                if ui.add_enabled(self.dialog.is_none(), egui::Button::new("Change")).clicked() {
-                    self.pick(true);
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_enabled(self.view.upload && self.dialog.is_none(), design::primary("Upload files")).on_hover_text("Send files to this computer").clicked() {
+                    self.pick(false);
                 }
+                if ui.add_enabled(self.dialog.is_none(), egui::Button::new("Change")).on_hover_text("Choose the download folder").clicked() { self.pick(true); }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let text = self.save_dir.to_string_lossy();
+                    ui.add(egui::Label::new(RichText::new(format!("Save to {text}")).size(SMALL).color(design::MUTED)).truncate()).on_hover_text(text.as_ref());
+                });
             });
         });
         if !self.message.is_empty() {
             ui.label(RichText::new(&self.message).color(design::BAD));
         }
     }
+
 }
 
 struct Columns {
@@ -978,7 +994,7 @@ struct Columns {
 const PAD: f32 = 12.;
 impl Columns {
     fn new(width: f32) -> Self {
-        Self { width, button: 92., size: 72., date: 88. }
+        Self { width, button: 32., size: 65., date: if width >= 590. { 88. } else { 0. } }
     }
     fn right(&self) -> f32 {
         self.width - PAD
@@ -994,7 +1010,7 @@ impl Columns {
     }
     /// Left edge of the modified column, or None when the window is too narrow for it.
     fn name_right(&self) -> f32 {
-        self.date_x() - 12.
+        if self.date > 0. { self.date_x() - 12. } else { self.size_right() - self.size - 12. }
     }
 }
 
@@ -1004,7 +1020,7 @@ fn header(ui: &mut egui::Ui, c: &Columns) {
     let font = egui::FontId::proportional(SMALL);
     let y = rect.center().y;
     p.text(egui::pos2(rect.left() + PAD + 18., y), egui::Align2::LEFT_CENTER, "Name", font.clone(), design::MUTED);
-    p.text(egui::pos2(rect.left() + c.date_x(), y), egui::Align2::LEFT_CENTER, "Modified", font.clone(), design::MUTED);
+    if c.date > 0. { p.text(egui::pos2(rect.left() + c.date_x(), y), egui::Align2::LEFT_CENTER, "Modified", font.clone(), design::MUTED); }
     p.text(egui::pos2(rect.left() + c.size_right(), y), egui::Align2::RIGHT_CENTER, "Size", font, design::MUTED);
     p.hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1_f32, design::LINE));
 }
@@ -1024,14 +1040,9 @@ fn row(ui: &mut egui::Ui, c: &Columns, e: &Entry) -> RowAction {
         action = RowAction::Open;
     }
     let y = rect.center().y;
-    let p = ui.painter();
-    // Folders are a filled square, files an outlined one.
-    let mark = egui::Rect::from_center_size(egui::pos2(rect.left() + PAD + 4., y), egui::vec2(9., 9.));
-    if e.dir {
-        p.rect_filled(mark, 2., Color32::from_rgb(105, 128, 150));
-    } else {
-        p.rect_stroke(mark, 2., egui::Stroke::new(1_f32, Color32::from_rgb(105, 128, 150)), egui::StrokeKind::Inside);
-    }
+    icons::paint(ui, if e.dir { Icon::Folder } else { Icon::File }, egui::Rect::from_center_size(egui::pos2(rect.left() + PAD + 4., y), egui::vec2(16., 16.)), design::MUTED);
+    response.widget_info(|| egui::WidgetInfo::labeled(if e.dir { egui::WidgetType::Button } else { egui::WidgetType::Label }, true, &e.name));
+    response.on_hover_text(&e.name);
     let name_left = rect.left() + PAD + 18.;
     let max = (rect.left() + c.name_right() - name_left).max(40.);
     let mut job = egui::text::LayoutJob::simple_singleline(e.name.clone(), egui::FontId::proportional(14.), design::TEXT);
@@ -1040,17 +1051,18 @@ fn row(ui: &mut egui::Ui, c: &Columns, e: &Entry) -> RowAction {
     let p = ui.painter();
     p.galley(egui::pos2(name_left, y - galley.size().y / 2.), galley, design::TEXT);
     let font = egui::FontId::proportional(SMALL);
-    p.text(egui::pos2(rect.left() + c.date_x(), y), egui::Align2::LEFT_CENTER, date(e.mtime), font.clone(), design::MUTED);
+    if c.date > 0. { p.text(egui::pos2(rect.left() + c.date_x(), y), egui::Align2::LEFT_CENTER, date(e.mtime), font.clone(), design::MUTED); }
     if !e.dir {
         p.text(egui::pos2(rect.left() + c.size_right(), y), egui::Align2::RIGHT_CENTER, human_size(e.size), font, design::MUTED);
     }
     p.hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1_f32, Color32::from_rgb(33, 41, 53)));
-    let button = egui::Rect::from_center_size(egui::pos2(rect.left() + c.button_x() + c.button / 2., y), egui::vec2(c.button, SMALL_BUTTON));
+    let button = egui::Rect::from_center_size(egui::pos2(rect.left() + c.button_x() + c.button / 2., y), egui::vec2(c.button, 32.));
     // A child ui, so the button does not move the row cursor.
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(button));
+    child.set_clip_rect(child.clip_rect().intersect(rect));
     child.spacing_mut().interact_size.y = SMALL_BUTTON;
     child.spacing_mut().button_padding.y = 3.;
-    if child.add(egui::Button::new(RichText::new("Download").size(13.)).min_size(button.size())).clicked() {
+    if icons::button(&mut child, Icon::Download, &format!("Download {}{}", if e.dir { "folder " } else { "" }, e.name), true) {
         action = RowAction::Download;
     }
     action
@@ -1059,34 +1071,22 @@ fn row(ui: &mut egui::Ui, c: &Columns, e: &Entry) -> RowAction {
 /// One transfer. Returns true when Cancel was clicked.
 fn transfer_row(ui: &mut egui::Ui, t: &Transfer) -> bool {
     let mut cancel = false;
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), LINE), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.allocate_ui_with_layout(egui::vec2(34., LINE), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_min_size(egui::vec2(34., LINE));
-            ui.label(RichText::new(if t.upload { "Up" } else { "Down" }).size(SMALL).color(design::MUTED));
-        });
-        let right = match t.phase {
-            Phase::Queued => RichText::new("Waiting").size(SMALL).color(design::MUTED),
-            Phase::Active => RichText::new(format!("{} of {}", human_size(t.done), human_size(t.size))).size(SMALL).color(design::MUTED),
-            Phase::Done => RichText::new("Done").size(SMALL).color(design::OK),
-            Phase::Failed => RichText::new("Failed").size(SMALL).color(design::BAD),
-        };
+    ui.horizontal(|ui| {
+        icons::status(ui, if t.upload { Icon::Upload } else { Icon::Download }, if t.upload { "Upload" } else { "Download" }, true);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if !t.finished() {
-                let clicked = ui
-                    .scope(|ui| {
-                        ui.spacing_mut().interact_size.y = SMALL_BUTTON;
-                        ui.spacing_mut().button_padding.y = 3.;
-                        ui.add(egui::Button::new(RichText::new("Cancel").size(SMALL)).min_size(egui::vec2(60., SMALL_BUTTON))).clicked()
-                    })
-                    .inner;
-                cancel |= clicked;
-            }
-            ui.label(right);
+            if !t.finished() { cancel = icons::button(ui, Icon::Close, "Cancel this transfer", true); }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(RichText::new(&t.name)).truncate());
+                ui.add(egui::Label::new(&t.name).truncate()).on_hover_text(&t.name);
             });
         });
     });
+    let status = match t.phase {
+        Phase::Queued => "Waiting".into(),
+        Phase::Active => format!("{} of {}", human_size(t.done), human_size(t.size)),
+        Phase::Done => "Done".into(),
+        Phase::Failed => if t.error == "Cancelled" { "Cancelled".into() } else { "Failed".into() },
+    };
+    ui.label(RichText::new(status).size(SMALL).color(design::MUTED));
     match t.phase {
         Phase::Active | Phase::Queued => {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.), egui::Sense::hover());
@@ -1099,8 +1099,8 @@ fn transfer_row(ui: &mut egui::Ui, t: &Transfer) -> bool {
         Phase::Done if !t.path.is_empty() => {
             ui.add(egui::Label::new(RichText::new(format!("{} {}", if t.upload { "Sent to" } else { "Saved to" }, t.path)).size(SMALL).color(design::MUTED)).truncate());
         }
-        Phase::Failed if !t.error.is_empty() => {
-            ui.add(egui::Label::new(RichText::new(&t.error).size(SMALL).color(design::BAD)).wrap());
+        Phase::Failed if !t.error.is_empty() && t.error != "Cancelled" => {
+            ui.add(egui::Label::new(RichText::new(&t.error).size(SMALL).color(design::BAD)).truncate()).on_hover_text(&t.error);
         }
         _ => {}
     }
@@ -1318,12 +1318,22 @@ mod tests {
         let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0., 0.), egui::vec2(width, height))), ..Default::default() };
         let mut used = (0., 0.);
         for _ in 0..3 {
-            let _ = ctx.run(input.clone(), |ctx| {
+            let output = ctx.run(input.clone(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     panel.ui(ui, &[], "");
                     used = (ui.min_rect().width(), ui.min_rect().height());
                 });
             });
+            if panel.view.conn == Conn::Online {
+                for label in ["Cancel downloads", "Upload files"] {
+                    let shape = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.job.text == label => Some((shape.clip_rect, text)),
+                        _ => None,
+                    }).unwrap_or_else(|| panic!("missing {label} at {width}x{height}"));
+                    let bounds = egui::Rect::from_min_size(shape.1.pos, shape.1.galley.size());
+                    assert!(shape.0.contains_rect(bounds), "clipped {label} at {width}x{height}");
+                }
+            }
         }
         used
     }
@@ -1335,7 +1345,7 @@ mod tests {
             view.transfers.push(Transfer { error: "The computer refused the file. File transfer may be turned off there.".into(), ..transfer(&format!("t{i}"), if i % 2 == 0 { Phase::Failed } else { Phase::Active }) });
         }
         // 480 x 245 is what the page gets inside a 480 x 360 window after the toolbar and tabs.
-        for (w, h) in [(480., 245.), (480., 360.), (1280., 720.), (1366., 768.)] {
+        for (w, h) in [(420., 245.), (640., 285.), (480., 245.), (480., 360.), (1280., 720.), (1366., 768.)] {
             let (used_w, used_h) = lay_out(w, h, view.clone());
             assert!(used_w <= w + 0.5, "{w}x{h}: width {used_w}");
             assert!(used_h <= h + 0.5, "{w}x{h}: height {used_h}");

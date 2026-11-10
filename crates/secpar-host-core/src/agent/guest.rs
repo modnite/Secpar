@@ -396,7 +396,7 @@ mod tests {
             power(),
             ClientMsg::Unlock { secret: "x".into() },
             ClientMsg::FsList { path: "C:/".into() },
-            ClientMsg::FsGet { path: "C:/x".into() },
+            ClientMsg::FsGet { path: "C:/x".into(), batch: None },
             ClientMsg::Net,
             ClientMsg::MediaSub { on: true },
             ClientMsg::GameStreamInfo { id: "x".into() },

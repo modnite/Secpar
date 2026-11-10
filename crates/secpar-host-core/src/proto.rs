@@ -128,7 +128,7 @@ pub enum ClientMsg {
     },
     /// Download a file or folder from the PC: answered with `file.offer`s.
     #[serde(rename = "fs.get")]
-    FsGet { path: String },
+    FsGet { path: String, #[serde(default, skip_serializing_if = "Option::is_none")] batch: Option<u64> },
 }
 
 /// The phone may send `null` for optional fields; treat it like an absent field.
@@ -263,7 +263,7 @@ pub enum ServerMsg {
     #[serde(rename = "file.error")]
     FileError { id: String, code: String },
     #[serde(rename = "file.offer")]
-    FileOffer { id: String, name: String, size: u64 },
+    FileOffer { id: String, name: String, size: u64, #[serde(default, skip_serializing_if = "Option::is_none")] batch: Option<u64> },
     #[serde(rename = "file.end")]
     FileEnd { id: String, sha256: String },
     #[serde(rename = "ok")]
@@ -596,6 +596,7 @@ mod tests {
             s(&ServerMsg::FileOffer {
                 id: "u".into(),
                 name: "n".into(),
+                batch: None,
                 size: 1
             }),
             json!({"t":"file.offer","id":"u","name":"n","size":1})

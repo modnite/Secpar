@@ -48,14 +48,16 @@ click folders or the path above the list, and press Download on a file or folder
 with the button or by dropping files or folders on the window. Downloads go to the Save to
 folder (default Downloads/Secpar, Change picks another). Uploads land in the computer's
 received-files folder and the row says where. Each file is checked with SHA-256 and only gets its
-final name when it matches. A computer with file transfer turned off shows that in plain words.
+final name when it matches. Cancel downloads stops every active or waiting download, including
+folder contents that arrive later. Uploads continue. Older hosts require reconnecting before a
+new download after cancellation; update the host to continue without reconnecting. A computer with file transfer turned off shows that in plain words.
 Your own computer is not listed anywhere you can connect, because you cannot connect to yourself.
 
 Files the other computer offers (Send to Secpar) are saved in the same folder. While you stream to
 a computer, a quiet second connection to it receives them.
 
 Layout pages for the screenshot review: `files-sample`, `files-empty`, `files-off`, `files-closed`,
-`owned-sample` (other computers only), `owned-only-sample` (no other computers).
+`files-downloads` (an active folder download and queued children), `owned-sample` (other computers only), `owned-only-sample` (no other computers).
 To review the real page against a real host build with `--features ui-review`, set
 `SECPAR_REVIEW_PAGE=files-live`, `SECPAR_REVIEW_FILES_LINK` (a file holding a one-time pairing link),
 `SECPAR_REVIEW_FILES_SAVE` (a download folder) and `SECPAR_REVIEW_FILES_SCRIPT`, for example

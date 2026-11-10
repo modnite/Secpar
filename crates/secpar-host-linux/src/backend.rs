@@ -272,7 +272,7 @@ impl Handlers for Backend {
         Box::pin(async move { pc })
     }
     fn caps(&self) -> Vec<String> {
-        let mut caps: Vec<String> = ["stream", "input", "clip", "media", "files", "fsbrowse"].map(String::from).to_vec();
+        let mut caps: Vec<String> = ["stream", "input", "clip", "media", "files", "fsbrowse", "fsbatch"].map(String::from).to_vec();
         if thumb::available() {
             caps.push("thumb".into());
         }
@@ -325,6 +325,7 @@ impl Backend {
             pads: Arc::new(Mutex::new(pads)),
             incoming,
             outgoing: self.outgoing.clone(),
+            sending: Default::default(),
             media: self.media.clone(),
             media_task: None,
             thumbs: self.thumbs.clone(),
@@ -354,6 +355,7 @@ struct OwnerSession {
     pads: SharedPads,
     incoming: Incoming,
     outgoing: Outgoing,
+    sending: secpar_host_core::files::Sending,
     media: Arc<Media>,
     media_task: Option<tokio::task::JoinHandle<()>>,
     thumbs: Arc<Thumbs<Outbox>>,
@@ -500,9 +502,10 @@ impl Session for OwnerSession {
                     return Some(ServerMsg::FileError { id, code: "denied".into() });
                 };
                 let out = self.out.clone();
+                let alive = self.sending.start(&id);
                 tokio::task::spawn_blocking(move || {
                     let Some(key) = files::parse_uuid(&id) else { return };
-                    match files::stream(&path, &key, offset, &mut |f| out.send_bin_blocking(f)) {
+                    match files::stream(&path, &key, offset, &mut |f| alive.load(std::sync::atomic::Ordering::Acquire) && out.send_bin_blocking(f)) {
                         Ok(sha256) => out.send_after_bin_blocking(ServerMsg::FileEnd { id, sha256 }),
                         Err(_) => out.send(ServerMsg::FileError { id, code: "denied".into() }),
                     };
@@ -514,6 +517,7 @@ impl Session for OwnerSession {
                 None
             }
             ClientMsg::FileCancel { id } => {
+                self.sending.cancel(&id);
                 self.incoming.cancel(&id);
                 self.outgoing.lock().unwrap().remove(&id);
                 None
@@ -527,13 +531,14 @@ impl Session for OwnerSession {
                     Err(e) => Some(ServerMsg::error("denied", &e.to_string(), Some("fs.list"))),
                 }
             }
-            ClientMsg::FsGet { path } => {
+            ClientMsg::FsGet { path, batch } => {
                 if !self.store.lock().unwrap().config().allow_files {
                     return Some(ServerMsg::error("unsupported", "File transfer is off in Hosting settings", Some("fs.get")));
                 }
                 let (outgoing, out) = (self.outgoing.clone(), self.out.clone());
                 tokio::task::spawn_blocking(move || match files::offer_tree(&outgoing, std::path::Path::new(&path)) {
-                    Ok(offers) => offers.into_iter().for_each(|m| {
+                    Ok(offers) => offers.into_iter().for_each(|mut m| {
+                        if let ServerMsg::FileOffer { batch: tag, .. } = &mut m { *tag = batch; }
                         out.send(m);
                     }),
                     Err(e) => {
@@ -700,7 +705,7 @@ mod tests {
         let mut r = rig("off", false);
         let denied = ServerMsg::FileError { id: ID.into(), code: "denied".into() };
         assert_eq!(r.session.on_msg(ClientMsg::FileBegin { id: ID.into(), name: "a.txt".into(), size: 1 }), Some(denied));
-        for m in [ClientMsg::FsList { path: String::new() }, ClientMsg::FsGet { path: "/".into() }] {
+        for m in [ClientMsg::FsList { path: String::new() }, ClientMsg::FsGet { path: "/".into(), batch: None }] {
             let of = m.t();
             assert_eq!(r.session.on_msg(m), Some(ServerMsg::error("unsupported", "File transfer is off in Hosting settings", Some(of))));
         }
@@ -741,12 +746,12 @@ mod tests {
         assert_eq!(entries.iter().map(|e| (e.name.as_str(), e.dir)).collect::<Vec<_>>(), vec![("sub", true)], "dot-files are hidden");
         let Some(ServerMsg::FsList { entries: roots, .. }) = r.session.on_msg(ClientMsg::FsList { path: String::new() }) else { panic!("roots") };
         assert!(roots.iter().any(|e| e.name == "/") && roots.iter().any(|e| e.name == "Home"));
-        assert_eq!(r.session.on_msg(ClientMsg::FsGet { path: shared.to_string_lossy().into() }), None);
+        assert_eq!(r.session.on_msg(ClientMsg::FsGet { path: shared.to_string_lossy().into(), batch: None }), None);
         // a folder download offers every file inside, dot-files too, in directory order
         let mut offers = vec![];
         while offers.len() < 2 {
             match r.rx.msg() {
-                Some(ServerMsg::FileOffer { id, name, size }) => offers.push((id, name, size)),
+                Some(ServerMsg::FileOffer { id, name, size, .. }) => offers.push((id, name, size)),
                 Some(other) => panic!("{other:?}"),
                 None => tokio::time::sleep(Duration::from_millis(10)).await,
             }

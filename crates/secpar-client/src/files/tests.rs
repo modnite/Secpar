@@ -83,7 +83,7 @@ fn a_listing_becomes_entries_and_errors_become_plain_words() {
 fn requests_become_the_wire_messages() {
     let mut e = Engine::new(tmp("req"));
     assert_eq!(e.request(Request::List("/home".into())), vec![Out::Text(json!({"t":"fs.list","path":"/home"}))]);
-    assert_eq!(e.request(Request::Get("/home/a".into())), vec![Out::Text(json!({"t":"fs.get","path":"/home/a"}))]);
+    assert_eq!(e.request(Request::Get("/home/a".into())), vec![Out::Text(json!({"t":"fs.get","path":"/home/a","batch":0}))]);
 }
 
 #[test]
@@ -515,4 +515,60 @@ async fn run_talks_to_a_scripted_host_over_tls() {
     req_tx.send(Request::Stop).unwrap();
     task.await.unwrap();
     host.abort();
+}
+
+#[test]
+fn cancel_all_drains_downloads_without_accepting_children_or_stopping_uploads() {
+    let dir = tmp("cancel-all");
+    let source = dir.join("upload.txt");
+    std::fs::write(&source, b"upload").unwrap();
+    let mut e = Engine::new(dir.clone());
+    e.request(Request::Get("/folder".into()));
+    offer(&mut e, ID, "folder/first.bin", 10);
+    offer(&mut e, ID2, "folder/second.bin", 10);
+    let upload = e.request(Request::Send(source));
+    let upload_id = last(&upload).id;
+    let part = e.download.as_ref().unwrap().part.clone();
+    e.on_binary(&chunk(ID, 0, b"part"));
+    let out = e.request(Request::CancelDownloads);
+    let messages = texts(&out);
+    assert!(messages.contains(&json!({"t":"file.cancel","id":ID})));
+    assert!(messages.contains(&json!({"t":"file.reject","id":ID2})));
+    assert!(!messages.iter().any(|v| v["t"] == "file.accept"));
+    assert_eq!(transfers(&out).len(), 2);
+    assert!(transfers(&out).iter().all(|t| t.error == "Cancelled"));
+    assert!(!part.exists());
+    assert!(e.download.is_none() && e.offers.is_empty());
+    assert_eq!(e.uploads.front().unwrap().t.id, upload_id);
+    assert!(e.on_binary(&chunk(ID, 4, b"late")).is_empty());
+    assert!(e.on_text(&json!({"t":"file.end","id":ID,"sha256":sha(b"partlate")})).is_empty());
+}
+
+#[test]
+fn cancelled_pending_folder_offers_stay_cancelled_after_a_later_download_starts() {
+    let mut e = Engine::new(tmp("late-folder"));
+    e.request(Request::Get("/accidental-folder".into()));
+    e.request(Request::CancelDownloads);
+    let next = e.request(Request::Get("/wanted.txt".into()));
+    assert_eq!(texts(&next)[0]["batch"], 1);
+    let stale = e.on_text(&json!({"t":"file.offer","id":ID,"name":"folder/late.txt","size":3,"batch":0}));
+    assert_eq!(texts(&stale), vec![json!({"t":"file.reject","id":ID})]);
+    assert!(e.download.is_none());
+    let wanted = e.on_text(&json!({"t":"file.offer","id":ID2,"name":"wanted.txt","size":3,"batch":1}));
+    assert!(texts(&wanted).contains(&json!({"t":"file.accept","id":ID2,"offset":0})));
+    e.on_binary(&chunk(ID2, 0, b"yes"));
+    let done = e.on_text(&json!({"t":"file.end","id":ID2,"sha256":sha(b"yes")}));
+    assert_eq!(last(&done).phase, Phase::Done);
+    // An intentional Send to Secpar offer is independent of requested folder batches.
+    assert!(texts(&offer(&mut e, "bbbbbbbb-2222-4333-8444-555555555555", "sent.txt", 0)).iter().any(|v| v["t"] == "file.accept"));
+}
+
+#[test]
+fn legacy_host_late_offers_are_rejected_until_reconnecting() {
+    let mut e = Engine::new(tmp("legacy-cancel"));
+    e.batch_supported = false;
+    e.request(Request::Get("/folder".into()));
+    e.request(Request::CancelDownloads);
+    assert_eq!(texts(&offer(&mut e, ID, "late", 1)), vec![json!({"t":"file.reject","id":ID})]);
+    assert!(matches!(&e.request(Request::Get("/new".into()))[..], [Out::Note(Notice::Problem(message))] if message.starts_with("Reconnect")));
 }

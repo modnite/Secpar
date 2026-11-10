@@ -124,6 +124,17 @@ The host releases every key and button that is still held when a connection clos
 - Both hosts refuse `file.begin`, `fs.list` and `fs.get` (`file.error` `denied`, or `error` `unsupported`) while file transfer is off in the host's settings.
 - Offers from `fs.get` use relative names like the uploads above.
 
+Hosts with `fsbatch` accept an optional integer `batch` on `fs.get` and echo it on every
+`file.offer` produced by that request, including asynchronously enumerated folder children.
+Older requests and unsolicited offers omit it. Desktop cancel-all increments its batch,
+rejects every later offer from earlier batches, rejects queued offers before cancelling the
+active file, and deletes its partial file. The host checks `file.cancel` cancellation before
+each outgoing chunk; its cancellation state belongs to that connection. Uploads are independent.
+Against hosts without `fsbatch`, after cancel-all the client rejects later offers and requires
+reconnecting before another download, because those hosts cannot distinguish old folder children
+from a new request. Optional fields preserve Android and older-client compatibility.
+
+
 **Binary chunk layout:** `[0x01][16-byte uuid][8-byte offset, big-endian][data ≤ 256 KiB]`.
 
 ## Unlock (cap `unlock`)

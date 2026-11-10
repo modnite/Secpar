@@ -1047,3 +1047,21 @@ Physical Galaxy S23 validation: steady speaker volume and no cutouts, confirmed
 again by the user. Preserve this audio baseline while addressing frame pacing.
 The private candidate is not a public release. Frame pacing remains unresolved;
 keep the next public release on hold pending its validation.
+
+
+## Desktop Files follow-up (not released)
+The Files page uses compact Lucide file/folder/download controls, a bounded folder
+navigation menu, aligned transfer rows and a persistent Cancel downloads action.
+The action rejects queued and late children of cancelled folder requests, removes
+partial files and cancels the active host file worker. Uploads and later explicit
+downloads remain independent. Optional request batch tags and the `fsbatch` capability
+preserve older clients; older hosts require reconnecting before another download
+after cancel-all because they cannot identify late folder children.
+
+Verified: 31 client file tests, 15 shared host file tests, eight protocol tests and
+30 desktop file tests passed (one existing real-host test remains ignored). Native
+isolated Windows fixtures reviewed at 420×640 and 640×400 with an active folder
+and queued children; a layout regression also checks cancellation/upload controls
+against their clipping rectangles. Linux handler changes are present but have not
+been compiled or physically tested in this pass. No installed app or service was
+restarted. The public release remains blocked on Android and Linux frame pacing.

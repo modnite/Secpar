@@ -76,6 +76,8 @@ pub enum Request {
     /// Upload this file under `name`, which may be `folder/file` to keep a folder layout.
     SendAs(PathBuf, String),
     Cancel(String),
+    /// Stop current downloads, including folder children offered later. Uploads keep moving.
+    CancelDownloads,
     /// Where later downloads go.
     SaveTo(PathBuf),
     Stop,
@@ -254,6 +256,9 @@ struct Upload {
 
 pub struct Engine {
     save_dir: PathBuf,
+    batch: u64,
+    batch_supported: bool,
+    downloads_cancelled: bool,
     offers: VecDeque<Offer>,
     seen: std::collections::HashSet<String>,
     download: Option<Download>,
@@ -262,7 +267,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(save_dir: PathBuf) -> Self {
-        Self { save_dir, offers: VecDeque::new(), seen: Default::default(), download: None, uploads: VecDeque::new() }
+        Self { save_dir, batch: 0, batch_supported: true, downloads_cancelled: false, offers: VecDeque::new(), seen: Default::default(), download: None, uploads: VecDeque::new() }
     }
 
     fn note(t: &Transfer) -> Out {
@@ -281,7 +286,12 @@ impl Engine {
     pub fn request(&mut self, r: Request) -> Vec<Out> {
         match r {
             Request::List(path) => vec![Out::Text(json!({"t":"fs.list","path":path}))],
-            Request::Get(path) => vec![Out::Text(json!({"t":"fs.get","path":path}))],
+            Request::Get(path) => {
+                if self.downloads_cancelled && !self.batch_supported {
+                    return vec![Out::Note(Notice::Problem("Reconnect to this computer to start another download. Update Secpar there to cancel folder downloads without reconnecting.".into()))];
+                }
+                vec![Out::Text(json!({"t":"fs.get","path":path,"batch":self.batch}))]
+            },
             Request::SaveTo(dir) => {
                 self.save_dir = dir;
                 vec![]
@@ -292,11 +302,25 @@ impl Engine {
             }
             Request::SendAs(path, name) => self.queue_upload(path, name),
             Request::Cancel(id) => self.cancel(&id),
+            Request::CancelDownloads => self.cancel_downloads(),
             Request::Stop => {
                 let ids: Vec<String> = self.offers.iter().map(|o| o.id.clone()).chain(self.download.iter().map(|d| d.t.id.clone())).chain(self.uploads.iter().map(|u| u.t.id.clone())).collect();
                 ids.iter().flat_map(|id| self.cancel(id)).collect()
             }
         }
+    }
+
+    fn cancel_downloads(&mut self) -> Vec<Out> {
+        self.batch += 1;
+        self.downloads_cancelled = true;
+        // Drain queued offers first: cancelling the active file must not accept a child.
+        let mut out = vec![];
+        let ids: Vec<_> = self.offers.iter().map(|o| o.id.clone()).collect();
+        for id in ids { out.extend(self.cancel(&id)); }
+        if let Some(id) = self.download.as_ref().map(|d| d.t.id.clone()) {
+            out.extend(self.cancel(&id));
+        }
+        out
     }
 
     fn queue_upload(&mut self, path: PathBuf, name: String) -> Vec<Out> {
@@ -412,6 +436,11 @@ impl Engine {
                 let (Some(name), Some(size)) = (v["name"].as_str(), v["size"].as_u64()) else { return vec![] };
                 if parse_uuid(id).is_none() || !self.seen.insert(id.to_string()) {
                     return vec![];
+                }
+                let stale = v["batch"].as_u64().is_some_and(|batch| batch < self.batch)
+                    || (!self.batch_supported && self.downloads_cancelled);
+                if stale {
+                    return vec![Out::Text(json!({"t":"file.reject","id":id}))];
                 }
                 let shown = safe_rel(name).to_string_lossy().replace('\\', "/");
                 let t = Transfer::new(id, &shown, false, size);
@@ -684,6 +713,7 @@ pub async fn run(conn: Connected, save_dir: PathBuf, mut requests: mpsc::Unbound
     let _ = notices.send(Notice::Ready { browse: have("fsbrowse"), upload: have("files") });
     wake();
     let mut engine = Engine::new(save_dir);
+    engine.batch_supported = caps.iter().any(|c| c == "fsbatch");
     let mut ping = tokio::time::interval(PING);
     ping.tick().await;
     let end = 'outer: loop {
