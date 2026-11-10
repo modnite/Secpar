@@ -528,3 +528,29 @@ fn resize_mid_stream_announces_the_new_size() {
     assert!(native, "no stream.ready back at native size, saw {:?}", seen.lock().unwrap());
     assert!(session.alive());
 }
+
+#[test]
+fn source_clock_follows_near_equal_display_rates_without_speeding_up_capture() {
+    assert_eq!(stream_interval(60,Some((60000,1001))),Duration::from_nanos(16_683_333));
+    assert_eq!(stream_interval(30,Some((60000,1001))),Duration::from_nanos(33_366_666));
+    assert_eq!(stream_interval(60,Some((144,1))),Duration::from_nanos(16_666_666));
+    assert_eq!(stream_interval(60,None),Duration::from_nanos(16_666_666));
+    assert_eq!(stream_interval(60,Some((60,0))),Duration::from_nanos(16_666_666));
+}
+#[test]
+fn source_clock_anchors_to_capture_instead_of_thread_wakeup() {
+    let now=Instant::now();let budget=Duration::from_millis(10);
+    let first=source_deadline(1_000_000,1_001_000,now,budget).unwrap();
+    let later=source_deadline(1_000_000,1_004_000,now+Duration::from_millis(3),budget).unwrap();
+    assert_eq!(first,later);
+    assert!(source_deadline(1_000_000,1_020_000,now,budget).is_none(),"old still image cannot choose the clock phase");
+    assert!(source_deadline(1_020_000,1_000_000,now,budget).is_none(),"future timestamp cannot choose the clock phase");
+}
+#[test]
+fn source_clock_samples_the_new_frame_when_capture_is_faster_than_the_stream() {
+    let now=Instant::now();let slot=now+Duration::from_millis(10);
+    assert!(!source_in_slot(1_000_000,1_000_000,now,slot),"do not encode the old image early");
+    assert!(source_in_slot(1_010_000,1_000_000,now,slot));
+    assert!(source_in_slot(1_008_500,1_011_000,now+Duration::from_millis(11),slot),"small compositor variation is allowed");
+    assert!(!source_in_slot(1_000_000,1_011_000,now+Duration::from_millis(11),slot));
+}

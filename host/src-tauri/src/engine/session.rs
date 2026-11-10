@@ -206,6 +206,34 @@ fn idle_repeat_due(since_real: Duration, since_send: Duration, interval: Duratio
     since_real <= Duration::from_millis(500) || since_send >= interval + interval / 2
 }
 
+/// Sunshine matches near-equal display rates (e.g. 59.94 rather than 60) so a
+/// nominal stream clock cannot slowly run ahead of the captured display.
+fn stream_interval(fps: u32, refresh: Option<(u32,u32)>) -> Duration {
+    let fps = fps.max(1) as u128;
+    if let Some((num,den)) = refresh.filter(|(n,d)| *n>0 && *d>0) {
+        let (num,den) = (num as u128,den as u128);
+        let divisor = num.div_ceil(fps*den).max(1);
+        let requested = fps*den*divisor;
+        if num <= requested && num*100 >= requested*99 {
+            return Duration::from_nanos((1_000_000_000*den*divisor/num) as u64);
+        }
+    }
+    Duration::from_nanos((1_000_000_000/fps) as u64)
+}
+
+fn source_deadline(capture_us:u64, clock_us:u64, now:Instant, budget:Duration) -> Option<Instant> {
+    let age = Duration::from_micros(clock_us.checked_sub(capture_us)?);
+    if age > budget { return None; } // initial duplication can contain an old still image
+    now.checked_sub(age)?.checked_add(budget)
+}
+
+fn source_in_slot(capture_us:u64, clock_us:u64, now:Instant, slot:Instant) -> bool {
+    let target = if slot >= now { clock_us.saturating_add((slot-now).as_micros() as u64) }
+        else { clock_us.saturating_sub((now-slot).as_micros() as u64) };
+    // Tolerate small compositor timestamp variation, not a whole older frame.
+    capture_us.saturating_add(2_000) >= target
+}
+
 /// REPORT plaintext: (lossPermille, rttMs).
 fn parse_report(p: &[u8]) -> Option<(u16, u16)> {
     (p.len() >= 16).then(|| (u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[10], p[11]])))
@@ -375,13 +403,15 @@ impl Video {
 
     fn run(mut self, sh: &Shared, ready: &ReadyInfo, notify: &Notify, p: &Params) {
         self.shown(notify);
-        let interval = Duration::from_secs(1) / self.fps;
+        let mut interval = stream_interval(self.fps, self.cap.refresh_rate());
+        let mut work_budget = interval.min(Duration::from_millis(10));
         let mut pending = false;
         // One send per frame interval, sampled from the newest captured image. Sending on DXGI
         // delivery made arrival spacing follow capture jitter, which a client on a fixed refresh
         // turns into held and doubled pictures.
         let mut next_due = Instant::now();
         let mut started = false;
+        let mut source_clock = false;
         let mut last_real = Instant::now() - interval * 2;
         let mut last_send = Instant::now() - interval * 2;
         // Encoded units wait here for their send slot. Encoding never runs at the deadline.
@@ -394,8 +424,6 @@ impl Video {
         let mut last_cursor = None;
         let mut want = (p.w, p.h);
         let mut lats: Vec<u64> = Vec::new();
-        let mut warm: Vec<u64> = Vec::new();
-        let mut phase_done = false;
         while !sh.stopped() {
             if let Some(g) = &p.gate {
                 // Checked before every frame: a friend never follows the owner onto the lock screen.
@@ -411,11 +439,15 @@ impl Video {
             let new_size = sh.resize.lock().unwrap().take().filter(|s| *s != want);
             if new_display.is_some() || new_size.is_some() {
                 want = new_size.unwrap_or(want);
+                let changed_display = new_display.is_some();
                 // same codec (the decoder is set up for it), then the current notch below
                 let p = Params { display: new_display.unwrap_or_else(|| self.shown.id.clone()), w: want.0, h: want.1, codecs: vec![codec_name(self.enc.codec()).into()], ..p.clone() };
                 if let Ok(v) = Video::open(&p, t.kbps) {
                     crate::log::line(&format!("stream: switched to {}", v.shown.id));
                     self = v;
+                    interval = stream_interval(self.fps, self.cap.refresh_rate());
+                    work_budget = interval.min(Duration::from_millis(10));
+                    source_clock = false;
                     prepared.clear();
                     prepared_packets = None;
                     (img, conv, pending, last_cursor) = (None, None, false, None);
@@ -423,9 +455,11 @@ impl Video {
                     sh.idr.store(true, Ordering::Relaxed);
                     notify(ready.msg(self.enc.size));
                     self.shown(notify);
-                    let [l, t, r, b] = self.shown.rect;
-                    // SAFETY: plain cursor move; the pointer follows the view to the new display.
-                    let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos((l + r) / 2, (t + b) / 2) };
+                    if changed_display {
+                        let [l, t, r, b] = self.shown.rect;
+                        // SAFETY: move only for an explicitly selected display, never a stream resize.
+                        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos((l + r) / 2, (t + b) / 2) };
+                    }
                 }
             }
             if t.notch != applied.notch {
@@ -464,26 +498,31 @@ impl Video {
                     img = f.tex.clone();
                     cap_us = f.capture_us;
                     pending = true;
-                    if !started {
-                        // Phase-lock the grid just after the first capture so a vsynced source
-                        // lands in the next slot instead of waiting a whole frame.
+                    if !source_clock {
+                        if let Some(due) = source_deadline(cap_us, now_us(), Instant::now(), work_budget) {
+                            next_due = due;
+                            source_clock = true;
+                            if secpar_stream::timing::enabled() { eprintln!("frame_timing stage=host.source_clock budget_us={} period_ns={}", work_budget.as_micros(), interval.as_nanos()); }
+                        } else if !started {
+                            next_due = Instant::now() + work_budget;
+                        }
                         started = true;
-                        next_due = Instant::now() + Duration::from_millis(1);
                     }
                 }
             }
             if std::mem::take(&mut self.cap.reinit) {
                 conv = None;
+                interval = stream_interval(self.fps, self.cap.refresh_rate());
+                work_budget = interval.min(Duration::from_millis(10));
+                source_clock = false;
                 sh.idr.store(true, Ordering::Relaxed);
             }
-            // Encode as soon as a picture arrives, not at the send deadline.
-            // Keep encoded reference pictures in order. If capture is faster than
-            // the negotiated stream, retain only the newest unencoded capture
-            // while the prepared picture waits for its send slot.
-            // Sample the newest unencoded capture near this slot. Encoding immediately
-            // after the previous send can freeze an older image for a whole interval.
-            let encode_due = next_due.checked_sub(Duration::from_millis(6)).unwrap_or(next_due);
-            if pending && prepared.is_empty() && sh.peer().is_some() && Instant::now() >= encode_due {
+            // Sample the source slot, not an old capture encoded early and held
+            // for a send timer. Faster capture rates keep only their newest image.
+            let encode_due = next_due.checked_sub(work_budget).unwrap_or(next_due);
+            let now = Instant::now();
+            let current = !source_clock || source_in_slot(cap_us, now_us(), now, encode_due);
+            if pending && prepared.is_empty() && sh.peer().is_some() && now >= encode_due && current {
                 if let (Some(src), Some(size)) = (img.as_ref(), self.cap.size()) {
                     if conv.is_none() {
                         conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
@@ -522,12 +561,14 @@ impl Video {
             next_due += interval;
             if next_due <= now {
                 next_due = now + interval;
+                source_clock = false; // reacquire the capture phase after a real stall
             }
-            let repeat = prepared.is_empty();
+            let encode_now = prepared.is_empty();
+            let repeat = encode_now && !pending;
             if repeat && !idle_repeat_due(last_real.elapsed(), last_send.elapsed(), interval) {
                 continue;
             }
-            if repeat {
+            if encode_now {
                 let (Some(src), Some(size)) = (img.as_ref().filter(|_| sh.peer().is_some()), self.cap.size()) else { continue };
                 if conv.is_none() {
                     conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
@@ -538,8 +579,10 @@ impl Video {
                 let timing = secpar_stream::timing::begin();
                 let force = sh.idr.swap(false, Ordering::Relaxed);
                 if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=true");}
-                let Ok(outs) = self.enc.encode(&nv12, now_us(), force) else { break };
+                let stamp = if pending { cap_us } else { now_us() };
+                let Ok(outs) = self.enc.encode(&nv12, stamp, force) else { break };
                 secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode, timing);
+                pending = false;
                 prepared.extend(outs);
             }
             let Some(e) = prepared.pop_front() else { continue };
@@ -554,33 +597,6 @@ impl Video {
             if !repeat {
                 last_real = last_send;
                 let age = now_us().saturating_sub(e.capture_us);
-                // The grid starts a little behind capture, which costs display latency. Measure
-                // the settled phase once after startup, shift the grid, then lock it.
-                if !phase_done {
-                    warm.push(age);
-                    if warm.len() == 120 {
-                        // Ignore the first 30 sends while the encoder warms up.
-                        let settled = &warm[30..];
-                        let mean = settled.iter().sum::<u64>() / settled.len() as u64;
-                        // Preserve half a frame for encoder timing variation, and
-                        // never adjust the startup grid by more than half a slot.
-                        let target = (interval.as_micros() / 2).max(1) as i64;
-                        let delta = (mean as i64 - target).clamp(-target, target);
-                        if secpar_stream::timing::enabled() {
-                            let mut w = settled.to_vec(); w.sort_unstable();
-                            eprintln!("frame_timing stage=host.warm_phase n={} p50_us={} mean_us={} shift_us={delta}", w.len(), w[w.len()/2], mean);
-                        }
-                        if delta > 0 {
-                            next_due = next_due.checked_sub(Duration::from_micros(delta as u64)).unwrap_or(next_due);
-                        } else if delta < 0 {
-                            next_due += Duration::from_micros((-delta) as u64);
-                        }
-                        if next_due <= Instant::now() {
-                            next_due = Instant::now() + interval;
-                        }
-                        phase_done = true;
-                    }
-                }
                 if secpar_stream::timing::enabled() {
                     lats.push(age);
                     if lats.len() == 300 {

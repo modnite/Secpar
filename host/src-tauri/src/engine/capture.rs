@@ -20,6 +20,7 @@ pub trait Duplicator {
     /// `Ok(None)` on timeout (nothing changed).
     fn acquire(&mut self, timeout_ms: u32) -> Result<Option<Self::Frame>, Lost>;
     fn size(&self) -> (u32, u32);
+    fn refresh_rate(&self) -> Option<(u32,u32)> { None }
 }
 
 /// A duplicator that re-opens itself. `reinit` is set whenever a new duplication was opened
@@ -39,6 +40,8 @@ impl<D: Duplicator> Capture<D> {
     pub fn size(&self) -> Option<(u32, u32)> {
         self.dup.as_ref().map(|d| d.size())
     }
+
+    pub fn refresh_rate(&self) -> Option<(u32,u32)> { self.dup.as_ref()?.refresh_rate() }
 
     /// The next changed frame, or None (timeout, or no duplication available right now).
     pub fn next(&mut self, timeout: Duration) -> Option<D::Frame> {
@@ -96,7 +99,7 @@ impl Drop for SharedHandle {
     }
 }
 pub(crate) fn isolated_gpu() -> bool {
-    std::env::var("SECPAR_GPU_ISOLATION").as_deref() == Ok("1")
+    cfg!(feature = "gpu-isolation") || std::env::var("SECPAR_GPU_ISOLATION").as_deref() == Ok("1")
 }
 impl FrameTexture {
     fn new(texture: ID3D11Texture2D) -> windows::core::Result<Self> {
@@ -203,6 +206,16 @@ pub fn device(display: &str) -> Option<(ID3D11Device, ID3D11DeviceContext, IDXGI
         )
         .ok()?;
         let (dev, ctx): (ID3D11Device, ID3D11DeviceContext) = (dev?, ctx?);
+        // Match Sunshine's relative GPU scheduling hint without changing system power settings.
+        // Kept opt-in while comparing device contention on the test host.
+        if cfg!(feature = "gpu-isolation") || std::env::var("SECPAR_GPU_PRIORITY").as_deref() == Ok("1") {
+            if let Ok(dxgi) = dev.cast::<IDXGIDevice>() {
+                let result = dxgi.SetGPUThreadPriority(7);
+                if secpar_stream::timing::enabled() {
+                    eprintln!("frame_timing stage=host.gpu_priority applied={}", result.is_ok());
+                }
+            }
+        }
         // Media Foundation uses the device from its own threads.
         if let Ok(mt) = dev.cast::<ID3D11Multithread>() {
             let _ = mt.SetMultithreadProtected(true);
@@ -220,6 +233,7 @@ pub struct Dxgi {
     w: u32,
     h: u32,
     copy: Option<Arc<FrameTexture>>,
+    refresh: windows::Win32::Graphics::Dxgi::Common::DXGI_RATIONAL,
 }
 
 impl Dxgi {
@@ -230,13 +244,16 @@ impl Dxgi {
         unsafe {
             let dup = output.DuplicateOutput(dev).ok()?;
             let d = dup.GetDesc();
-            Some(Dxgi { dev: dev.clone(), ctx: ctx.clone(), dup, w: d.ModeDesc.Width, h: d.ModeDesc.Height, copy: None })
+            Some(Dxgi { dev: dev.clone(), ctx: ctx.clone(), dup, w: d.ModeDesc.Width, h: d.ModeDesc.Height, copy: None, refresh: d.ModeDesc.RefreshRate })
         }
     }
 }
 
 impl Duplicator for Dxgi {
     type Frame = GpuFrame;
+    fn refresh_rate(&self) -> Option<(u32,u32)> {
+        (self.refresh.Numerator > 0 && self.refresh.Denominator > 0).then_some((self.refresh.Numerator,self.refresh.Denominator))
+    }
 
     fn size(&self) -> (u32, u32) {
         (self.w, self.h)

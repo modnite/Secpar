@@ -41,6 +41,7 @@ fn b64(s: &str) -> Vec<u8> {
 #[derive(Default, Clone)]
 struct Stats {
     frames: u32,
+    sizes: std::collections::BTreeSet<(usize,usize)>,
     /// Frames with a visible share of chroma outside the legal 16..240 range (zero chroma = green).
     bad_chroma: u32,
     worst_bad_share: f64,
@@ -160,6 +161,7 @@ fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -
                         let share = bad as f64 / total.max(1) as f64;
                         let mut s = st.lock().unwrap();
                         s.frames += 1;
+                        s.sizes.insert((w,h));
                         if share > 0.02 {
                             s.bad_chroma += 1;
                         }
@@ -261,4 +263,25 @@ fn two_viewers_get_clean_video() {
     assert_eq!(sa.mismatched + sb.mismatched, 0, "frames that differ from the other viewer's");
     assert_eq!(sa.decode_errors + sb.decode_errors, 0, "decoder errors");
     assert!(after.frames - at_leave.frames > 10, "the first viewer keeps streaming after the second leaves");
+}
+
+#[test]
+#[ignore = "Requires an unlocked Windows desktop and a hardware encoder"]
+fn resizing_reopens_shared_gpu_resources_without_breaking_decoding() {
+    let viewer=start("resize",1280,720,Default::default(),None);
+    std::thread::sleep(Duration::from_secs(2));
+    let before=viewer.stats.lock().unwrap().clone();
+    assert!(before.frames>30,"must decode before resizing");
+    viewer.session.resize(640,360);
+    std::thread::sleep(Duration::from_secs(2));
+    let small=viewer.stats.lock().unwrap().clone();
+    assert!(small.frames>before.frames+30,"must decode after shrinking");
+    assert!(small.sizes.iter().any(|&(w,h)|w<=640&&h<=360),"new dimensions: {:?}",small.sizes);
+    viewer.session.resize(1280,720);
+    std::thread::sleep(Duration::from_secs(2));
+    let final_stats=stop(viewer);
+    report("resized viewer",&final_stats);
+    assert!(final_stats.frames>small.frames+30,"must keep decoding after growing");
+    assert_eq!(final_stats.decode_errors,0);
+    assert_eq!(final_stats.bad_chroma,0);
 }

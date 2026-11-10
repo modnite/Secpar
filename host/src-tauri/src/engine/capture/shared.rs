@@ -23,6 +23,7 @@ struct Latest {
     shape_version: u64,
     epoch: u64,
     size: (u32, u32),
+    refresh: Option<(u32,u32)>,
     texture: Option<Arc<FrameTexture>>,
     capture_us: u64,
     pointer: Option<Pointer>,
@@ -99,6 +100,7 @@ impl SharedCapture {
             {
                 let mut latest = source.latest.lock().unwrap();
                 latest.size = size;
+                latest.refresh = first.refresh_rate();
                 latest.epoch = 1;
             }
             let (dev, ctx) = (source.dev.clone(), source.ctx.clone());
@@ -138,6 +140,7 @@ impl SharedCapture {
                     if reinit {
                         latest.epoch += 1;
                         latest.size = capture.size().unwrap_or(latest.size);
+                        latest.refresh = capture.refresh_rate();
                         latest.texture = None;
                         // Old-dimension buffers cannot be recycled into a new
                         // duplication. Outstanding viewer leases remain valid.
@@ -200,6 +203,7 @@ impl SharedCapture {
             self.source.display.clone(),
         )
     }
+    pub fn refresh_rate(&self) -> Option<(u32,u32)> { self.source.latest.lock().unwrap().refresh }
     pub fn size(&self) -> Option<(u32, u32)> {
         Some(self.source.latest.lock().unwrap().size)
     }
