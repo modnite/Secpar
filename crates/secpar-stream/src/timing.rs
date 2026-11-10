@@ -3,7 +3,7 @@
 use std::{cell::RefCell, sync::{Mutex, OnceLock}, time::{Duration, Instant}};
 
 #[derive(Clone, Copy)]
-pub enum Stage { Arrive, Submit, Decode, Decoded, Upload, Draw, Capture, Selected, Convert, Encode, Encoded, Packetize, Send, Sent, CaptureTextureWait, EncoderTextureWait }
+pub enum Stage { Arrive, Submit, Decode, Decoded, Upload, Draw, Capture, Selected, Convert, Encode, Encoded, Packetize, Send, Sent, CaptureTextureWait, EncoderTextureWait, NvencMap, NvencSubmit, NvencWait, NvencLock, NvencCopy, NvencUnmap }
 impl Stage {
     fn label(self) -> &'static str {
         match self {
@@ -16,6 +16,8 @@ impl Stage {
             Self::Packetize=>"host.packetize.duration", Self::Send=>"host.send.duration",
             Self::Sent=>"host.sent.interval",
             Self::CaptureTextureWait=>"host.capture_texture.wait", Self::EncoderTextureWait=>"host.encoder_texture.wait",
+            Self::NvencMap=>"host.nvenc.map", Self::NvencSubmit=>"host.nvenc.submit", Self::NvencWait=>"host.nvenc.wait",
+            Self::NvencLock=>"host.nvenc.lock", Self::NvencCopy=>"host.nvenc.copy", Self::NvencUnmap=>"host.nvenc.unmap",
         }
     }
 }
@@ -46,7 +48,7 @@ impl Series {
 static ENABLED: OnceLock<bool> = OnceLock::new();
 // A network task can migrate between Tokio threads. Its arrival clock must not.
 static ARRIVAL: OnceLock<Mutex<Series>> = OnceLock::new();
-const STAGES: usize = Stage::EncoderTextureWait as usize + 1;
+const STAGES: usize = Stage::NvencUnmap as usize + 1;
 thread_local! {static SERIES: RefCell<[Series;STAGES]> = RefCell::new(std::array::from_fn(|_|Series::default()));}
 pub fn enabled()->bool {*ENABLED.get_or_init(|| std::env::var("SECPAR_FRAME_TIMING").is_ok_and(|v|v=="1"))}
 /// The first event establishes the origin; it is not a zero-length sample.
@@ -66,6 +68,9 @@ pub fn elapsed(stage:Stage, began:Option<Instant>) {
     if let Some(began)=began {sample(stage,began.elapsed());}
 }
 pub fn begin()->Option<Instant> {enabled().then(Instant::now)}
+pub fn duration(stage:Stage,duration:Duration) {
+    if enabled() {sample(stage,duration);}
+}
 fn sample(stage:Stage,duration:Duration) {
     SERIES.with(|all|record(&mut all.borrow_mut()[stage as usize],stage,duration));
 }

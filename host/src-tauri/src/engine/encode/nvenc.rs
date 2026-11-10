@@ -4,7 +4,7 @@ use std::{cell::Cell, ffi::c_void, ptr::NonNull};
 use windows::{core::{Interface, Error, HRESULT}, Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D}};
 unsafe extern "C" {
     fn secpar_nvenc_open(dev:*mut c_void,codec:u32,w:u32,h:u32,fps:u32,kbps:u32,error:*mut i32)->*mut c_void;
-    fn secpar_nvenc_encode(enc:*mut c_void,tex:*mut c_void,time:u64,idr:bool,data:*mut *const u8,size:*mut u32,key:*mut bool)->i32;
+    fn secpar_nvenc_encode(enc:*mut c_void,tex:*mut c_void,time:u64,idr:bool,data:*mut *const u8,size:*mut u32,key:*mut bool,timings:*mut u64)->i32;
     fn secpar_nvenc_bitrate(enc:*mut c_void,kbps:u32)->i32;
     fn secpar_nvenc_close(enc:*mut c_void);
 }
@@ -30,8 +30,15 @@ impl Encoder {
     pub fn bitrate(&self)->u32 {self.kbps.get()}
     pub fn encode(&mut self,tex:&ID3D11Texture2D,capture_us:u64,idr:bool)->windows::core::Result<Vec<Encoded>> {
         let (mut data,mut len,mut key)=(std::ptr::null(),0,false);
+        let mut timings=[0u64;6];
+        let measure=secpar_stream::timing::enabled();
         // SAFETY: texture and bridge are live; returned bytes remain valid until next encode/drop.
-        checked(unsafe {secpar_nvenc_encode(self.raw.as_ptr(),tex.as_raw(),capture_us,idr,&mut data,&mut len,&mut key)})?;
+        checked(unsafe {secpar_nvenc_encode(self.raw.as_ptr(),tex.as_raw(),capture_us,idr,&mut data,&mut len,&mut key,if measure {timings.as_mut_ptr()} else {std::ptr::null_mut()})})?;
+        if measure {
+            use secpar_stream::timing::{self,Stage};
+            let stages=[Stage::NvencMap,Stage::NvencSubmit,Stage::NvencWait,Stage::NvencLock,Stage::NvencCopy,Stage::NvencUnmap];
+            for (stage,us) in stages.into_iter().zip(timings) {timing::duration(stage,std::time::Duration::from_micros(us));}
+        }
         if data.is_null()||len==0 {return Err(Error::from_hresult(HRESULT(0x80004005u32 as i32)));}
         let data=unsafe {std::slice::from_raw_parts(data,len as usize)}.to_vec();
         Ok(vec![Encoded {data,key,capture_us}])

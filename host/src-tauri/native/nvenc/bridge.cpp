@@ -7,6 +7,7 @@
 #include <d3d11.h>
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 #include <new>
 #include <memory>
 #include <vector>
@@ -113,7 +114,14 @@ struct Encoder {
         return status;
     }
 
-    NVENCSTATUS encode(ID3D11Texture2D* tex, uint64_t timestamp, bool idr) {
+    NVENCSTATUS encode(ID3D11Texture2D* tex, uint64_t timestamp, bool idr, uint64_t* timings) {
+        auto timed = [&](unsigned slot, auto call) -> NVENCSTATUS {
+            if (!timings) return call();
+            const auto before = std::chrono::steady_clock::now();
+            const auto status = call();
+            timings[slot] = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - before).count();
+            return status;
+        };
         auto it = std::find_if(inputs.begin(), inputs.end(), [tex](const Input& input) { return input.texture == tex; });
         NV_ENC_REGISTERED_PTR registered = nullptr;
         if (it != inputs.end()) {
@@ -137,7 +145,7 @@ struct Encoder {
             }
         }
         NV_ENC_MAP_INPUT_RESOURCE mp{}; mp.version = NV_ENC_MAP_INPUT_RESOURCE_VER; mp.registeredResource = registered;
-        auto status = api.nvEncMapInputResource(session, &mp); if (status != NV_ENC_SUCCESS) return status;
+        auto status = timed(0, [&] { return api.nvEncMapInputResource(session, &mp); }); if (status != NV_ENC_SUCCESS) return status;
         mapped = mp.mappedResource;
         NV_ENC_PIC_PARAMS p{}; p.version = NV_ENC_PIC_PARAMS_VER;
         p.inputWidth = init.encodeWidth; p.inputHeight = init.encodeHeight;
@@ -146,14 +154,14 @@ struct Encoder {
         p.inputTimeStamp = timestamp; p.inputDuration = 1000000 / init.frameRateNum;
         if (idr) p.encodePicFlags = NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS;
         ResetEvent(event);
-        status = api.nvEncEncodePicture(session, &p);
-        if (status == NV_ENC_SUCCESS && WaitForSingleObject(event, 1000) != WAIT_OBJECT_0) status = NV_ENC_ERR_GENERIC;
+        status = timed(1, [&] { return api.nvEncEncodePicture(session, &p); });
+        if (status == NV_ENC_SUCCESS) status = timed(2, [&] { return WaitForSingleObject(event, 1000) == WAIT_OBJECT_0 ? NV_ENC_SUCCESS : NV_ENC_ERR_GENERIC; });
         if (status == NV_ENC_SUCCESS) {
             NV_ENC_LOCK_BITSTREAM lock{}; lock.version = NV_ENC_LOCK_BITSTREAM_VER; lock.outputBitstream = output;
-            status = api.nvEncLockBitstream(session, &lock);
+            status = timed(3, [&] { return api.nvEncLockBitstream(session, &lock); });
             if (status == NV_ENC_SUCCESS) {
                 const auto data = static_cast<const unsigned char*>(lock.bitstreamBufferPtr);
-                try { bytes.assign(data, data + lock.bitstreamSizeInBytes); }
+                try { timed(4, [&] { bytes.assign(data, data + lock.bitstreamSizeInBytes); return NV_ENC_SUCCESS; }); }
                 catch (...) {
                     api.nvEncUnlockBitstream(session, output);
                     api.nvEncUnmapInputResource(session, mapped); mapped = nullptr;
@@ -163,7 +171,7 @@ struct Encoder {
                 api.nvEncUnlockBitstream(session, output);
             }
         }
-        api.nvEncUnmapInputResource(session, mapped); mapped = nullptr;
+        timed(5, [&] { return api.nvEncUnmapInputResource(session, mapped); }); mapped = nullptr;
         return status;
     }
 
@@ -189,10 +197,10 @@ void* secpar_nvenc_open(ID3D11Device* dev, unsigned codec, unsigned w, unsigned 
         return p.release();
     } catch (...) { *error = NV_ENC_ERR_OUT_OF_MEMORY; return nullptr; }
 }
-int secpar_nvenc_encode(void* ptr, ID3D11Texture2D* tex, uint64_t time, bool idr, const unsigned char** data, unsigned* size, bool* key) noexcept {
+int secpar_nvenc_encode(void* ptr, ID3D11Texture2D* tex, uint64_t time, bool idr, const unsigned char** data, unsigned* size, bool* key, uint64_t* timings) noexcept {
     try {
         auto p = static_cast<Encoder*>(ptr);
-        auto status = p->encode(tex, time, idr);
+        auto status = p->encode(tex, time, idr, timings);
         if (status == NV_ENC_SUCCESS) { *data = p->bytes.data(); *size = static_cast<unsigned>(p->bytes.size()); *key = p->key; }
         return status;
     } catch (...) { return NV_ENC_ERR_OUT_OF_MEMORY; }
