@@ -1,11 +1,11 @@
-use crate::{design,video};
+use crate::{design,keys,video};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub enum CaptureShortcut { #[default] CtrlAltG, CtrlShiftG, CtrlAltZ }
-// Retained in persisted settings for compatibility; Ctrl+Alt+W now owns fullscreen.
+// Retained in persisted settings for compatibility; the stream's escape chord owns the hotkeys now.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -14,11 +14,15 @@ pub struct Settings {
     pub decoder:video::Preference,
     /// Where Files downloads go. Empty means Downloads/Secpar.
     pub files_dir:String,
+    /// While streaming, Win, Alt+Tab, Alt+F4 and the like go to the host (Windows keyboard hook).
+    pub system_keys:bool,
+    /// Modifiers of the client's own hotkeys during a stream. The last key picks the action.
+    pub escape:keys::EscapeKeys,
     #[serde(skip)] pub active_decoder:Option<String>,
     #[serde(skip)] note:String,
 }
 impl Default for Settings {
-    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),files_dir:String::new(),active_decoder:None,note:String::new()}}
+    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),files_dir:String::new(),system_keys:true,escape:keys::EscapeKeys::default(),active_decoder:None,note:String::new()}}
 }
 /// Host native first, then largest to smallest. The stream menu uses the same list.
 pub(crate) const RESOLUTIONS:[(u32,u32);6]=[(0,0),(3840,2160),(2560,1440),(1920,1080),(1280,720),(854,480)];
@@ -100,7 +104,16 @@ impl Settings {
         design::surface().inner_margin(10).show(ui,|ui| {
             ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
             ui.label(egui::RichText::new("Keyboard").strong());
-            ui.columns(2,|c| {c[0].label("Fullscreen");c[1].label("Ctrl+Alt+W");});
+            #[cfg(windows)]
+            ui.checkbox(&mut self.system_keys,"Send system shortcuts to the host");
+            ui.columns(2,|c| {
+                let height=c[1].spacing().interact_size.y;
+                c[0].allocate_ui_with_layout(egui::vec2(c[0].available_width(),height),egui::Layout::left_to_right(egui::Align::Center),|ui|{ui.label("Escape keys");});
+                egui::ComboBox::from_id_salt("client-escape").width(c[1].available_width()).selected_text(self.escape.label()).show_ui(&mut c[1],|ui| {
+                    for keys in keys::EscapeKeys::ALL {ui.selectable_value(&mut self.escape,keys,keys.label());}
+                });
+            });
+            ui.label(egui::RichText::new(format!("{}+  W fullscreen stream   Q disconnect   S menu button",self.escape.label())).size(12.).color(design::MUTED));
         });
         if !self.note.is_empty(){ui.label(&self.note);}
         *self!=old
@@ -110,6 +123,23 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_settings_files_load_with_the_new_keyboard_defaults() {
+        let old=br#"{"width":1920,"height":1080,"fps":60,"kbps":30000,"audio":true,"clipboard":true,"shortcut":"CtrlAltZ","decoder":"Automatic","files_dir":""}"#;
+        let loaded:Settings=serde_json::from_slice(old).unwrap();
+        assert!(loaded.system_keys);
+        assert_eq!(loaded.escape,keys::EscapeKeys::CtrlAlt);
+        assert_eq!(loaded.width,1920);
+        assert!(loaded.shortcut==CaptureShortcut::CtrlAltZ);
+        let empty:Settings=serde_json::from_slice(b"{}").unwrap();
+        assert!(empty==Settings::default());
+    }
+    #[test]
+    fn keyboard_settings_round_trip() {
+        let mut s=Settings::default();s.system_keys=false;s.escape=keys::EscapeKeys::CtrlShift;
+        let back:Settings=serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+        assert!(!back.system_keys);assert_eq!(back.escape,keys::EscapeKeys::CtrlShift);
+    }
     #[test]
     fn resolutions_descend_after_native() {
         assert_eq!(RESOLUTIONS[0],(0,0));

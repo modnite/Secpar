@@ -974,3 +974,15 @@ Not verified: a physical controller of any kind, macOS, DualShock without a wrap
   page takes the preview's connection, LAN addresses on this network start first and the
   last working route is kept on disk. A timing log (docs/account-owned-access.md) shows
   every step. Numbers and what was not measured are in the commit message.
+
+- Stream keyboard and fullscreen (branch claude/stream-keys, not released). Fullscreen is now
+  a property of the stream: the app window never goes fullscreen, and leaving a stream by any
+  route restores the window's size and position. On Windows a low-level keyboard hook, up only
+  while a stream is on screen with focus and the keys going to the host, sends Win, Alt+Tab,
+  Alt+F4 and the other system shortcuts to the host first, with a heartbeat watchdog and
+  release of held keys on removal. The client's own hotkeys moved behind the escape keys
+  (Ctrl+Alt by default, changeable in Settings, Keyboard). Details and what cannot be
+  intercepted (Ctrl+Alt+Del, Linux grabs): docs/stream-keyboard.md. Verified with unit tests
+  on Windows and the OMV box, a real window driven through the fullscreen rules, and the real
+  hook fed synthetic events. Not verified: real Alt+Tab or Win swallowing on a live desktop
+  against a real host.

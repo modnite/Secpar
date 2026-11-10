@@ -64,7 +64,7 @@ impl App {
                     .fill(Color32::from_rgba_unmultiplied(25,27,29,135)).stroke(Stroke::NONE).corner_radius(6))
                     .on_hover_text("Stream menu").clicked(){self.stream_menu_open=!self.stream_menu_open;self.menu_page=0;}
             }));
-        // hidden (Ctrl+Alt+S): no button, and nothing on screen counts as hovering it
+        // hidden (escape keys + S): no button, and nothing on screen counts as hovering it
         self.stream_menu_button_bounds=Some(button.map_or(Rect::NOTHING,|b|b.response.rect));
         // A strip across the top, like Parsec's: stream stats, or the resize notice for an old host.
         let waiting=self.resize_wait.filter(|(at,_)|resize_notice_state(at.elapsed()).0);
@@ -97,7 +97,7 @@ impl App {
                 egui::Frame::new().fill(Color32::from_rgba_unmultiplied(25,27,29,246)).corner_radius(5).inner_margin(6).show(ui,|ui|{
                     ui.set_width(250.);ui.spacing_mut().item_spacing.y=0.;
                     if self.menu_page==0 {
-                        if row(ui,if self.fullscreen {Icon::Windowed}else{Icon::Window},if self.fullscreen {"Window"}else{"Fullscreen"},"Ctrl+Alt+W",false,false,false).clicked(){self.set_fullscreen(ctx,!self.fullscreen);}
+                        if row(ui,if self.fs.on {Icon::Windowed}else{Icon::Window},if self.fs.on {"Window"}else{"Fullscreen"},&self.client.escape.chord(keys::Escape::Fullscreen),false,false,false).clicked(){self.set_fullscreen(ctx,!self.fs.on);}
                         if row(ui,Icon::Decoder,"Decoder","",true,false,false).clicked(){self.menu_page=1;}
                         if row(ui,Icon::Display,"Resolution",&resolution_label(self.options.width,self.options.height),true,false,false).clicked(){self.menu_page=4;}
                         if self.displays.len()>1 && row(ui,Icon::Display,"Switch display","",true,false,false).clicked(){self.menu_page=2;}
@@ -109,8 +109,11 @@ impl App {
                         if row(ui,Icon::Audio,"Audio","",true,false,false).clicked(){self.menu_page=3;}
                         if row(ui,Icon::Help,"Help","",false,false,false).clicked(){let _=open::that("https://secpar.win/help/#stream-menu");}
                         divider(ui);
-                        if row(ui,Icon::Exit,"Disconnect","Ctrl+Alt+Q",false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
-                        ui.add_space(5.);ui.horizontal(|ui|{ui.add_space(FOOTER_LEFT);ui.label(egui::RichText::new(concat!("Secpar ",env!("CARGO_PKG_VERSION"))).size(10.).color(MUTED));});
+                        if row(ui,Icon::Exit,"Disconnect",&self.client.escape.chord(keys::Escape::Disconnect),false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
+                        ui.add_space(5.);ui.horizontal(|ui|{
+                            ui.add_space(FOOTER_LEFT);ui.label(egui::RichText::new(concat!("Secpar ",env!("CARGO_PKG_VERSION"))).size(10.).color(MUTED));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{ui.add_space(FOOTER_LEFT);ui.label(egui::RichText::new(format!("Escape keys {}",self.client.escape.label())).size(10.).color(MUTED));});
+                        });
                     } else {
                         let page=self.menu_page;
                         let title=match page {1=>"Decoder",2=>"Displays",4=>"Resolution",_=>"Audio"};

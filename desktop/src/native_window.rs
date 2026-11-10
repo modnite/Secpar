@@ -12,6 +12,8 @@ impl NativeWindow {
             _ => None,
         }
     }
+    /// The window handle for the keyboard hook's foreground check.
+    pub fn raw(&self) -> usize { self.0 }
     fn valid(&self) -> bool {
         let mut pid = 0;
         // The handle is borrowed from our root viewport; reject stale/reused handles.
