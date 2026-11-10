@@ -163,7 +163,10 @@ pub(crate) struct Link {
 impl Link {
     pub fn start(ctx: Arc<Ctx>, admission: Arc<GuestAdmission>, pass: &Pass) -> Self {
         ctx.guest.sessions.lock().unwrap().push((pass.guest.clone(), pass.gate.clone()));
-        let _ = ctx.events.send(Event::GuestConnected { guest: pass.guest.clone(), handle: pass.handle.clone() });
+        pass.gate.set_handle(&pass.handle);
+        if !pass.gate.is_preview() && pass.gate.announce_once() {
+            let _ = ctx.events.send(Event::GuestConnected { guest: pass.guest.clone(), handle: pass.handle.clone() });
+        }
         let gate = pass.gate.clone();
         let watcher = tokio::spawn(watch(ctx.clone(), admission, Pass {
             request: pass.request.clone(),
@@ -181,7 +184,9 @@ impl Drop for Link {
         self.gate.close_because("ended");
         self.watcher.abort();
         self.ctx.guest.sessions.lock().unwrap().retain(|(_, g)| !g.same(&self.gate));
-        let _ = self.ctx.events.send(Event::GuestDisconnected { guest: self.guest.clone() });
+        if self.gate.was_announced() {
+            let _ = self.ctx.events.send(Event::GuestDisconnected { guest: self.guest.clone() });
+        }
     }
 }
 
@@ -288,6 +293,8 @@ pub(crate) struct Filtered {
     pub inner: Box<dyn Session>,
     pub gate: Gate,
     pub ctx: Arc<Ctx>,
+    /// The friend's account id, for the notice when a preview turns into a real session.
+    pub guest_id: String,
 }
 
 impl Session for Filtered {
@@ -311,6 +318,9 @@ impl Session for Filtered {
             }
             *audio = *audio && self.gate.has("audio");
             self.gate.mark_streaming();
+            if self.gate.announce_once() {
+                let _ = self.ctx.events.send(Event::GuestConnected { guest: self.guest_id.clone(), handle: self.gate.handle() });
+            }
         }
         self.inner.on_msg(m)
     }

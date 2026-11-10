@@ -203,7 +203,7 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                 pass.gate.close();
                 return fail(&mut ws, "guest_refused", "This PC does not accept friends yet.").await;
             };
-            let session: Box<dyn Session> = Box::new(Filtered { inner, gate: pass.gate.clone(), ctx: ctx.clone() });
+            let session: Box<dyn Session> = Box::new(Filtered { inner, gate: pass.gate.clone(), ctx: ctx.clone(), guest_id: pass.guest.clone() });
             let link = Link::start(ctx.clone(), adm.clone(), pass);
             (session, None, None, Some(link), Some(pass.gate.clone()))
         }
@@ -619,6 +619,33 @@ mod guest_tests {
     }
 
     #[tokio::test]
+    async fn a_preview_is_quiet_until_the_friend_starts_a_stream() {
+        let r = rig("full", "always", true).await;
+        let mut events = r.ctx.events.subscribe();
+        let id = "00000000-0000-4000-8000-0000000000c0";
+        Mock::given(method("GET")).and(path(format!("/v1/host/requests/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(
+                {"id":id,"guest":guest_id(0),"approved":["view"],"state":"claimed","expires":1,"active":true})))
+            .mount(&r.server).await;
+        let mut preview = connect(&r.ctx);
+        preview.say(serde_json::json!({"t":"guest","grant":preview_token(0)})).await;
+        assert_eq!(preview.next().await.unwrap()["t"], "welcome");
+        assert!(events.try_recv().is_err(), "a preview must not announce the friend");
+        // The friend starts a stream on the same session: now the owner hears about it, once.
+        let set: std::collections::BTreeSet<String> = ["view".to_string()].into();
+        let roster = Roster::parse(&serde_json::json!([{"id":"x","handle":"x"}])).unwrap();
+        let lease = Lease { guest: "x".into(), approved: set.clone(), active: true };
+        let gate = admit(&roster, &lease, &set, "x").unwrap().gate().clone();
+        gate.set_handle("friend0");
+        let mut f = Filtered { inner: Box::new(Recorder(Default::default())), gate: gate.clone(), ctx: r.ctx.clone(), guest_id: guest_id(0) };
+        f.on_msg(start());
+        f.on_msg(start());
+        assert!(matches!(events.try_recv(), Ok(Event::GuestConnected { handle, .. }) if handle == "friend0"));
+        assert!(events.try_recv().is_err());
+        assert!(!gate.is_preview());
+    }
+
+    #[tokio::test]
     async fn one_friend_cannot_hold_two_seats() {
         let r = rig("full", "always", true).await;
         let mut first = connect(&r.ctx);
@@ -723,7 +750,7 @@ mod guest_tests {
         let roster = Roster::parse(&serde_json::json!([{"id":"x","handle":"x"}])).unwrap();
         let lease = Lease { guest: "x".into(), approved: set.clone(), active: true };
         let gate = admit(&roster, &lease, &set, "x").unwrap().gate().clone();
-        let mut f = Filtered { inner: Box::new(Recorder(Default::default())), gate, ctx: r.ctx.clone() };
+        let mut f = Filtered { inner: Box::new(Recorder(Default::default())), gate, ctx: r.ctx.clone(), guest_id: guest_id(0) };
         assert_eq!(f.on_msg(start()), Some(ServerMsg::error("busy", "The owner is using this PC.", Some("stream.start"))));
         drop(owner);
         assert_eq!(r.ctx.guest.owner_streams.load(Ordering::SeqCst), 0);

@@ -112,6 +112,8 @@ struct GateState {
     keyboard_off: AtomicBool,
     mouse_off: AtomicBool,
     streaming: AtomicBool,
+    announced: AtomicBool,
+    handle: std::sync::Mutex<String>,
     closed: tokio::sync::Notify,
     reason: std::sync::Mutex<&'static str>,
 }
@@ -123,7 +125,7 @@ impl PartialEq for Gate {
 impl Eq for Gate {}
 impl Gate {
     fn new(permissions: BTreeSet<String>) -> Self {
-        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), keyboard_off: AtomicBool::new(false), mouse_off: AtomicBool::new(false), streaming: AtomicBool::new(false), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
+        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), keyboard_off: AtomicBool::new(false), mouse_off: AtomicBool::new(false), streaming: AtomicBool::new(false), announced: AtomicBool::new(false), handle: std::sync::Mutex::new(String::new()), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
     }
     pub fn has(&self, permission: &str) -> bool {
         self.0.open.load(Ordering::SeqCst)
@@ -139,6 +141,20 @@ impl Gate {
     }
     pub fn mouse(&self) -> bool {
         self.has("mouse")
+    }
+    /// True once, the first time it is called. The host tells its owner about a friend only then, so a card
+    /// preview stays quiet until the friend really starts using the PC.
+    pub fn announce_once(&self) -> bool {
+        !self.0.announced.swap(true, Ordering::SeqCst)
+    }
+    pub fn was_announced(&self) -> bool {
+        self.0.announced.load(Ordering::SeqCst)
+    }
+    pub fn set_handle(&self, handle: &str) {
+        *self.0.handle.lock().unwrap() = handle.to_string();
+    }
+    pub fn handle(&self) -> String {
+        self.0.handle.lock().unwrap().clone()
     }
     /// The friend started a stream, so this is more than a preview.
     pub fn mark_streaming(&self) {
