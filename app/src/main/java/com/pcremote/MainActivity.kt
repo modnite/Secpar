@@ -272,6 +272,7 @@ class MainActivity : ComponentActivity() {
                         val thumbs by home.thumbs.collectAsState()
                         val pairState by pairing.state.collectAsState()
                         val accountState by account.state.collectAsState()
+                        val friendThumbs by account.friendThumbs.collectAsState()
                         val update by com.pcremote.update.Updater.state.collectAsState()
                         val accountActions = remember(account) {
                             com.pcremote.account.AccountActions(
@@ -301,7 +302,7 @@ class MainActivity : ComponentActivity() {
                             if (pairState is com.pcremote.onboarding.PairingState.Done) { pairing.reset(); home.stop(); home.start() }
                         }
                         val shown = accountState
-                        HomeScreen(cards, thumbs, IMPLEMENTED_MODES, HomeActions(
+                        HomeScreen(cards, thumbs + friendThumbs, IMPLEMENTED_MODES, HomeActions(
                             open = { card, mode -> nav.navigate(Routes.mode(card.id, mode)) },
                             primary = { card ->
                                 when (card.primary) {

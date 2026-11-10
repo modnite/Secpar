@@ -185,7 +185,7 @@ private fun ComputersPage(
             when (row) {
                 is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)
                 is ComputerRow.FromAccount -> AccountCard(row.computer, account.connecting, acts)
-                is ComputerRow.Friends -> FriendCard(row.computer, account, acts)
+                is ComputerRow.Friends -> FriendCard(row.computer, thumbs[row.computer.id], account, acts)
             }
         }
     }
@@ -257,7 +257,7 @@ private fun AccountCard(computer: OwnedComputer, connecting: String?, acts: Acco
 
 /** A computer a friend shares. Connect asks with the usual choices. The owner's settings trim what they allow. */
 @Composable
-private fun FriendCard(computer: FriendComputer, account: AccountUi, acts: AccountActions) {
+private fun FriendCard(computer: FriendComputer, thumb: ImageBitmap?, account: AccountUi, acts: AccountActions) {
     val c = LocalMidnight.current
     val progress = account.guest?.takeIf { it.computerId == computer.id }
     CardFrame {
@@ -268,6 +268,7 @@ private fun FriendCard(computer: FriendComputer, account: AccountUi, acts: Accou
             Text(FriendsConnect.phaseText(progress), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
             GhostButton(FriendsConnect.CANCEL, acts.cancelFriendConnect)
         } else Column(Modifier.widthIn(max = 360.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (thumb != null) Preview(thumb, Modifier.fillMaxWidth())
             // The same strip as an own card: Connect first, then what the owner's settings allow, each a glyph.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 val ready = account.guest == null

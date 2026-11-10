@@ -1,5 +1,6 @@
 package com.pcremote.account
 
+import androidx.compose.ui.graphics.asImageBitmap
 import com.pcremote.agent.PairUri
 import com.pcremote.agent.PairedPc
 import kotlinx.coroutines.*
@@ -59,6 +60,10 @@ class AccountController(
 ) {
     private val mutable = MutableStateFlow(AccountUi())
     val state: StateFlow<AccountUi> = mutable
+    private val thumbs = MutableStateFlow<Map<String, androidx.compose.ui.graphics.ImageBitmap>>(emptyMap())
+    /** Live pictures for the cards of friends who let you connect at any time, by computer id. */
+    val friendThumbs: StateFlow<Map<String, androidx.compose.ui.graphics.ImageBitmap>> = thumbs
+    private val previewJobs = mutableMapOf<String, Job>()
     private val changes = MutableStateFlow(0L)
     val revision: StateFlow<Long> = changes
     private val transition = Mutex()
@@ -159,6 +164,7 @@ class AccountController(
         val epoch = ++generation
         loginJob?.cancel(); refreshJob?.cancel(); pairJob?.cancel(); expiryJob?.cancel()
         guestGeneration++; guestJob?.cancel()
+        stopPreviews()
         session = null; api = null
         mutable.value = AccountUi(ready = true, busy = true)
         changes.value++
@@ -201,6 +207,7 @@ class AccountController(
                     friends = friends ?: state.value.friends, blocked = blocked ?: state.value.blocked,
                     requests = requests ?: state.value.requests, friendComputers = shared ?: state.value.friendComputers)
                 if (removed) changes.value++
+                if (shared != null) syncPreviews(service, shared)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (epoch == generation) {
@@ -307,6 +314,63 @@ class AccountController(
                 // A request nobody answered, or one we could not use, would stay open for the owner to allow later.
                 requestId?.takeIf { cancelable }?.let { id -> withContext(NonCancellable) { runCatching { service.cancelAccess(id) } } }
             }
+        }
+    }
+
+    /** Starts a preview for each friend computer that may be watched without asking, and stops the others. */
+    private fun syncPreviews(service: AccountService, computers: List<FriendComputer>) {
+        val open = guestOpen ?: return
+        val wanted = computers.filter { it.connect == "always" }
+        previewJobs.keys.filter { id -> wanted.none { it.id == id } }.forEach { id -> previewJobs.remove(id)?.cancel(); thumbs.value = thumbs.value - id }
+        wanted.forEach { c ->
+            if (previewJobs[c.id]?.isActive != true) previewJobs[c.id] = scope.launch { watchPreview(service, open, c) }
+        }
+    }
+
+    private fun stopPreviews() {
+        previewJobs.values.forEach { it.cancel() }
+        previewJobs.clear()
+        thumbs.value = emptyMap()
+    }
+
+    /**
+     * One friend computer's preview: a view-only session that subscribes to thumbnails. The host ends it when a
+     * real connection comes, and the loop starts again after a pause that grows while nothing works.
+     */
+    private suspend fun watchPreview(service: AccountService, open: suspend (GuestGrant, FriendComputer, Set<String>, String) -> String, c: FriendComputer) {
+        var wait = 10_000L
+        while (true) {
+            val started = elapsed()
+            var route: String? = null
+            try {
+                val first = service.requestAccess(c.id, listOf("view"))
+                if (first.approved) {
+                    route = open(service.claimAccess(first.id), c, first.permissions.toSet(), first.id)
+                    val conn = com.pcremote.guest.GuestSessions.find(route)?.conn
+                    if (conn != null && (conn.state.value as? com.pcremote.agent.AgentState.Online)?.caps?.contains("thumb") == true) {
+                        conn.send(com.pcremote.agent.Msg.ThumbSub(true))
+                        coroutineScope {
+                            val reader = launch {
+                                conn.binary.collect { b ->
+                                    if (b.isNotEmpty() && b[0].toInt() == 2)
+                                        android.graphics.BitmapFactory.decodeByteArray(b, 1, b.size - 1)?.let { thumbs.value = thumbs.value + (c.id to it.asImageBitmap()) }
+                                }
+                            }
+                            conn.state.first { it !is com.pcremote.agent.AgentState.Online }
+                            reader.cancel()
+                        }
+                    } else wait = 300_000L // The computer gives no thumbnails.
+                } else wait = 300_000L // The owner now wants to be asked.
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) return
+            } finally {
+                thumbs.value = thumbs.value - c.id
+                route?.let { com.pcremote.guest.GuestSessions.find(it)?.conn?.close(); com.pcremote.guest.GuestSessions.remove(it) }
+            }
+            if (elapsed() - started > 60_000) wait = 10_000L
+            delay(wait)
+            wait = minOf(300_000L, wait * 2)
         }
     }
 

@@ -84,11 +84,13 @@ object ComputerList {
 
     /**
      * What a friend's card can open. The owner's grant decides. Controllers need nothing from the owner's
-     * keyboard and mouse settings. Remote and Slides need those. Media and Files stay owner only: the host
-     * never lets a friend browse its disks or drive its media, so they are not offered.
+     * keyboard and mouse settings. Remote and Slides need those. Files only sends to the computer. Media stays
+     * owner only: the host never lets a friend drive its media, so it is not offered.
      */
     fun friendTiles(c: FriendComputer): List<FriendTile> = buildList {
         add(FriendTile(Mode.PAD, listOf("gamepad")))
+        // Files opens as an upload page: the host never lets a friend browse, so only sending works.
+        add(FriendTile(Mode.FILES, listOf("files")))
         if (c.keyboard || c.mouse) add(FriendTile(Mode.REMOTE, listOfNotNull("keyboard".takeIf { c.keyboard }, "mouse".takeIf { c.mouse })))
         if (c.keyboard) add(FriendTile(Mode.SLIDES, listOf("keyboard")))
     }

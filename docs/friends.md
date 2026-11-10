@@ -67,3 +67,9 @@ The desktop app asks the account service every 10 seconds while it is running an
 On Windows a button opens a `secpar-alert:` link that carries an HMAC. The key lives in the user's credential store, so a web page cannot make a link that approves a request. The link starts the app in answer mode. It answers and exits without a window. Friend requests that were already waiting when the app started are not announced, because they have no time.
 
 Android has no push service here. Turning on Notify me of requests starts a foreground service with a low priority notice. It needs the notification permission. Android does not let that service restart itself from the background after a reboot, so open the app once after a restart.
+
+## Previews and sending files
+
+A friend with the view permission may subscribe to thumbnails (`thumb.sub`, listed as `thumb` in `welcome.caps`). A session that holds only `view` and never starts a stream is a preview. Clients use one for the card of a friend set to connect at any time. The host does not tell its owner about a preview. It announces the friend when they start a stream. A preview gives way to a real connection, from the same friend or from another when all three seats are taken, and the host frees one seat.
+
+Browsing the host's disks (`fs.list`, `fs.get`) is never allowed for a friend. A friend with the `files` permission can send files to the host and receive files the host offers. The Files page of a friend's computer is therefore an upload page.
