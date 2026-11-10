@@ -56,17 +56,17 @@ internal class VideoOutputQueue(fps: Int) {
     private val pictures = ArrayDeque<Picture>()
     private val minSpacingNs = 800_000_000L / fps.coerceAtLeast(1)
     private var lastRenderNs: Long? = null
-    fun offer(picture: Picture): Picture? {
+    @Synchronized fun offer(picture: Picture): Picture? {
         val dropped = if (pictures.size == 2) pictures.removeFirst() else null
         pictures.addLast(picture)
         return dropped
     }
-    fun poll(vsyncNs: Long): Picture? {
+    @Synchronized fun poll(vsyncNs: Long): Picture? {
         if (lastRenderNs?.let { vsyncNs - it < minSpacingNs } == true) return null
         val picture = pictures.pollFirst() ?: return null
         lastRenderNs = vsyncNs
         return picture
     }
-    fun clear(): List<Picture> = pictures.toList().also { pictures.clear() }
-    fun isEmpty() = pictures.isEmpty()
+    @Synchronized fun clear(): List<Picture> = pictures.toList().also { pictures.clear() }
+    @Synchronized fun isEmpty() = pictures.isEmpty()
 }

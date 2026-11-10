@@ -107,7 +107,8 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
         StreamController(scope, session::send, session.conn.incoming, { ready, failed ->
             val sock = nextSock.getAndSet(null) ?: com.pcremote.remote.PeerSocket()
             PrsPipeline(ready, session.conn.connectedHost ?: session.pc.allHosts.first(), sock, surface!!.surface, session.pc.relay,
-                { m -> session.send(m) }, failed, onEnded = { scope.launch { onBack() } }).also { pipe = it }
+                { m -> session.send(m) }, failed, onEnded = { scope.launch { onBack() } },
+                appVsyncOffsetNs = (ctx as? Activity)?.window?.decorView?.display?.appVsyncOffsetNanos ?: 0L).also { pipe = it }
         }, CodecPicker.supported(), prepare = {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 val s = com.pcremote.remote.PeerSocket(com.pcremote.remote.PeerSocket.CLOUDFLARE_STUN)

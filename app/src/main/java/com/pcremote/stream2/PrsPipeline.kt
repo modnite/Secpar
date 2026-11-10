@@ -35,6 +35,7 @@ class PrsPipeline(
     sendAgent: (Msg) -> Unit,
     private val onDecoderFailed: () -> Unit,
     private val onEnded: () -> Unit,
+    private val appVsyncOffsetNs: Long = 0,
 ) : Pipeline {
     private val audio: AudioPlayer
     @Volatile private lateinit var decoder: VideoDecoder
@@ -71,7 +72,7 @@ class PrsPipeline(
         }
     }
 
-    private fun newDecoder(r: Msg.StreamReady) = VideoDecoder(surface, r.codec, r.w, r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr)
+    private fun newDecoder(r: Msg.StreamReady) = VideoDecoder(surface, r.codec, r.w, r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr, appVsyncOffsetNs)
         .also { d -> d.onRendered = { receiver.decodeMs = d.decodeMs } }
 
     /** The host's relayed address (`stream.cand` from the host): talk relay-to-relay. */

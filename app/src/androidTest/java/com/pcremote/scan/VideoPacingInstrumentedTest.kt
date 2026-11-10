@@ -43,9 +43,10 @@ class VideoPacingInstrumentedTest {
         assertTrue(pictures.size >= 120)
         val errors = CopyOnWriteArrayList<String>()
         val displayed = AtomicInteger()
+        val displayThreads = CopyOnWriteArrayList<String>()
         val decoder = VideoDecoder(activity.video.holder.surface, "h264", 320, 180, 120,
             { errors.add(it) }, {})
-        decoder.onRendered = { displayed.incrementAndGet() }
+        decoder.onRendered = { displayThreads.add(Thread.currentThread().name); displayed.incrementAndGet() }
         try {
             for ((id, data) in pictures.take(180).withIndex()) {
                 val now = System.nanoTime() / 1000
@@ -55,6 +56,7 @@ class VideoPacingInstrumentedTest {
             }
             assertTrue("Decoder errors: $errors", errors.isEmpty())
             assertTrue("No display-paced output", displayed.get() >= 5)
+            assertTrue("Display work must stay off the codec thread: $displayThreads", displayThreads.all { it == "secpar-display" })
             val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
             val copied = CountDownLatch(1)
             val copyResult = AtomicInteger(-1)

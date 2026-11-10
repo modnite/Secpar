@@ -191,3 +191,9 @@ switching auto-enter off on the launcher. This restriction is not yet shipped.
 
 2026-11-07: Linux hitches correlate with sudden received bitrate below1Mbps.
 Keep this as a migration acceptance case; correlation is not proven causation.
+
+Workflow correction, 2026-11-10: test confirmations and additional prompts do not
+end the ongoing task. Record the result and continue the remaining authorized work.
+Do not stop with an acknowledgement-only reply while implementation remains.
+Pause dependent work only for required approval/input or a real blocker, and
+continue independent work meanwhile. Preserve accepted fixes during follow-up work.

@@ -24,9 +24,14 @@ class VideoDecoder(
     private val fps: Int,
     private val onError: (String) -> Unit,
     private val onNeedKeyframe: () -> Unit,
+    private val appVsyncOffsetNs: Long = 0,
 ) {
     private val thread = HandlerThread("pcr-video", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
+    // Moonlight Android's balanced renderer keeps vsync off the decoder thread.
+    // MediaCodecDecoderRenderer.java: doFrame()/startChoreographerThread().
+    private val displayThread = HandlerThread("secpar-display", android.os.Process.THREAD_PRIORITY_DEFAULT + android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE).apply { start() }
+    private val displayHandler = Handler(displayThread.looper)
     private val lock = Any()
     private val frames = VideoInputQueue(fps)
     private val pictures = VideoOutputQueue(fps)
@@ -34,14 +39,13 @@ class VideoDecoder(
     @Volatile private var mc: MediaCodec? = null
     private var configureScheduled = false
     private var choreographer: Choreographer? = null
-    private var renderPosted = false
     private val feedPosted = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var dead = false
 
     /** Average time from frame arrival to render, ms (for REPORT and stats). */
     @Volatile var decodeMs = 0; private set
     private var decodeAvgUs = 0.0
-    private var outputDrops = 0
+    private val outputDrops = java.util.concurrent.atomic.AtomicInteger()
     private var presented = 0
     private var statsAtNs = System.nanoTime()
 
@@ -67,12 +71,15 @@ class VideoDecoder(
 
     fun release() {
         dead = true
-        handler.post {
+        displayHandler.post {
             choreographer?.removeFrameCallback(renderFrame)
             pictures.clear().forEach { picture -> runCatching { mc?.releaseOutputBuffer(picture.index, false) } }
-            synchronized(lock) { frames.clear(); inputs.clear() }
-            runCatching { mc?.stop() }; runCatching { mc?.release() }; mc = null
-            thread.quitSafely()
+            handler.post {
+                synchronized(lock) { frames.clear(); inputs.clear() }
+                runCatching { mc?.stop() }; runCatching { mc?.release() }; mc = null
+                thread.quitSafely()
+            }
+            displayThread.quitSafely()
         }
     }
 
@@ -104,7 +111,12 @@ class VideoDecoder(
             c.start()
             mc = c
             name = info.name
-            choreographer = Choreographer.getInstance()
+            displayHandler.post {
+                if (!dead) {
+                    choreographer = Choreographer.getInstance()
+                    choreographer?.postFrameCallback(renderFrame)
+                }
+            }
             if (Build.VERSION.SDK_INT >= 30) runCatching {
                 surface.setFrameRate(fps.toFloat(), Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
             }
@@ -149,12 +161,8 @@ class VideoDecoder(
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
             if (dead) { runCatching { codec.releaseOutputBuffer(index, false) }; return }
             pictures.offer(VideoOutputQueue.Picture(index, info.presentationTimeUs))?.let {
-                outputDrops++
+                outputDrops.incrementAndGet()
                 runCatching { codec.releaseOutputBuffer(it.index, false) }
-            }
-            if (!renderPosted) {
-                renderPosted = true
-                choreographer?.postFrameCallback(renderFrame)
             }
         }
 
@@ -168,11 +176,11 @@ class VideoDecoder(
 
     private val renderFrame = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            renderPosted = false
             if (dead) return
-            pictures.poll(frameTimeNanos)?.let { picture ->
+            val presentTimeNs = frameTimeNanos - appVsyncOffsetNs
+            pictures.poll(presentTimeNs)?.let { picture ->
                 try {
-                    mc?.releaseOutputBuffer(picture.index, frameTimeNanos)
+                    mc?.releaseOutputBuffer(picture.index, presentTimeNs)
                     presented++
                     if (picture.receivedUs > 0) {
                         val took = (System.nanoTime() / 1000 - picture.receivedUs).coerceIn(0, 1_000_000)
@@ -184,17 +192,15 @@ class VideoDecoder(
                     if (now - statsAtNs >= 5_000_000_000L) {
                         val shownFps = presented * 1_000_000_000.0 / (now - statsAtNs)
                         val resyncs = synchronized(lock) { frames.resyncs }
-                        Log.i(TAG, "pacing shownFps=${shownFps.toInt()} queueDrops=$outputDrops inputResyncs=$resyncs decodeMs=$decodeMs")
+                        Log.i(TAG, "pacing shownFps=${shownFps.toInt()} queueDrops=${outputDrops.getAndSet(0)} inputResyncs=$resyncs decodeMs=$decodeMs")
                         statsAtNs = now
                         presented = 0
-                        outputDrops = 0
                     }
                 } catch (error: IllegalStateException) { fail("decoder render: ${error.message}") }
             }
-            if (!dead && !pictures.isEmpty()) {
-                renderPosted = true
-                choreographer?.postFrameCallback(this)
-            }
+            // Stay subscribed during empty slots, as Moonlight does. A frame arriving
+            // just after a callback must not have to restart vsync registration.
+            if (!dead) choreographer?.postFrameCallback(this)
         }
     }
 
