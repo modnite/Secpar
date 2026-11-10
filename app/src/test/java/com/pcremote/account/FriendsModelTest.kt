@@ -63,7 +63,6 @@ class FriendsModelTest {
         assertEquals("Sign in to add friends.", FriendsModel.SIGN_IN_PROMPT)
         assertEquals("Add by username", FriendsModel.USERNAME_HINT)
         assertEquals("Blocked people", FriendsModel.BLOCKED_HEADING)
-        assertEquals("Confirm this code in your browser", FriendsModel.CONFIRM_IN_BROWSER)
         assertEquals("Signed out here. Could not revoke the remote session while offline.", AccountText.SIGNED_OUT_OFFLINE)
     }
 }

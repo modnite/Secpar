@@ -37,7 +37,6 @@ import com.pcremote.account.FriendComputer
 import com.pcremote.account.FriendsConnect
 import com.pcremote.account.GuestChoices
 import com.pcremote.account.OwnedComputer
-import com.pcremote.account.SignInPanel
 import com.pcremote.agent.AgentConnection
 import com.pcremote.modes.rememberUnlocker
 import com.pcremote.nav.Mode
@@ -167,9 +166,6 @@ private fun ComputersPage(
         item("title") {
             PageHeader(stringResource(R.string.pcr_tab_computers)) {
                 GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
-                if (account.user == null && account.approval == null) {
-                    GhostButton(stringResource(R.string.pcr_sign_in), acts.signIn, compact = true, enabled = account.ready && !account.busy)
-                }
             }
         }
         account.user?.let { user ->
@@ -182,7 +178,7 @@ private fun ComputersPage(
                 }
             }
         }
-        if (account.user == null) account.approval?.let { item("approval") { SignInPanel(it, acts) } }
+        if (account.user == null) item("sign-in") { com.pcremote.account.SignInForm(acts, account.busy) }
         if (rows.isEmpty()) item("empty") { EmptyState(a.addPc) }
         items(rows, key = { it.key }) { row ->
             when (row) {

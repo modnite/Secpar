@@ -2,11 +2,13 @@ package com.pcremote.account
 
 /** What the Computers and Friends tabs can ask of the account. Defaults do nothing, for fixtures. */
 class AccountActions(
-    val signIn: () -> Unit = {},
+    /** Email, password, and a callback that gets null on success or the words to show. */
+    val signIn: (String, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+    /** register, resend, verify, forgot or reset, with its fields. */
+    val auth: (String, Map<String, String>, (String?) -> Unit) -> Unit = { _, _, _ -> },
     val cancelSignIn: () -> Unit = {},
     val signOut: () -> Unit = {},
     val refresh: () -> Unit = {},
-    val openBrowser: () -> Unit = {},
     val connect: (OwnedComputer) -> Unit = {},
     val cancelConnect: () -> Unit = {},
     val dismissError: () -> Unit = {},

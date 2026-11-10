@@ -46,7 +46,7 @@ internal fun transportAllows(url: String): Boolean {
 enum class AccountError { NETWORK, INVALID_RESPONSE, INVALID_ARGUMENT, SIGN_IN_REQUIRED, EXPIRED, PENDING, SLOW_DOWN, UNAVAILABLE, RATE_LIMITED, REQUEST_FAILED,
     FRIEND_UNAVAILABLE, REQUEST_GONE, BAD_NAME, INPUT_NOT_ALLOWED, REQUEST_ANSWERED,
     HOST_NOT_SHARING, GRANT_NOT_AVAILABLE, ACCESS_ENDED }
-class AccountException(val kind: AccountError) : Exception(when (kind) {
+class AccountException(val kind: AccountError, detail: String? = null) : Exception(detail ?: when (kind) {
     AccountError.NETWORK -> "Could not reach Secpar. Check your connection and try again."
     AccountError.INVALID_RESPONSE -> "Unexpected account response."
     AccountError.INVALID_ARGUMENT -> "Invalid account request."
@@ -133,12 +133,7 @@ data class AccessRequest(val id: String, val state: String, val expires: Long, v
 class GuestGrant(val grant: String, val expiresAt: Long, val pc: String, val relay: String, val fingerprint: String?) {
     override fun toString() = "GuestGrant(redacted)"
 }
-class DeviceSignIn(val deviceCode: String, val userCode: String, val verificationUriComplete: String, val expiresIn: Long, val interval: Long) {
-    override fun toString() = "DeviceSignIn(redacted)"
-}
 sealed interface SignInPoll {
-    data object Pending : SignInPoll
-    data object SlowDown : SignInPoll
     class Authorized(val token: String, val expiresIn: Long) : SignInPoll {
         override fun toString() = "Authorized(redacted)"
     }
@@ -153,8 +148,10 @@ sealed interface OwnerPairPoll {
 
 /** One instance belongs to one login generation; never reuse it across sign-in/sign-out. */
 interface AccountService {
-    suspend fun beginSignIn(name: String): DeviceSignIn
-    suspend fun pollSignIn(deviceCode: String): SignInPoll
+    /** Signs in with an email and password. The service answers with the session token. */
+    suspend fun passwordSignIn(email: String, password: String): SignInPoll.Authorized
+    /** The other forms: register, resend, verify, forgot and reset. Throws with a plain message on a refusal. */
+    suspend fun appAuth(route: String, body: Map<String, String>)
     suspend fun me(): AccountUser
     suspend fun computers(): List<OwnedComputer>
     suspend fun beginOwnerPair(computerId: String, deviceName: String): OwnerPairPending
@@ -196,31 +193,19 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         bearer = token
     }
 
-    override suspend fun beginSignIn(name: String): DeviceSignIn {
-        inputName(name, 60)
-        val o = call("POST", "/auth/device", obj("name" to name), authenticated = false).objectValue()
-        val code = o.text("user_code")
-        val uri = o.text("verification_uri_complete")
-        valid(Regex("[A-Z0-9]{8}").matches(code) && uri == "$ORIGIN/activate?code=$code")
-        val secret = o.text("device_code").also { valid(HEX64.matches(it)) }
-        val expiry = o.positive("expires_in").also { valid(it <= 600) }
-        val interval = o.positive("interval").also { valid(it <= 60) }
-        return DeviceSignIn(secret, code, uri, expiry, interval)
+    override suspend fun passwordSignIn(email: String, password: String): SignInPoll.Authorized {
+        argument(email.length in 3..254 && password.length in 1..256)
+        val o = call("POST", "/v1/app/sign-in", obj("email" to email, "password" to password), authenticated = false, plain = true).objectValue()
+        val token = o.text("token").also { valid(HEX64.matches(it)) }
+        val expires = (o["expires_at"] as? JsonPrimitive)?.content?.toLongOrNull() ?: invalid()
+        setSession(token)
+        return SignInPoll.Authorized(token, (expires - System.currentTimeMillis() / 1000).coerceIn(1, 30L * 86400))
     }
 
-    override suspend fun pollSignIn(deviceCode: String): SignInPoll {
-        argument(HEX64.matches(deviceCode))
-        val o = try { call("POST", "/auth/device/token", obj("device_code" to deviceCode), authenticated = false).objectValue() }
-        catch (e: AccountException) { return when (e.kind) {
-            AccountError.PENDING -> SignInPoll.Pending
-            AccountError.SLOW_DOWN -> SignInPoll.SlowDown
-            else -> throw e
-        } }
-        val token = o.text("access_token").also { valid(HEX64.matches(it)) }
-        valid(o.text("token_type") == "Bearer")
-        val expires = o.positive("expires_in")
-        setSession(token)
-        return SignInPoll.Authorized(token, expires)
+    override suspend fun appAuth(route: String, body: Map<String, String>) {
+        argument(route in setOf("register", "resend", "verify", "forgot", "reset"))
+        argument(body.size <= 4 && body.all { (k, v) -> k in setOf("email", "password", "handle", "code") && v.length <= 256 })
+        call("POST", "/v1/app/$route", buildJsonObject { body.forEach { (k, v) -> put(k, v) } }, authenticated = false, plain = true)
     }
 
     override suspend fun me(): AccountUser {
@@ -422,7 +407,7 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         finally { bearer = null }
     }
 
-    private suspend fun call(method: String, path: String, body: JsonObject? = null, authenticated: Boolean = true): JsonElement = withContext(Dispatchers.IO) {
+    private suspend fun call(method: String, path: String, body: JsonObject? = null, authenticated: Boolean = true, plain: Boolean = false): JsonElement = withContext(Dispatchers.IO) {
         val token = if (authenticated) bearer ?: throw AccountException(AccountError.SIGN_IN_REQUIRED) else null
         try {
             val response = transport.execute(AccountRequest(method, ORIGIN + path, token, body?.toString()))
@@ -430,6 +415,10 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
             val data = if (response.body.isEmpty()) JsonNull else Json.parseToJsonElement(response.body.decodeToString(throwOnInvalidSequence = true))
             if (response.status !in 200..299) {
                 val code = (data as? JsonObject)?.get("error")?.let { it as? JsonPrimitive }?.content
+                // The sign-in forms get the service's own plain words when they are short and safe to show.
+                val words = (data as? JsonObject)?.get("message")?.let { it as? JsonPrimitive }?.takeIf { it.isString }?.content
+                if (plain && code != null && words != null && words.length <= 200 && words.none { it.isISOControl() })
+                    throw AccountException(AccountError.REQUEST_FAILED, words)
                 throw AccountException(when {
                     code == "authorization_pending" -> AccountError.PENDING
                     code == "slow_down" -> AccountError.SLOW_DOWN

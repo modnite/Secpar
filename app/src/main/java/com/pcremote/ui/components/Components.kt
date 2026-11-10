@@ -146,13 +146,15 @@ fun PagerDots(count: Int, current: Int) {
 /** Single-line text field: 34dp high, radius 5, 1dp stroke. Same look as the desktop field. */
 @Composable
 fun FlatField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier, masked: Boolean = false,
-    isError: Boolean = false, mono: Boolean = false) {
+    isError: Boolean = false, mono: Boolean = false,
+    keyboardType: androidx.compose.ui.text.input.KeyboardType = androidx.compose.ui.text.input.KeyboardType.Text) {
     val c = LocalMidnight.current
     val shape = MidnightShapes.control
     androidx.compose.foundation.text.BasicTextField(
         value, onChange, modifier.heightIn(min = 34.dp).clip(shape).background(c.bg)
             .border(1.dp, if (isError) c.bad else c.controlBorder, shape),
         singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = keyboardType),
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.text,
             fontFamily = if (mono) androidx.compose.ui.text.font.FontFamily.Monospace else MaterialTheme.typography.bodyMedium.fontFamily),
         cursorBrush = androidx.compose.ui.graphics.SolidColor(c.accent),

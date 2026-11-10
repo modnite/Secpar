@@ -240,7 +240,7 @@ class MainActivity : ComponentActivity() {
                             onDone = { pairing.reset(); finishOnboarding() },
                             onManual = ::manualPairing,
                             onSkip = ::finishOnboarding,
-                            onAccount = { com.pcremote.account.AccountRuntime.get(this@MainActivity).controller.signIn(); finishOnboarding() })
+                            onAccount = { finishOnboarding() })
                     }
                     composable(Routes.modePattern(Mode.SCREEN)) { e ->
                         com.pcremote.stream2.StreamScreen(modeId(e), onBack = { nav.exitScreen(e) })
@@ -273,17 +273,10 @@ class MainActivity : ComponentActivity() {
                         val pairState by pairing.state.collectAsState()
                         val accountState by account.state.collectAsState()
                         val update by com.pcremote.update.Updater.state.collectAsState()
-                        var browserError by remember { mutableStateOf<String?>(null) }
-                        fun openBrowser() {
-                            val approval = account.state.value.approval ?: return
-                            browserError = if (runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(approval.verificationUriComplete))) }.isSuccess)
-                                null else com.pcremote.account.AccountText.NO_BROWSER
-                        }
-                        LaunchedEffect(accountState.approval) { if (accountState.approval != null) openBrowser() }
                         val accountActions = remember(account) {
                             com.pcremote.account.AccountActions(
                                 signIn = account::signIn, cancelSignIn = account::cancelSignIn, signOut = account::signOut,
-                                refresh = account::refresh, openBrowser = ::openBrowser,
+                                refresh = account::refresh, auth = account::auth,
                                 connect = { computer ->
                                     account.connect(computer) { id ->
                                         prefs.edit().putBoolean(PREF_ONBOARDED, true).apply()
@@ -291,7 +284,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 cancelConnect = account::cancelConnection,
-                                dismissError = { browserError = null; account.dismissError() },
+                                dismissError = { account.dismissError() },
                                 friend = account::friendAction, note = account::showNote,
                                 search = account::search, setVisible = account::setVisible,
                                 friendSetting = account::friendSetting, friendInput = account::friendInput, answer = account::answerRequest,
@@ -307,7 +300,7 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(pairState) {
                             if (pairState is com.pcremote.onboarding.PairingState.Done) { pairing.reset(); home.stop(); home.start() }
                         }
-                        val shown = accountState.copy(error = browserError ?: accountState.error)
+                        val shown = accountState
                         HomeScreen(cards, thumbs, IMPLEMENTED_MODES, HomeActions(
                             open = { card, mode -> nav.navigate(Routes.mode(card.id, mode)) },
                             primary = { card ->

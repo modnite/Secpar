@@ -28,20 +28,6 @@ import com.pcremote.ui.theme.LocalMidnight
 
 private val AvatarFill = Color(0xFF203036)
 
-/** "Confirm this code in your browser", the code, and what to do with it. Shared by Computers and Friends. */
-@Composable
-fun SignInPanel(approval: DeviceSignIn, acts: AccountActions, modifier: Modifier = Modifier) {
-    val c = LocalMidnight.current
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(FriendsModel.CONFIRM_IN_BROWSER, color = c.text, style = MaterialTheme.typography.bodyMedium)
-        Text(approval.userCode, color = c.text, style = MaterialTheme.typography.headlineMedium, fontFamily = FontFamily.Monospace)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PrimaryButton("Open browser", acts.openBrowser)
-            GhostButton("Cancel", acts.cancelSignIn)
-        }
-    }
-}
-
 /** The Friends tab. Same strings and calls as the desktop client. */
 @Composable
 fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Modifier, alertsOn: Boolean = false) {
@@ -68,16 +54,8 @@ fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Mod
             }
         }
         if (user == null) {
-            val approval = state.approval
-            if (approval != null) SignInPanel(approval, acts)
-            else {
-                Text(FriendsModel.SIGN_IN_PROMPT, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-                PrimaryButton("Sign in", acts.signIn, enabled = state.ready && !state.busy)
-                Text(FriendsModel.CREATE_ACCOUNT, color = c.accent, style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically).clickable {
-                        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(FriendsModel.CREATE_ACCOUNT_URL))) }
-                    })
-            }
+            Text(FriendsModel.SIGN_IN_PROMPT, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+            SignInForm(acts, state.busy)
             return@Column
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

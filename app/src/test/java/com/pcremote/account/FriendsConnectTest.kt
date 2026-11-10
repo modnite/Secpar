@@ -188,8 +188,8 @@ class FriendsConnectTest {
     private class Status(vararg val steps: Any) : AccountService {
         var i = 0
         val paused = mutableListOf<Long>()
-        override suspend fun beginSignIn(name: String) = throw UnsupportedOperationException()
-        override suspend fun pollSignIn(deviceCode: String) = throw UnsupportedOperationException()
+        override suspend fun passwordSignIn(email: String, password: String) = throw UnsupportedOperationException()
+        override suspend fun appAuth(route: String, body: Map<String, String>) = throw UnsupportedOperationException()
         override suspend fun me() = throw UnsupportedOperationException()
         override suspend fun computers() = emptyList<OwnedComputer>()
         override suspend fun beginOwnerPair(computerId: String, deviceName: String) = throw UnsupportedOperationException()
@@ -270,8 +270,8 @@ class FriendsConnectTest {
         val cancelled = mutableListOf<String>()
         var claimError: AccountError? = null
         var requestError: AccountError? = null
-        override suspend fun beginSignIn(name: String) = DeviceSignIn("d".repeat(64), "ABCD2345", "https://accounts.secpar.win/activate?code=ABCD2345", 600, 5)
-        override suspend fun pollSignIn(deviceCode: String) = SignInPoll.Authorized(token, 3600)
+        override suspend fun passwordSignIn(email: String, password: String) = SignInPoll.Authorized(token, 3600)
+        override suspend fun appAuth(route: String, body: Map<String, String>) {}
         override suspend fun me() = AccountUser(me, "me_1")
         override suspend fun computers() = emptyList<OwnedComputer>()
         override suspend fun beginOwnerPair(computerId: String, deviceName: String) = throw UnsupportedOperationException()
@@ -301,7 +301,7 @@ class FriendsConnectTest {
         val pc = PairedPc("p", "P", listOf("192.0.2.2"), 47999, "f".repeat(64), "t", emptyList())
         val c = AccountController(store, backgroundScope, "Test", { service }, { pc }, kotlinx.coroutines.test.StandardTestDispatcher(testScheduler),
             { 1000 + testScheduler.currentTime / 1000 }, { testScheduler.currentTime }, open)
-        runCurrent(); c.signIn(); runCurrent(); advanceTimeBy(5000); runCurrent()
+        runCurrent(); c.signIn("me@example.com", "correct horse"); runCurrent()
         assertNotNull(c.state.value.user)
         return c
     }

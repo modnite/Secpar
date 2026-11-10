@@ -30,7 +30,7 @@ class AccountControllerTest {
 
     private inner class Fake : AccountService {
         var entries = listOf(computer)
-        var signPoll: SignInPoll = SignInPoll.Authorized(token, 3600)
+        var signPoll: SignInPoll.Authorized = SignInPoll.Authorized(token, 3600)
         var ownerPoll: OwnerPairPoll = OwnerPairPoll.Ready(uri, fp, 1120)
         var logoutFails = false
         var loggedOut = false
@@ -41,9 +41,8 @@ class AccountControllerTest {
         var blockList = listOf<AccountUser>()
         val actions = mutableListOf<Pair<FriendAction, String>>()
         var actionFails: AccountError? = null
-        override suspend fun beginSignIn(name: String) = DeviceSignIn("d".repeat(64), "ABCD2345",
-            "https://accounts.secpar.win/activate?code=ABCD2345", 600, 5)
-        override suspend fun pollSignIn(deviceCode: String) = signPoll
+        override suspend fun passwordSignIn(email: String, password: String) = signPoll
+        override suspend fun appAuth(route: String, body: Map<String, String>) {}
         override suspend fun me(): AccountUser {
             meGate?.let { withContext(NonCancellable) { it.await() } }
             return user
@@ -72,7 +71,7 @@ class AccountControllerTest {
         pair: suspend (PairUri) -> PairedPc = { pc }) = AccountController(store, backgroundScope, "Review Android",
         api, pair, StandardTestDispatcher(testScheduler), { 1000 + testScheduler.currentTime / 1000 }, { testScheduler.currentTime })
     private fun TestScope.login(c: AccountController) {
-        runCurrent(); c.signIn(); runCurrent(); advanceTimeBy(5000); runCurrent()
+        runCurrent(); c.signIn("me@example.com", "correct horse"); runCurrent()
         assertEquals(user, c.state.value.user)
     }
 
@@ -112,8 +111,8 @@ class AccountControllerTest {
         val fresh = Fake().apply { signPoll = SignInPoll.Authorized("b".repeat(64), 3600) }
         val services = ArrayDeque(listOf(old, fresh))
         val c = controller(store, { services.removeFirst() })
-        runCurrent(); c.signIn(); runCurrent(); advanceTimeBy(5000); runCurrent()
-        c.cancelSignIn(); c.signIn(); runCurrent(); advanceTimeBy(5000); runCurrent()
+        runCurrent(); c.signIn("me@example.com", "correct horse"); runCurrent()
+        c.cancelSignIn(); c.signIn("me@example.com", "correct horse"); runCurrent()
         assertEquals("b".repeat(64), store.session()!!.token)
         gate.complete(Unit); runCurrent()
         assertEquals("b".repeat(64), store.session()!!.token)

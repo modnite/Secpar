@@ -13,7 +13,6 @@ data class AccountUi(
     val ready: Boolean = false,
     val user: AccountUser? = null,
     val busy: Boolean = false,
-    val approval: DeviceSignIn? = null,
     val computers: List<OwnedComputer> = emptyList(),
     val connecting: String? = null,
     val error: String? = null,
@@ -86,7 +85,10 @@ class AccountController(
         }
     }
 
-    fun signIn() {
+    /**
+     * Signs in with an email and password. [done] gets null on success, or the words to show.
+     */
+    fun signIn(email: String, password: String, done: (String?) -> Unit = {}) {
         if (!state.value.ready || state.value.busy || session != null) return
         val epoch = ++generation
         mutable.value = state.value.copy(busy = true, error = null)
@@ -95,47 +97,51 @@ class AccountController(
             var authorized = false
             var adopted = false
             try {
-                val approval = service.beginSignIn(deviceName.take(60))
+                val result = service.passwordSignIn(email.trim(), password)
                 if (epoch != generation) return@launch
-                mutable.value = state.value.copy(approval = approval)
-                val deadline = elapsed() + approval.expiresIn * 1000
-                var interval = maxOf(5, approval.interval)
-                while (elapsed() < deadline) {
-                    delay(interval * 1000)
-                    if (epoch != generation) return@launch
-                    when (val result = service.pollSignIn(approval.deviceCode)) {
-                        SignInPoll.Pending -> Unit
-                        SignInPoll.SlowDown -> interval = minOf(60, interval + 5)
-                        is SignInPoll.Authorized -> {
-                            authorized = true
-                            val user = service.me()
-                            val saved = AccountSession(user, result.token, now() + minOf(result.expiresIn, 30L * 86400))
-                            // A cancel/sign-out during Keystore I/O must not leave a persisted login.
-                            withContext(NonCancellable) {
-                                transition.withLock {
-                                    if (epoch == generation) {
-                                        withContext(io) { store.saveSession(saved) }
-                                        if (epoch != generation) withContext(io) { store.clearSession(saved) }
-                                        else {
-                                            session = saved; api = service; adopted = true
-                                            mutable.value = AccountUi(ready = true, user = user)
-                                            changes.value++
-                                            scheduleExpiry(saved)
-                                        }
-                                    }
-                                }
+                authorized = true
+                val user = service.me()
+                val saved = AccountSession(user, result.token, now() + minOf(result.expiresIn, 30L * 86400))
+                // A cancel/sign-out during Keystore I/O must not leave a persisted login.
+                withContext(NonCancellable) {
+                    transition.withLock {
+                        if (epoch == generation) {
+                            withContext(io) { store.saveSession(saved) }
+                            if (epoch != generation) withContext(io) { store.clearSession(saved) }
+                            else {
+                                session = saved; api = service; adopted = true
+                                mutable.value = AccountUi(ready = true, user = user)
+                                changes.value++
+                                scheduleExpiry(saved)
                             }
-                            if (adopted) refresh()
-                            return@launch
                         }
                     }
                 }
-                throw AccountException(AccountError.EXPIRED)
+                if (adopted) { done(null); refresh() }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                if (epoch == generation) mutable.value = state.value.copy(busy = false, approval = null, error = message(e))
+                if (epoch == generation) {
+                    mutable.value = state.value.copy(busy = false, error = null)
+                    done(message(e))
+                }
             } finally {
                 if (authorized && !adopted) withContext(NonCancellable) { runCatching { service.logout() } }
+            }
+        }
+    }
+
+    /** Register, resend, verify, forgot and reset. [done] gets null on success, or the words to show. */
+    fun auth(route: String, body: Map<String, String>, done: (String?) -> Unit) {
+        if (!state.value.ready || state.value.busy || session != null) return
+        val epoch = generation
+        mutable.value = state.value.copy(busy = true, error = null)
+        scope.launch {
+            try {
+                apiFactory(null).appAuth(route, body)
+                if (epoch == generation) { mutable.value = state.value.copy(busy = false); done(null) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (epoch == generation) { mutable.value = state.value.copy(busy = false); done(message(e)) }
             }
         }
     }
@@ -144,7 +150,7 @@ class AccountController(
         if (session != null) return
         generation++
         loginJob?.cancel()
-        mutable.value = state.value.copy(busy = false, approval = null, error = null)
+        mutable.value = state.value.copy(busy = false, error = null)
     }
 
     fun signOut() {

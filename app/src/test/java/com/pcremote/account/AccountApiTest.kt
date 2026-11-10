@@ -16,8 +16,6 @@ class AccountApiTest {
         fun reply(body: String, status: Int = 200) { replies.add(AccountResponse(status, body.toByteArray())) }
         override fun execute(request: AccountRequest): AccountResponse { requests.add(request); return replies.removeFirst() }
     }
-    private fun device(code: String = "ABCD2345", url: String = "https://accounts.secpar.win/activate?code=$code", secret: String = token) =
-        buildJsonObject { put("device_code", secret); put("user_code", code); put("verification_uri_complete", url); put("expires_in", 600); put("interval", 5) }.toString()
     private fun computer(id: String = this.id, fingerprint: String = fp) =
         buildJsonObject { put("id", id); put("name", "Desk"); put("platform", "windows"); put("certificate_fp", fingerprint); put("linked", 1); put("online", 1) }
     private fun ready(link: String, fingerprint: String = fp) =
@@ -28,45 +26,59 @@ class AccountApiTest {
         catch (e: AccountException) { assertEquals(kind, e.kind); assertNull(e.cause) }
     }
 
-    @Test fun `sign in pins approval URL and keeps credentials out of display strings`() = runBlocking {
-        val f = Fake().apply { reply(device(), 201) }
-        val result = AccountApi(transport = f).beginSignIn("Android")
-        assertEquals(token, result.deviceCode)
-        assertEquals(5L, result.interval)
-        assertFalse(result.toString().contains(token))
-        assertFalse(result.toString().contains(result.verificationUriComplete))
-        assertEquals("https://accounts.secpar.win/auth/device", f.requests.single().url)
-        assertNull(f.requests.single().bearer)
-        assertFalse(f.requests.single().toString().contains("Android"))
-    }
-
-    @Test fun `approval rejects alternate origins paths queries fragments and malformed secrets`() = runBlocking {
-        for (url in listOf("https://evil.example/activate?code=ABCD2345", "https://accounts.secpar.win/other?code=ABCD2345", "https://accounts.secpar.win/activate?code=ABCD2345&extra=1", "https://accounts.secpar.win/activate?code=ABCD2345#x")) {
-            val f = Fake().apply { reply(device(url = url)) }
-            rejects(AccountError.INVALID_RESPONSE) { AccountApi(transport = f).beginSignIn("Android") }
-        }
-        for (body in listOf(device(code = "abc12345"), device(secret = "z".repeat(64)), device(secret = "a".repeat(63)))) {
-            val f = Fake().apply { reply(body) }
-            rejects(AccountError.INVALID_RESPONSE) { AccountApi(transport = f).beginSignIn("Android") }
-        }
-    }
-
-    @Test fun `poll handles pending slowdown and installs only validated bearer`() = runBlocking {
+    @Test fun `password sign in sends the form and installs only a validated bearer`() = runBlocking {
         val f = Fake().apply {
-            reply("""{"error":"authorization_pending"}""", 400)
-            reply("""{"error":"slow_down"}""", 429)
-            reply("""{"access_token":"$token","token_type":"Bearer","expires_in":2592000}""")
+            reply("""{"token":"$token","expires_at":${System.currentTimeMillis() / 1000 + 2592000},"user":{"id":"$id","handle":"Player"}}""")
             reply("""{"id":"$id","handle":"Player"}""")
         }
         val api = AccountApi(transport = f)
-        assertSame(SignInPoll.Pending, api.pollSignIn(token))
-        assertSame(SignInPoll.SlowDown, api.pollSignIn(token))
-        val approved = api.pollSignIn(token) as SignInPoll.Authorized
-        assertEquals(token, approved.token)
-        assertFalse(approved.toString().contains(token))
+        val result = api.passwordSignIn("me@example.com", "correct horse")
+        assertEquals(token, result.token)
+        assertFalse(result.toString().contains(token))
+        assertTrue(result.expiresIn in 1..2592000)
+        assertEquals("https://accounts.secpar.win/v1/app/sign-in", f.requests[0].url)
+        assertNull(f.requests[0].bearer)
         assertEquals(id, api.me().id)
         assertEquals(token, f.requests.last().bearer)
-        assertTrue(f.requests.take(3).all { it.bearer == null })
+    }
+
+    @Test fun `a wrong password shows the service's own plain words and installs nothing`() = runBlocking {
+        val f = Fake().apply { reply("""{"error":"bad_credentials","message":"The email or password is wrong, or the email is not confirmed yet."}""", 401) }
+        val api = AccountApi(transport = f)
+        try { api.passwordSignIn("me@example.com", "nope nope nope"); fail() }
+        catch (e: AccountException) { assertEquals("The email or password is wrong, or the email is not confirmed yet.", e.message) }
+        rejects(AccountError.SIGN_IN_REQUIRED) { api.me() }
+    }
+
+    @Test fun `a sign in answer with a bad token or no expiry is refused`() = runBlocking {
+        for (body in listOf("""{"token":"zz","expires_at":9999999999}""", """{"token":"$token"}""", """{"token":"$token","expires_at":"soon"}""")) {
+            val f = Fake().apply { reply(body) }
+            rejects(AccountError.INVALID_RESPONSE) { AccountApi(transport = f).passwordSignIn("me@example.com", "correct horse") }
+        }
+    }
+
+    @Test fun `the other forms post to fixed routes with only known fields`() = runBlocking {
+        val f = Fake().apply { reply("""{"sent":true}""", 202); reply("""{"done":true}""") }
+        val api = AccountApi(transport = f)
+        api.appAuth("register", mapOf("email" to "me@example.com", "password" to "correct horse", "handle" to "Mia"))
+        api.appAuth("verify", mapOf("email" to "me@example.com", "code" to "123456"))
+        assertEquals("https://accounts.secpar.win/v1/app/register", f.requests[0].url)
+        assertEquals("https://accounts.secpar.win/v1/app/verify", f.requests[1].url)
+        assertTrue(f.requests.all { it.bearer == null })
+        rejects(AccountError.INVALID_ARGUMENT) { api.appAuth("sign-in", mapOf("email" to "a@b.co")) }
+        rejects(AccountError.INVALID_ARGUMENT) { api.appAuth("../me", mapOf("email" to "a@b.co")) }
+        rejects(AccountError.INVALID_ARGUMENT) { api.appAuth("verify", mapOf("admin" to "yes")) }
+        assertEquals(2, f.requests.size)
+    }
+
+    @Test fun `the sign in form checks input the way the service does`() {
+        assertTrue(SignInRules.emailOk("a@b.co") && !SignInRules.emailOk("a@b") && !SignInRules.emailOk("a b@c.de") && !SignInRules.emailOk("@b.co"))
+        assertTrue(SignInRules.handleOk("Mia_1") && !SignInRules.handleOk("ab") && !SignInRules.handleOk("a-b") && !SignInRules.handleOk("a".repeat(31)))
+        assertTrue(SignInRules.passwordOk("12345678") && !SignInRules.passwordOk("1234567"))
+        assertEquals("Enter your password.", SignInRules.problem(SignInStep.SIGN_IN, false, "a@b.co", "", "", ""))
+        assertEquals("Enter the six digit code from the email.", SignInRules.problem(SignInStep.CODE, false, "a@b.co", "", "", "12a456"))
+        assertNull(SignInRules.problem(SignInStep.CODE, false, "a@b.co", "", "", "123 456"))
+        assertNull(SignInRules.problem(SignInStep.CODE, true, "a@b.co", "long enough", "", "123456"))
     }
 
     @Test fun `invalid session and path identifiers never reach transport`() = runBlocking {
@@ -78,7 +90,6 @@ class AccountApiTest {
             rejects(AccountError.INVALID_ARGUMENT) { api.cancelOwnerPair(bad) }
         }
         rejects(AccountError.INVALID_ARGUMENT) { api.setSession("bad") }
-        rejects(AccountError.INVALID_ARGUMENT) { api.pollSignIn("bad") }
         assertTrue(f.requests.isEmpty())
     }
 
