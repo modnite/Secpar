@@ -234,7 +234,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
 
     private fun checkUnderrun(t: AudioTrack) {
         val count = t.underrunCount
-        if (playing && count > lastUnderruns) resetOutput(t)
+        if (playing && count > lastUnderruns && AudioPlayout.needsReprime(queuedFrames(t))) resetOutput(t)
         lastUnderruns = count
     }
 

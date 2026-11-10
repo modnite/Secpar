@@ -15,6 +15,17 @@ class AudioPlayoutTest {
     @Test fun underrunRequestsReprimingInsteadOfHoldingOldAudio() {
         assertTrue(AudioPlayout.decide(999_000,1_000_000,0,true).reset)
     }
+    @Test fun aDelayedBatchWithinTheLatencyBudgetIsNotDiscarded() {
+        assertEquals(AudioPlayout.Decision(false,false),AudioPlayout.decide(955_000,1_000_000,960,false))
+    }
+    @Test fun overdueQueueIsFlushedButUsableIncomingAudioIsRetained() {
+        assertEquals(AudioPlayout.Decision(true,false),AudioPlayout.decide(950_000,1_000_000,1920,false))
+        assertEquals(AudioPlayout.Decision(true,true),AudioPlayout.decide(919_000,1_000_000,0,false))
+    }
+    @Test fun aRecoveredUnderrunDoesNotFlushTheRefilledReserve() {
+        assertEquals(AudioPlayout.Decision(false,false),AudioPlayout.decide(995_000,1_000_000,1440,true))
+        assertEquals(AudioPlayout.Decision(true,false),AudioPlayout.decide(995_000,1_000_000,480,true))
+    }
     @Test fun unsynchronizedHostClockDoesNotInvalidateEveryPacket() {
         assertFalse(AudioPlayout.decide(null,1_000_000,1440,false).discard)
         assertTrue(AudioPlayout.decide(null,1_000_000,4800,false).reset)
