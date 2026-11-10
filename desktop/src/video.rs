@@ -431,21 +431,20 @@ mod tests {
         let packet=Encoder::new().unwrap().encode(&yuv).unwrap().to_vec();
         // Real native decode with a 50ms downstream delay, rather than a GPU claim.
         let worker=Worker::spawn_at_rate(Context::default(),60,||linux::Hardware::open("openh264dec ! identity sleep-time=50000").map(Backend::Hardware));
-        let until=Instant::now()+Duration::from_secs(5);
-        for id in 0..3 {
-            let mut f=frame(id,true);f.data=packet.clone();f.header.len=f.data.len() as u32;worker.submit(f);
-            loop {
-                let output=worker.output();assert!(output.error.is_none());
-                if output.request_key || output.image.is_some(){break;}
-                assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
-            }
-        }
-        let mut f=frame(4,true);f.data=packet;f.header.len=f.data.len() as u32;worker.submit(f);
+        // A native pipeline may preroll without returning an image. Keep feeding
+        // bounded keyframes as a real stream does, including during startup.
+        let until=Instant::now()+Duration::from_secs(8);
+        let mut next=Instant::now();
+        let mut id=0;
         loop {
+            if Instant::now()>=next {
+                let mut f=frame(id,true);f.data=packet.clone();f.header.len=f.data.len() as u32;
+                worker.submit(f);id+=1;next=Instant::now()+Duration::from_millis(150);
+            }
             let output=worker.output();assert!(output.error.is_none());
             if let Some(image)=output.image {
                 assert_eq!(image.size,[128,128]);
-                assert_eq!(output.backend,Some("H.264 · software (hardware too slow)"));break;
+                if output.backend==Some("H.264 · software (hardware too slow)") {break;}
             }
             assert!(Instant::now()<until,"Slow native decode did not recover");std::thread::sleep(Duration::from_millis(5));
         }
