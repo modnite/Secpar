@@ -165,7 +165,8 @@ private fun ComputersPage(
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item("title") {
             PageHeader(stringResource(R.string.pcr_tab_computers)) {
-                GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
+                // Signed in, computers come from the account. Pairing by link is only for use without one.
+                if (account.user == null) GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
             }
         }
         account.user?.let { user ->
@@ -179,7 +180,7 @@ private fun ComputersPage(
             }
         }
         if (account.user == null) item("sign-in") { com.pcremote.account.SignInForm(acts, account.busy) }
-        if (rows.isEmpty()) item("empty") { EmptyState(a.addPc) }
+        if (rows.isEmpty()) item("empty") { EmptyState(a.addPc.takeIf { account.user == null }) }
         items(rows, key = { it.key }) { row ->
             when (row) {
                 is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)
@@ -191,11 +192,11 @@ private fun ComputersPage(
 }
 
 @Composable
-private fun EmptyState(addPc: () -> Unit) {
+private fun EmptyState(addPc: (() -> Unit)?) {
     val c = LocalMidnight.current
     Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.pcr_no_pcs_title), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-        PrimaryButton(stringResource(R.string.pcr_ob_scan), addPc, icon = R.drawable.lucide_scan_qr_code)
+        if (addPc != null) PrimaryButton(stringResource(R.string.pcr_ob_scan), addPc, icon = R.drawable.lucide_scan_qr_code)
     }
 }
 
