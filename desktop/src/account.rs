@@ -935,6 +935,8 @@ pub(crate) fn plan_open(known: &[OwnedComputer], id: &str, saved: Option<&[u8; 3
     match known.iter().find(|c| c.id == id) {
         Some(c) if c.linked != 1 => Plan::AskAccount,
         Some(c) if fingerprint_of(c).is_some_and(|fp| fp != *saved) => Plan::AskAccount,
+        // A list that exists but lacks the computer: it was removed from the account.
+        None if !known.is_empty() => Plan::AskAccount,
         _ => Plan::UseSaved,
     }
 }
@@ -1123,6 +1125,8 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut next_owned = Instant::now();
             let mut known: Vec<OwnedComputer> = vec![];
             let mut local_id: Option<String> = None;
+            // The first sync says which computer is this one. Until then nothing is paired by itself.
+            let mut synced = false;
             let mut sync_fut: Background<SyncOut> = None;
             let mut auto_fut: Background<AutoOut> = None;
             let mut auto_for: Option<String> = None;
@@ -1157,6 +1161,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     Wake::Sync(out)=>{
                         sync_fut=None;
                         if api.token.is_some() {
+                            synced=true;
                             if let Ok(state)=&out.host { local_id=state.computer.clone(); }
                             let _ = events.send(Event::Host(out.host)).await;
                             match out.computers {
@@ -1310,7 +1315,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     }
                     ctx.request_repaint();
                 }
-                if api.token.is_none() { pending_pair=None; signed_owner=None; sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); }
+                if api.token.is_none() { pending_pair=None; signed_owner=None; sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
                 if sync_fut.is_none() {
                     if let Some(owner)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_owned) {
                         next_owned=Instant::now()+Duration::from_secs(30);
@@ -1320,7 +1325,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 }
                 // Computers of the account that this device has no credential for are paired in the
                 // background, so opening one later needs no pairing.
-                if auto_fut.is_none() && pending_pair.is_none() {
+                if synced && auto_fut.is_none() && pending_pair.is_none() {
                     if let Some(owner)=signed_owner.as_deref().filter(|_| api.token.is_some()) {
                         let saved=|id:&str| saved_owned(owner,id).map(|c| c.fingerprint);
                         if let Some(next)=plan_auto_pair(&known,local_id.as_deref(),&saved,&auto_tried,Instant::now()).cloned() {

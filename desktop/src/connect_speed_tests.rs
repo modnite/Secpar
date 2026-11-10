@@ -29,7 +29,7 @@ fn a_saved_credential_is_used_unless_the_account_has_ruled_it_out() {
     let saved = [0xab; 32];
     assert_eq!(plan_open(&[], ID, Some(&saved)), Plan::UseSaved, "before the first sync nothing contradicts it");
     assert_eq!(plan_open(&[computer(ID, Some(0xab), 1, 1)], ID, Some(&saved)), Plan::UseSaved);
-    assert_eq!(plan_open(&[computer(OTHER, Some(0xcd), 1, 1)], ID, Some(&saved)), Plan::UseSaved, "another computer says nothing about this one");
+    assert_eq!(plan_open(&[computer(OTHER, Some(0xcd), 1, 1)], ID, Some(&saved)), Plan::AskAccount, "a list without this computer: it was removed");
     assert_eq!(plan_open(&[computer(ID, Some(0xcd), 1, 1)], ID, Some(&saved)), Plan::AskAccount, "the computer has another identity now");
     assert_eq!(plan_open(&[computer(ID, Some(0xab), 0, 1)], ID, Some(&saved)), Plan::AskAccount, "no longer linked");
     assert_eq!(plan_open(&[computer(ID, Some(0xab), 1, 1)], ID, None), Plan::AskAccount, "nothing saved");
