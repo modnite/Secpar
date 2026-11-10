@@ -100,18 +100,29 @@ pub struct Options {
 }
 /// Shared between the control connection and the media channel (both carry `pad`).
 pub type SharedPads = Arc<Mutex<Option<secpar_host_core::pad::Pads>>>;
-/// This host's IPv4 addresses, best first. The phone tries them in this order and waits two
-/// seconds on each dead one, so the order decides how fast it connects.
+/// The most addresses a pairing link carries. The client refuses a link with more.
+pub const MAX_ADDRESSES: usize = 16;
+
+/// This host's IPv4 addresses, best first, at most [`MAX_ADDRESSES`]. A client tries them side by
+/// side, but every dead one still costs a socket and, on a slow path, time.
 pub fn local_addresses() -> Vec<String> {
     let found = get_if_addrs::get_if_addrs()
         .unwrap_or_default()
         .into_iter()
+        .filter(|i| !is_down(&i.name))
         .filter_map(|i| match i.ip() {
             std::net::IpAddr::V4(ip) => Some((i.name, ip)),
             _ => None,
         })
         .collect();
     rank_addresses(found, default_route_interface().as_deref())
+}
+
+/// The kernel reports the interface as down, or its cable is out. An address stays configured
+/// on such an interface, but nothing can reach it.
+fn is_down(name: &str) -> bool {
+    std::fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+        .is_ok_and(|state| matches!(state.trim(), "down" | "lowerlayerdown" | "notpresent"))
 }
 
 /// Interfaces a phone cannot be on: containers, VMs and their bridges.
@@ -122,12 +133,16 @@ fn is_virtual(name: &str) -> bool {
 }
 
 /// Loopback and link-local dropped. Real network first, private ranges before others, the default
-/// route's interface first of those; container bridges last. Stable, so each address appears once.
+/// route's interface first of those. Container and VM bridges are left out, unless nothing else is
+/// left. Stable, so each address appears once, and cut to [`MAX_ADDRESSES`].
 pub fn rank_addresses(mut found: Vec<(String, std::net::Ipv4Addr)>, default: Option<&str>) -> Vec<String> {
     found.retain(|(_, ip)| !ip.is_loopback() && !ip.is_unspecified() && !ip.is_link_local());
+    if found.iter().any(|(name, _)| !is_virtual(name)) {
+        found.retain(|(name, _)| !is_virtual(name));
+    }
     found.sort_by_key(|(name, ip)| (is_virtual(name), !ip.is_private(), Some(name.as_str()) != default));
     let mut seen = HashSet::new();
-    found.into_iter().filter(|(_, ip)| seen.insert(*ip)).map(|(_, ip)| ip.to_string()).collect()
+    found.into_iter().filter(|(_, ip)| seen.insert(*ip)).map(|(_, ip)| ip.to_string()).take(MAX_ADDRESSES).collect()
 }
 
 /// The interface the IPv4 default route leaves through, from `/proc/net/route`.
@@ -149,7 +164,7 @@ mod address_order_tests {
     }
 
     #[test]
-    fn real_network_comes_first_and_bridges_last() {
+    fn real_network_comes_first_and_bridges_are_left_out() {
         let found = vec![
             ("docker0".into(), ip("172.17.0.1")),
             ("lo".into(), ip("127.0.0.1")),
@@ -158,12 +173,27 @@ mod address_order_tests {
             ("enp0s25".into(), ip("10.0.0.5")),
             ("wlan0".into(), ip("169.254.3.4")),
             ("br-1a2b".into(), ip("172.18.0.1")),
+            ("virbr0".into(), ip("192.168.122.1")),
         ];
-        assert_eq!(
-            rank_addresses(found.clone(), Some("wlan0")),
-            ["192.168.1.20", "10.0.0.5", "100.101.102.103", "172.17.0.1", "172.18.0.1"]
-        );
+        assert_eq!(rank_addresses(found.clone(), Some("wlan0")), ["192.168.1.20", "10.0.0.5", "100.101.102.103"]);
         assert_eq!(rank_addresses(found, None)[0], "192.168.1.20", "without a default route the order is stable");
+    }
+
+    #[test]
+    fn bridges_are_kept_when_they_are_all_there_is() {
+        let found = vec![("docker0".into(), ip("172.17.0.1")), ("lo".into(), ip("127.0.0.1")), ("br-1a2b".into(), ip("172.18.0.1"))];
+        assert_eq!(rank_addresses(found, None), ["172.17.0.1", "172.18.0.1"]);
+    }
+
+    #[test]
+    fn a_link_never_carries_more_than_the_client_accepts() {
+        let mut found: Vec<(String, std::net::Ipv4Addr)> = (1..=40).map(|n| (format!("eth{n}"), ip(&format!("10.1.{n}.1")))).collect();
+        found.extend((1..=30).map(|n| (format!("br-{n}"), ip(&format!("172.20.{n}.1")))));
+        let listed = rank_addresses(found, Some("eth7"));
+        assert_eq!(listed.len(), MAX_ADDRESSES);
+        assert_eq!(listed[0], "10.1.7.1", "the default route's address survives the cut as the first");
+        // Pairing::parse in the client refuses more than 16, so a longer list would make the whole link unusable.
+        assert!(listed.len() <= 16);
     }
 
     #[test]
