@@ -87,29 +87,33 @@ class VideoDecoder(
         if (mc != null || dead) return
         val mime = CodecPicker.MIME[codec] ?: return fail("unknown codec $codec")
         val info = CodecPicker.decoderFor(codec) ?: return fail("no decoder for $codec")
-        val fmt = MediaFormat.createVideoFormat(mime, width, height).apply {
-            if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            setInteger(MediaFormat.KEY_PRIORITY, 0)
+        fun format(options: Map<String, Int>) = MediaFormat.createVideoFormat(mime, width, height).apply {
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             if (Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, 1)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, 1 shl 20))
-            if (Build.VERSION.SDK_INT >= 30) setFloat(MediaFormat.KEY_OPERATING_RATE, fps.toFloat())
-            CodecPicker.vendorLowLatencyKeys(info.name).forEach { (k, v) -> setInteger(k, v) }
+            options.forEach { (k, v) -> setInteger(k, v) }
             csd(first.data, codec).forEachIndexed { i, b -> setByteBuffer("csd-$i", ByteBuffer.wrap(b)) }
         }
+        var configuring: MediaCodec? = null
         try {
             val c = MediaCodec.createByCodecName(info.name)
+            configuring = c
             c.setCallback(callback, handler)
-            try { c.configure(fmt, surface, null, 0) } catch (e: Exception) {
-                // some decoders reject the vendor keys; retry plain before giving up
-                Log.w(TAG, "configure with low-latency keys failed, retrying plain", e)
-                c.reset(); c.setCallback(callback, handler)
-                CodecPicker.vendorLowLatencyKeys(info.name).keys.forEach { fmt.removeKey(it) }
-                if (Build.VERSION.SDK_INT >= 30) { fmt.removeKey(MediaFormat.KEY_LOW_LATENCY); fmt.removeKey(MediaFormat.KEY_OPERATING_RATE) }
-                c.configure(fmt, surface, null, 0)
+            val attempts = CodecPicker.lowLatencyConfigurations(info.name, info.lowLatency)
+            for ((attempt, options) in attempts.withIndex()) {
+                try {
+                    c.configure(format(options), surface, null, 0)
+                    Log.i(TAG, "configured ${info.name} latencyAttempt=$attempt options=$options")
+                    break
+                } catch (error: Exception) {
+                    if (attempt == attempts.lastIndex) throw error
+                    Log.w(TAG, "decoder latency attempt $attempt rejected; trying next configuration", error)
+                    c.reset(); c.setCallback(callback, handler)
+                }
             }
             c.start()
             mc = c
+            configuring = null
             name = info.name
             displayHandler.post {
                 if (!dead) {
@@ -122,6 +126,7 @@ class VideoDecoder(
             }
             Log.i(TAG, "decoder ${info.name} $codec ${width}x$height@$fps lowLatency=${info.lowLatency}")
         } catch (e: Exception) {
+            runCatching { configuring?.release() }
             fail("decoder ${info.name}: ${e.message}")
         }
     }

@@ -51,4 +51,18 @@ class DecoderPartsTest {
         assertArrayEquals(sc + vps + sc + sps + sc + pps, csd[0])
         assertTrue(VideoDecoder.csd(byteArrayOf(0x12, 0, 1), "av1").isEmpty())
     }
+    @Test fun advertisedLowLatencyUsesTheStandardOptionBeforeVendorHints() {
+        val attempts=CodecPicker.lowLatencyConfigurations("c2.qti.hevc.decoder.low_latency",true,37)
+        assertEquals(mapOf("low-latency" to 1),attempts.first())
+        assertTrue(attempts[1].containsKey("vendor.qti-ext-dec-low-latency.enable"))
+        assertTrue(attempts.last().isEmpty())
+        assertTrue(attempts.none { "operating-rate" in it })
+    }
+    @Test fun legacyDecodersKeepVendorAndPlainFallbacksWithoutUnsupportedStandardKeys() {
+        val attempts=CodecPicker.lowLatencyConfigurations("OMX.MTK.VIDEO.DECODER.AVC",false,29)
+        assertTrue("vendor.mtk.vdec.lowlatency.mode" in attempts.first())
+        assertTrue(attempts.none { "low-latency" in it })
+        assertTrue(attempts.last().isEmpty())
+    }
+
 }

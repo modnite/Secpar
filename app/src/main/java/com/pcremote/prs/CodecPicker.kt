@@ -35,6 +35,18 @@ object CodecPicker {
             Decoder(info.name, mime, hw, ll)
         }
 
+    /** Moonlight's preference order: advertised standard support first, then
+     * vendor hints, then plain configuration. Avoid capping catch-up throughput
+     * with an operating-rate request equal to the stream's nominal FPS. */
+    fun lowLatencyConfigurations(name: String, advertised: Boolean, sdk: Int = Build.VERSION.SDK_INT): List<Map<String, Int>> {
+        val vendor = vendorLowLatencyKeys(name) + mapOf("priority" to 0)
+        return buildList {
+            if (sdk >= 30) add(if (advertised) mapOf("low-latency" to 1) else vendor + mapOf("low-latency" to 1))
+            add(vendor)
+            add(emptyMap())
+        }.distinct()
+    }
+
     /** Vendor switches that cut decoder latency, by decoder-name prefix. */
     fun vendorLowLatencyKeys(name: String): Map<String, Int> {
         val n = name.lowercase()
