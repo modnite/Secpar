@@ -1196,6 +1196,7 @@ impl eframe::App for App {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     self.updates.button(ui);
+                                    if self.account.toolbar(ui){self.page=Page::Computers;}
 
                                 },
                             );

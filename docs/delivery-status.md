@@ -1023,3 +1023,15 @@ Not verified: a physical controller of any kind, macOS, DualShock without a wrap
   on Windows and the OMV box, a real window driven through the fullscreen rules, and the real
   hook fed synthetic events. Not verified: real Alt+Tab or Win swallowing on a live desktop
   against a real host.
+
+## Header layout follow-up (not released)
+Refresh, account sign-in/sign-out and updates use labelled Lucide glyph buttons in
+the common header. Removed repeated Android tab titles and the duplicate friend
+permission list from desktop host settings. Friend permissions remain in Friends.
+Android debug build and desktop checks pass; running Android/Windows fixture
+screenshots reviewed. Published3.18.0 assets and installed apps are unchanged.
+
+User playback acceptance: controller input latency improved, but frame pacing is
+still uneven on Linux AND Android when playing games from the Windows host.
+Direct decoder delivery is not a complete pacing fix. Compare shared Windows
+capture/encoding cadence and packet arrival before assuming a Linux-only cause.

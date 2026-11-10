@@ -426,6 +426,13 @@ impl Panel {
             events,
         }
     }
+    pub fn toolbar(&mut self,ui:&mut eframe::egui::Ui)->bool {
+        let signed_in=self.user.is_some();
+        let auth=crate::icons::button(ui,if signed_in {crate::icons::Icon::Exit}else{crate::icons::Icon::SignIn},if signed_in {"Sign out"}else{"Sign in"},!self.busy);
+        if auth && signed_in {self.send(Command::SignOut);}
+        if crate::icons::button(ui,crate::icons::Icon::Refresh,"Refresh",signed_in && !self.busy){self.send(Command::Refresh);}
+        auth && !signed_in
+    }
     fn send(&mut self, command: Command) {
         if self.tx.try_send(command).is_ok() {
             self.busy = true;
@@ -548,10 +555,7 @@ impl Panel {
         if let Some(user)=self.user.clone() {
             ui.horizontal(|ui| {
                 ui.add(egui::Label::new(user.handle).truncate());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
-                    if ui.add_enabled(!self.busy,egui::Button::new("Sign out")).clicked(){self.send(Command::SignOut);}
-                    if ui.add_enabled(!self.busy,egui::Button::new("Refresh")).clicked(){self.send(Command::Refresh);}
-                });
+
             });
             ui.add_space(8.);
         }
@@ -890,9 +894,7 @@ impl Panel {
     }
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
         use eframe::egui;
-        crate::design::page_header(ui,"Friends",|ui| {
-            if ui.add_enabled(self.user.is_some() && !self.busy,egui::Button::new("Refresh")).clicked(){self.send(Command::Refresh);}
-        });
+        ui.heading("Friends");
         ui.add_space(8.);
         if self.user.is_none() {
             ui.weak("Sign in on Computers.");

@@ -398,16 +398,7 @@ impl Panel {
         ctx.request_repaint_after(Duration::from_secs(60));
     }
     pub fn button(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .button(if self.release.is_some() {
-                "Update available"
-            } else {
-                "Updates"
-            })
-            .clicked()
-        {
-            self.open = true;
-        }
+        if crate::icons::button(ui,crate::icons::Icon::Download,if self.release.is_some(){"Update available"}else{"Check for updates"},true) {self.open=true;}
     }
     pub fn window(&mut self, ctx: &egui::Context, streaming: bool) {
         if !self.open {

@@ -467,39 +467,13 @@ impl Panel {
                 self.setting_toggle(ui, &config, "allow_clip", "Allow clipboard sharing", "Allow clipboard exchange with paired devices.");
                 self.setting_toggle(ui, &config, "friends", "Let friends connect", "Friends you added still need your approval unless you set them to connect at any time.");
                 ui.add_space(4.);
-                self.friends_ui(ui, config["friends"].as_bool().unwrap_or(true));
+
                 if !pad_ok {ui.horizontal(|ui| {
                     design::dot(ui,design::MUTED);
                     ui.label(egui::RichText::new(pad_text).size(12.).color(design::MUTED));
                 });}
             });
         });
-    }
-    /// What each friend may do on this PC. Changes go to the account and apply at the next check.
-    fn friends_ui(&mut self, ui: &mut egui::Ui, on: bool) {
-        if !on || self.friend_rows.is_empty() {
-            return;
-        }
-        ui.add_space(6.);
-        ui.label(egui::RichText::new("Friends").strong());
-        let mut change = None;
-        for f in &self.friend_rows {
-            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),28.),egui::Layout::right_to_left(egui::Align::Center),|ui| {
-                ui.menu_button("Permissions",|ui| {
-                    let (mut keyboard,mut mouse,mut always)=(f.keyboard,f.mouse,f.connect=="always");
-                    if ui.checkbox(&mut keyboard,"Keyboard").changed(){change=Some(Command::Friend{id:f.id.clone(),keyboard:Some(keyboard),mouse:None,connect:None});}
-                    if ui.checkbox(&mut mouse,"Mouse").changed(){change=Some(Command::Friend{id:f.id.clone(),keyboard:None,mouse:Some(mouse),connect:None});}
-                    if ui.checkbox(&mut always,"Connect without asking").changed(){change=Some(Command::Friend{id:f.id.clone(),keyboard:None,mouse:None,connect:Some(if always {"always"}else{"ask"})});}
-                });
-                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),28.),egui::Layout::left_to_right(egui::Align::Center),|ui| {
-                    ui.add(egui::Label::new(format!("@{}",f.handle)).truncate());
-                });
-            });
-        }
-        if let Some(command) = change {
-            self.send(command);
-        }
-        ui.add_space(4.);
     }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         if cfg!(target_os = "linux") {
@@ -559,7 +533,7 @@ impl Panel {
                             ui.label(egui::RichText::new(self.settings["pad"]["text"].as_str().unwrap_or("")).size(12.).color(design::MUTED));
                         });
                     }
-                    self.friends_ui(ui, config["friends"].as_bool().unwrap_or(true));
+
                 });
                 ui.add_space(4.);
                 design::surface().inner_margin(10).show(ui, |ui| {

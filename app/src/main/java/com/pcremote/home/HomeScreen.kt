@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -99,7 +100,7 @@ fun HomeScreen(
     val c = LocalMidnight.current
     var tab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
     Column(Modifier.fillMaxSize().background(c.bg).safeDrawingPadding()) {
-        Header(updateAvailable, a.updates)
+        Header(updateAvailable, a.updates, account, acts) { tab = HomeTab.COMPUTERS }
         TabStrip(tab) { tab = it }
         if (tab != HomeTab.SETTINGS) account.error?.let { ErrorBar(it, acts.dismissError) }
         Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.TopCenter) {
@@ -115,14 +116,17 @@ fun HomeScreen(
 }
 
 @Composable
-private fun Header(updateAvailable: Boolean, onUpdates: () -> Unit) {
+private fun Header(updateAvailable: Boolean, onUpdates: () -> Unit, account: AccountUi, acts: AccountActions, signIn: () -> Unit) {
     val c = LocalMidnight.current
     Row(Modifier.fillMaxWidth().padding(horizontal = PageMargin, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         SecparWordmark(Modifier.width(112.dp).height(27.dp))
         Spacer(Modifier.width(8.dp))
         Text(BuildConfig.VERSION_NAME, color = c.textDim, fontSize = 11.sp, maxLines = 1)
         Spacer(Modifier.weight(1f))
-        GhostButton(stringResource(if (updateAvailable) R.string.pcr_update_available else R.string.pcr_updates), onUpdates, compact = true)
+        HeaderAction(R.drawable.lucide_refresh_cw, "Refresh", acts.refresh, account.user != null && !account.busy)
+        HeaderAction(if (account.user == null) R.drawable.lucide_circle_user else R.drawable.lucide_log_out,
+            if (account.user == null) "Sign in" else "Sign out", if (account.user == null) signIn else acts.signOut, !account.busy)
+        HeaderAction(R.drawable.lucide_download, if (updateAvailable) "Update available" else "Check for updates", onUpdates, accent = updateAvailable)
     }
 }
 
@@ -168,20 +172,9 @@ private fun ComputersPage(
     val landscape=LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     LazyVerticalGrid(columns = GridCells.Fixed(if (landscape) 2 else 1), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(start = PageMargin, end = PageMargin, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        item("title", span = { GridItemSpan(maxLineSpan) }) {
-            PageHeader(stringResource(R.string.pcr_tab_computers)) {
-                // Signed in, computers come from the account. Pairing by link is only for use without one.
-                if (account.user == null) GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
-            }
-        }
-        account.user?.let { user ->
-            item("account", span = { GridItemSpan(maxLineSpan) }) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(user.handle, color = c.textDim, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f))
-                    GhostButton(stringResource(R.string.pcr_refresh), acts.refresh, compact = true, enabled = account.connecting == null)
-                    GhostButton(stringResource(R.string.pcr_sign_out), acts.signOut, compact = true)
-                }
+        if (account.user == null) item("add", span = { GridItemSpan(maxLineSpan) }) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
             }
         }
         if (account.user == null) item("sign-in", span = { GridItemSpan(maxLineSpan) }) { com.pcremote.account.SignInForm(acts, account.busy) }
@@ -356,5 +349,21 @@ private fun RenameDialog(current: String, onDismiss: () -> Unit, onSave: (String
         PrimaryButton(stringResource(R.string.pcr_save), { onSave(name.trim().ifEmpty { current }); onDismiss() }, compact = true)
     }) {
         FlatField(name, { name = it }, current, Modifier.fillMaxWidth())
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun HeaderAction(@androidx.annotation.DrawableRes icon: Int, label: String, action: () -> Unit,
+    enabled: Boolean = true, accent: Boolean = false) {
+    val c = LocalMidnight.current
+    androidx.compose.material3.TooltipBox(
+        positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = androidx.compose.material3.rememberTooltipState()) {
+        androidx.compose.material3.IconButton(onClick = action, enabled = enabled, modifier = Modifier.size(44.dp)) {
+            Icon(painterResource(icon), label, modifier = Modifier.size(20.dp),
+                tint = if (!enabled) c.textDim else if (accent) c.accent else c.text)
+        }
     }
 }

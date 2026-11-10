@@ -2,7 +2,7 @@
 //! assets/icons/lucide. Rasterized from SVG; tinted after DPI-aware downsampling.
 use eframe::egui::{self,Color32,Rect,TextureHandle,TextureOptions};
 #[derive(Clone,Copy,Debug)]
-pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back,Check,Chevron,Keyboard,Mouse}
+pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back,Check,Chevron,Keyboard,Mouse,Refresh,SignIn,Download}
 impl Icon {
     fn png(self)->&'static [u8] {match self {
         Self::Window=>include_bytes!("../../assets/icons/lucide/png/maximize.png"),
@@ -18,6 +18,9 @@ impl Icon {
         Self::Check=>include_bytes!("../../assets/icons/lucide/png/check.png"),
         Self::Chevron=>include_bytes!("../../assets/icons/lucide/png/chevron-right.png"),
         Self::Keyboard=>include_bytes!("../../assets/icons/lucide/png/keyboard.png"),
+        Self::Refresh=>include_bytes!("../../assets/icons/lucide/png/refresh-cw.png"),
+        Self::SignIn=>include_bytes!("../../assets/icons/lucide/png/log-in.png"),
+        Self::Download=>include_bytes!("../../assets/icons/lucide/png/download.png"),
         Self::Mouse=>include_bytes!("../../assets/icons/lucide/png/mouse.png"),
     }}
 }
@@ -40,4 +43,13 @@ pub fn status(ui:&mut egui::Ui,kind:Icon,label:&str,allowed:bool) {
     response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Label,true,label));
     response.on_hover_text(label);
     paint(ui,kind,rect,if allowed{crate::design::ACCENT}else{crate::design::MUTED});
+}
+
+pub fn button(ui:&mut egui::Ui,kind:Icon,label:&str,enabled:bool)->bool {
+    let response=ui.add_enabled(enabled,egui::Button::new("").min_size(egui::vec2(32.,32.)))
+        .on_hover_text(label).on_disabled_hover_text(label);
+    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,enabled,label));
+    paint(ui,kind,egui::Rect::from_center_size(response.rect.center(),egui::vec2(18.,18.)),
+        if enabled {crate::design::TEXT}else{crate::design::MUTED});
+    response.clicked()
 }

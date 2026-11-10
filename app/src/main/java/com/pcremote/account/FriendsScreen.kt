@@ -43,9 +43,6 @@ fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Mod
     val user = state.user
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        PageHeader("Friends") {
-            GhostButton("Refresh", acts.refresh, compact = true, enabled = user != null && !state.working)
-        }
         if (user == null) {
             Text("Sign in on Computers.", color = c.textDim, style = MaterialTheme.typography.bodyMedium)
             return@Column

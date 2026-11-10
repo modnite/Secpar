@@ -56,7 +56,7 @@ fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Mod
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        PageHeader(stringResource(R.string.pcr_settings))
+
 
         Group(R.string.pcr_set_video) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
