@@ -362,6 +362,28 @@ impl App {
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("resolution")) {app.menu_page=4;}
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("audio")) {app.menu_page=3;}
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("waiting")) {app.stream_stats=None;}
+            if let Some(path)=std::env::var_os("SECPAR_REVIEW_STREAM") {
+                // Recorded host frames through the real decode worker, GL shader and stats strip.
+                let (tx,rx)=mpsc::channel(256);app.events=Some(rx);
+                let ctx=cc.egui_ctx.clone();
+                std::thread::spawn(move||{
+                    let bytes=std::fs::read(path).unwrap_or_default();
+                    let mut id=0u32;
+                    // Loops: a keyframe only comes again at the start of the file.
+                    if bytes.is_empty() {return}
+                    loop {let mut at=0;
+                    while at+5<=bytes.len() {
+                        let len=u32::from_be_bytes(bytes[at..at+4].try_into().unwrap()) as usize;
+                        let key=bytes[at+4]==1;
+                        let Some(data)=bytes.get(at+5..at+5+len) else {break};
+                        at+=5+len;
+                        let header=secpar_stream::frame::FrameHeader{len:len as u32,capture_us:0,keyframe:key,codec:secpar_stream::frame::Codec::H264};
+                        if tx.blocking_send(Event::Video(secpar_client::receiver::VideoFrame{id,header,data:data.to_vec()})).is_err() {break}
+                        id+=1;ctx.request_repaint();std::thread::sleep(Duration::from_micros(16_667));
+                    }
+                    }
+                });
+            }
         }
         app
     }
@@ -1149,7 +1171,7 @@ impl eframe::App for App {
         #[cfg(feature = "ui-review")]
         if let Some(path) = std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO") {
             self.review_frames += 1;
-            if self.review_frames >= 12 && !self.review_shot && (self.files.review_ready() || self.review_frames > 3000) {
+            if self.review_frames >= if std::env::var_os("SECPAR_REVIEW_STREAM").is_some() {150} else {12} && !self.review_shot && (self.files.review_ready() || self.review_frames > 3000) {
                 self.review_shot = true;
                 ctx.send_viewport_cmd(ViewportCommand::Screenshot(Default::default()));
             }

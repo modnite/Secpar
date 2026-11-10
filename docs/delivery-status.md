@@ -1,5 +1,21 @@
 # Secpar delivery record
 
+## WINDOWS HARDWARE DECODE (branch claude/hwdecode, based on 3.16.7, not released)
+
+- The Windows client decoded with OpenH264 only: 17.4 ms median per 1080p frame and a
+  full core at 60 fps. It now decodes on the GPU through the Media Foundation DXVA
+  decoder (D3D11 device manager, low latency mode, NV12 surfaces, copied to the NV12
+  shader path). Code in desktop/src/video/dxva.rs, chosen by the existing Decoder setting
+  (Automatic, Hardware (D3D11), Software). The stream menu and stats strip show the
+  active decoder. A failed frame flushes the decoder and asks for a keyframe, three in a
+  row or a lost device switch to OpenH264 at the next keyframe.
+- Measured here (RTX 2060, recorded host stream, 1080p60, release build): decode median
+  4.0 ms and p95 7.8 ms against 17.4 and 22.4 ms in software. Hardware pictures are
+  identical to OpenH264 pictures, frame for frame.
+- The client only negotiates H.264. The decoder also takes HEVC and AV1 but this PC has
+  no HEVC or AV1 decoder MFT installed, so those paths are not verified.
+- desktop/tests/capture_stream.rs records real host output for the measurements.
+
 ## SLOW CONNECTION SETUP (branch claude/slow-connect, based on 3.16.6, not released)
 
 Report: the Windows desktop took very long to connect to a Linux host (Files, previews, stream).

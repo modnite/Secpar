@@ -3870,6 +3870,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "tray-icon",
+ "windows",
  "windows-sys 0.61.2",
 ]
 
