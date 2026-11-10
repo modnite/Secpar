@@ -18,6 +18,7 @@ export const invoke = <T>(cmd: string, args?: Record<string, unknown>) =>
 export const listen = <T = unknown>(name: string, cb: (payload: T) => void) => window.__TAURI__.event.listen<T>(name, (e) => cb(e.payload));
 export const appWindow = () => window.__TAURI__.window.getCurrentWindow();
 
+export interface FriendRow { id: string; handle: string; connect: "ask" | "always"; keyboard: boolean; mouse: boolean }
 export interface Device { id: string; name: string; connected: boolean }
 export interface State { name: string; devices: Device[]; friends: Device[]; locked: boolean }
 export interface Config {

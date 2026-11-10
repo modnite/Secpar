@@ -1,4 +1,4 @@
-import { h, invoke, toggle, type Config, type Display } from "../api";
+import { h, invoke, toggle, type Config, type Display, type FriendRow } from "../api";
 
 export async function settings(): Promise<HTMLElement> {
   const { config, displays } = await invoke<{ config: Config; displays: Display[] }>("get_config");
@@ -31,6 +31,34 @@ export async function settings(): Promise<HTMLElement> {
       : "Asking your router…";
   };
   showNet();
+  const friendsBox = h("div.friends", {});
+  const showFriends = async () => {
+    friendsBox.replaceChildren();
+    if (!config.friends) return;
+    try {
+      let rows = await invoke<FriendRow[]>("host_friends");
+      const draw = () => {
+        friendsBox.replaceChildren(...rows.map((f) => h("div.group", {},
+          h("div.row", {}, h("span.grow.label", {}, `@${f.handle}`)),
+          toggle("Keyboard control", "", f.keyboard, (v) => change(f.id, { keyboard: v })),
+          toggle("Mouse control", "", f.mouse, (v) => change(f.id, { mouse: v })),
+          toggle("Connect without asking", "", f.connect === "always", (v) => change(f.id, { connect: v ? "always" : "ask" })))));
+      };
+      const change = async (id: string, patch: Record<string, unknown>) => {
+        try {
+          rows = await invoke<FriendRow[]>("host_friend_set", { id, ...patch });
+          note.textContent = "";
+        } catch (e) {
+          note.textContent = `Couldn't save: ${e}`;
+        }
+        draw();
+      };
+      draw();
+    } catch {
+      // Not linked to an account, or offline: there are no friends to show.
+    }
+  };
+  showFriends();
   const folder = h("span.hint.path", { title: config.files_dir }, config.files_dir);
   const change = async () => {
     const dir = await invoke<string | null>("pick_files_dir");
@@ -56,7 +84,10 @@ export async function settings(): Promise<HTMLElement> {
       {},
       toggle("Receive files", "", config.allow_files, (v) => save({ allow_files: v })),
       toggle("Share clipboard", "", config.allow_clip, (v) => save({ allow_clip: v })),
-      toggle("Let friends connect", "", config.friends, (v) => save({ friends: v })),
+      toggle("Let friends connect", "", config.friends, async (v) => {
+        await save({ friends: v });
+        showFriends();
+      }),
       toggle("Direct remote access", "Automatic port mapping (UPnP)", config.anywhere, async (v) => {
         netNote.textContent = v ? "Asking your router…" : "";
         await save({ anywhere: v });
@@ -64,6 +95,7 @@ export async function settings(): Promise<HTMLElement> {
       }),
     ),
     netNote,
+    friendsBox,
     h(
       "div.group",
       {},

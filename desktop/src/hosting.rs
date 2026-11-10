@@ -13,6 +13,14 @@ struct Device {
     connected: bool,
 }
 #[derive(Clone, Default, Deserialize)]
+struct FriendRow {
+    id: String,
+    handle: String,
+    connect: String,
+    keyboard: bool,
+    mouse: bool,
+}
+#[derive(Clone, Default, Deserialize)]
 struct State {
     name: String,
     devices: Vec<Device>,
@@ -27,9 +35,11 @@ enum Command {
     Patch(Value),
     Revoke(String),
     Disconnect(String),
+    Friend { id: String, keyboard: Option<bool>, mouse: Option<bool>, connect: Option<&'static str> },
 }
 enum Event {
     State(Result<(State, Value), String>),
+    Friends(Result<Vec<FriendRow>, String>),
     Pair(Result<String, String>),
     Error(String),
 }
@@ -38,6 +48,8 @@ pub struct Panel {
     events: mpsc::Receiver<Event>,
     state: Option<State>,
     settings: Value,
+    /// Every friend of the account and what each may do. Empty when the host is not linked.
+    friend_rows: Vec<FriendRow>,
     error: String,
     busy: bool,
     pairing: bool,
@@ -91,6 +103,11 @@ impl Panel {
                                     Err(e) => Event::Error(e),
                                 }
                             }
+                            Command::Friend { id, keyboard, mouse, connect } => Event::Friends(
+                                local_host::call("host_friend_set", json!({"id":id,"keyboard":keyboard,"mouse":mouse,"connect":connect}))
+                                    .await
+                                    .and_then(|v| serde_json::from_value(v).map_err(|_| "Invalid friends response".to_string())),
+                            ),
                             Command::Disconnect(id) => {
                                 match local_host::call("disconnect_friend", json!({"id":id})).await {
                                     Ok(_) => Event::State(snapshot().await),
@@ -123,6 +140,7 @@ impl Panel {
                 friends: Vec::new(),
                 locked: false,
             }),
+            friend_rows: Vec::new(),
             settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"friends":true,"anywhere":false},"displays":[],"pad":{"ok":true,"text":"Gamepad ready"}}),
             error: String::new(),
             busy: false,
@@ -164,6 +182,7 @@ impl Panel {
                         }
                     }
                     self.state = Some(state);
+                    self.friend_rows = config["friend_rows"].as_array().map(|rows| rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect()).unwrap_or_default();
                     self.settings = config;
                     self.error.clear();
                 }
@@ -171,6 +190,8 @@ impl Panel {
                     self.state = None;
                     self.error = e;
                 }
+                Event::Friends(Ok(rows)) => self.friend_rows = rows,
+                Event::Friends(Err(e)) => self.error = e,
                 Event::Pair(Ok(link)) => {
                     match qrcode::QrCode::with_error_correction_level(
                         link.as_bytes(),
@@ -426,12 +447,40 @@ impl Panel {
                 self.setting_toggle(ui, &config, "allow_clip", "Allow clipboard sharing", "Allow clipboard exchange with paired devices.");
                 self.setting_toggle(ui, &config, "friends", "Let friends connect", "Friends you added still need your approval unless you set them to connect at any time.");
                 ui.add_space(4.);
+                self.friends_ui(ui, config["friends"].as_bool().unwrap_or(true));
                 ui.horizontal(|ui| {
                     design::dot(ui, if pad_ok { design::ACCENT } else { design::MUTED });
                     ui.label(egui::RichText::new(pad_text).size(12.).color(design::MUTED));
                 });
             });
         });
+    }
+    /// What each friend may do on this PC. Changes go to the account and apply at the next check.
+    fn friends_ui(&mut self, ui: &mut egui::Ui, on: bool) {
+        if !on || self.friend_rows.is_empty() {
+            return;
+        }
+        ui.label(egui::RichText::new("Friends").strong());
+        let mut change = None;
+        for f in &self.friend_rows {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::Label::new(format!("@{}", f.handle)).truncate());
+                let (mut keyboard, mut mouse, mut always) = (f.keyboard, f.mouse, f.connect == "always");
+                if ui.checkbox(&mut keyboard, "Keyboard").changed() {
+                    change = Some(Command::Friend { id: f.id.clone(), keyboard: Some(keyboard), mouse: None, connect: None });
+                }
+                if ui.checkbox(&mut mouse, "Mouse").changed() {
+                    change = Some(Command::Friend { id: f.id.clone(), keyboard: None, mouse: Some(mouse), connect: None });
+                }
+                if ui.checkbox(&mut always, "Connect without asking").changed() {
+                    change = Some(Command::Friend { id: f.id.clone(), keyboard: None, mouse: None, connect: Some(if always { "always" } else { "ask" }) });
+                }
+            });
+        }
+        if let Some(command) = change {
+            self.send(command);
+        }
+        ui.add_space(4.);
     }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         if cfg!(target_os = "linux") {
@@ -485,6 +534,7 @@ impl Panel {
                     self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
                     self.setting_toggle(ui,&config,"allow_clip","Allow clipboard sharing","Allow clipboard exchange with paired devices.");
                     self.setting_toggle(ui,&config,"friends","Let friends connect","Friends you added still need your approval unless you set them to connect at any time.");
+                    self.friends_ui(ui, config["friends"].as_bool().unwrap_or(true));
                 });
                 design::surface().inner_margin(10).show(&mut columns[1], |ui| {
                     ui.set_width(ui.available_width());
@@ -584,7 +634,11 @@ fn paint_qr(ui: &mut egui::Ui, qr: &qrcode::QrCode) {
 async fn snapshot() -> Result<(State, Value), String> {
     let state = serde_json::from_value(local_host::call("get_state", Value::Null).await?)
         .map_err(|_| "Invalid hosting state")?;
-    let config = local_host::call("get_config", Value::Null).await?;
+    let mut config = local_host::call("get_config", Value::Null).await?;
+    // Friends come from the account. A PC that is not linked, or is offline, simply has none to show.
+    if let Ok(rows) = local_host::call("host_friends", Value::Null).await {
+        config["friend_rows"] = rows;
+    }
     Ok((state, config))
 }
 async fn patch_config(patch: Value) -> Result<(), String> {

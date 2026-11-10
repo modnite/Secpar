@@ -226,6 +226,13 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
             app.agent.revoke(&arg::<String>(&args, "id")?);
             Ok(Value::Null)
         }
+        "host_friends" => to_value(app.account.as_ref().map_err(Clone::clone)?.friend_rows().await?),
+        "host_friend_set" => {
+            let id: String = arg(&args, "id")?;
+            let flag = |key: &str| args.get(key).and_then(Value::as_bool);
+            let connect = args.get("connect").and_then(Value::as_str).map(String::from);
+            to_value(app.account.as_ref().map_err(Clone::clone)?.set_friend(&id, flag("keyboard"), flag("mouse"), connect.as_deref()).await?)
+        }
         "disconnect_friend" => {
             app.agent.disconnect_guest(&arg::<String>(&args, "id")?);
             Ok(Value::Null)

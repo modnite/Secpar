@@ -223,6 +223,13 @@ impl Backend {
                 agent.as_ref().ok_or("Host is not running")?.revoke(id);
                 Ok(Value::Null)
             }
+            "host_friends" => Ok(json!(self.account.as_ref().map_err(Clone::clone)?.friend_rows().await?)),
+            "host_friend_set" => {
+                let id = args["id"].as_str().ok_or("Missing friend")?;
+                let flag = |key: &str| args[key].as_bool();
+                let rows = self.account.as_ref().map_err(Clone::clone)?.set_friend(id, flag("keyboard"), flag("mouse"), args["connect"].as_str()).await?;
+                Ok(json!(rows))
+            }
             "disconnect_friend" => {
                 let id = args["id"].as_str().ok_or("Missing friend")?;
                 let agent = self.agent.lock().unwrap();

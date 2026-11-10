@@ -17,6 +17,34 @@ struct PairRequest { id: String }
 fn valid_id(id: &str) -> bool {
     id.len() == 36 && id.bytes().enumerate().all(|(i,b)| if [8,13,18,23].contains(&i) {b == b'-'} else {b.is_ascii_hexdigit()})
 }
+/// One friend of the owner as the host's settings show them.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct FriendRow {
+    pub id: String,
+    pub handle: String,
+    pub connect: String,
+    pub keyboard: bool,
+    pub mouse: bool,
+}
+#[derive(Deserialize)]
+struct RawFriend {
+    id: String,
+    #[serde(default)]
+    handle: String,
+    #[serde(default)]
+    input: String,
+    #[serde(default)]
+    connect: String,
+    keyboard: Option<bool>,
+    mouse: Option<bool>,
+}
+impl From<RawFriend> for FriendRow {
+    /// A Worker from before keyboard and mouse were separate sends only `input`.
+    fn from(r: RawFriend) -> Self {
+        let full = r.input == "full";
+        FriendRow { id: r.id, handle: r.handle, connect: if r.connect == "always" { "always".into() } else { "ask".into() }, keyboard: r.keyboard.unwrap_or(full), mouse: r.mouse.unwrap_or(full) }
+    }
+}
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Registration {
     pub computer: String,
@@ -278,6 +306,31 @@ impl Account {
         let rows = self.request(&registration, Method::GET, "/v1/host/friends").await.map_err(|(_, note)| note)?;
         crate::guest_policy::Roster::parse(&rows).map_err(Into::into)
     }
+    /// Every friend of the owner and what each may do on this PC, for the host's own settings.
+    pub async fn friend_rows(&self) -> Result<Vec<FriendRow>, String> {
+        let registration = self.inner.lock().await.registration.clone().ok_or("Host is not linked")?;
+        let rows = self.request(&registration, Method::GET, "/v1/host/friends").await.map_err(|(_, note)| note)?;
+        let raw: Vec<RawFriend> = serde_json::from_value(rows).map_err(|_| "Invalid friends response")?;
+        if raw.len() > 500 {
+            return Err("Invalid friends response".into());
+        }
+        let mut rows: Vec<FriendRow> = raw.into_iter().map(Into::into).collect();
+        rows.sort_by_key(|r| r.handle.to_lowercase());
+        Ok(rows)
+    }
+    /// Changes one friend. Anything left as `None` stays as it is.
+    pub async fn set_friend(&self, friend: &str, keyboard: Option<bool>, mouse: Option<bool>, connect: Option<&str>) -> Result<Vec<FriendRow>, String> {
+        if friend.is_empty() || friend.len() > 64 || !friend.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+            return Err("Invalid friend".into());
+        }
+        if connect.is_some_and(|c| c != "ask" && c != "always") {
+            return Err("Invalid setting".into());
+        }
+        let body = serde_json::json!({"keyboard": keyboard, "mouse": mouse, "connect": connect});
+        let registration = self.inner.lock().await.registration.clone().ok_or("Host is not linked")?;
+        self.request_json(&registration, Method::PUT, &format!("/v1/host/friends/{friend}/settings"), Some(body)).await.map_err(|(_, note)| note)?;
+        self.friend_rows().await
+    }
     /// The online lease of one claimed guest request.
     pub async fn lease(&self, request: &str) -> Result<crate::guest_policy::Lease, String> {
         if !valid_id(request) { return Err("Invalid request".into()); }
@@ -363,6 +416,28 @@ mod tests {
         // Each fixture must initialize TLS without depending on another test.
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
         Account { inner: Mutex::new(Inner { registration: None, state: State::default(), presence: Presence::default() }), storage, fingerprint: registration().certificate_fp, client: Client::new(), origin: server.uri() }
+    }
+    #[tokio::test]
+    async fn the_host_lists_friends_and_changes_one() {
+        let server = MockServer::start().await;
+        let account = Account::linked_for_test(&server.uri());
+        let bob = "00000000-0000-4000-8000-0000000000b0";
+        Mock::given(method("GET")).and(path("/v1/host/friends"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": bob, "handle": "Bob", "input": "view", "connect": "ask", "keyboard": true, "mouse": false},
+                {"id": "00000000-0000-4000-8000-0000000000a0", "handle": "amy", "input": "full", "connect": "always"}
+            ]))).mount(&server).await;
+        Mock::given(method("PUT")).and(path(format!("/v1/host/friends/{bob}/settings")))
+            .and(body_json(serde_json::json!({"keyboard": null, "mouse": true, "connect": null})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({}))).expect(1).mount(&server).await;
+        let rows = account.friend_rows().await.unwrap();
+        // Sorted by name without regard to case. An older Worker's `input` fills in keyboard and mouse.
+        assert_eq!(rows[0].handle, "amy");
+        assert!(rows[0].keyboard && rows[0].mouse && rows[0].connect == "always");
+        assert!(rows[1].keyboard && !rows[1].mouse && rows[1].connect == "ask");
+        account.set_friend(bob, None, Some(true), None).await.unwrap();
+        assert!(account.set_friend("../x", None, None, None).await.is_err());
+        assert!(account.set_friend(bob, None, None, Some("never")).await.is_err());
     }
     #[test]
     fn accepts_only_machine_credentials_bound_to_this_identity() {
