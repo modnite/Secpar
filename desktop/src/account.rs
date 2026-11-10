@@ -50,10 +50,25 @@ pub struct Friend {
     pub input: String,
     #[serde(default = "default_connect")]
     pub connect: String,
+    /// Set by a service that allows keyboard and mouse apart. Absent means `input` decides both.
+    #[serde(default)]
+    pub keyboard: Option<bool>,
+    #[serde(default)]
+    pub mouse: Option<bool>,
+}
+impl Friend {
+    pub fn keyboard(&self) -> bool { self.keyboard.unwrap_or(self.input == "full") }
+    pub fn mouse(&self) -> bool { self.mouse.unwrap_or(self.input == "full") }
 }
 /// What this friend may do on the computers you host. Shown beside the name.
-pub fn friend_summary(input: &str, connect: &str) -> String {
-    format!("{} · {}", if connect == "always" { "Any time" } else { "Ask first" }, if input == "full" { "Keyboard and mouse" } else { "View only" })
+pub fn friend_summary(friend: &Friend) -> String {
+    let control = match (friend.keyboard(), friend.mouse()) {
+        (true, true) => "Keyboard and mouse",
+        (true, false) => "Keyboard only",
+        (false, true) => "Mouse only",
+        (false, false) => "View only",
+    };
+    format!("{} · {control}", if friend.connect == "always" { "Any time" } else { "Ask first" })
 }
 #[derive(Clone, Deserialize)]
 pub struct OwnedComputer {
@@ -158,6 +173,8 @@ pub enum Action {
     Unblock(String),
     /// Keyboard and mouse ("view" or "full") and connect policy ("ask" or "always") for one friend.
     Setting { id: String, input: Option<&'static str>, connect: Option<&'static str> },
+    /// Keyboard and mouse, each on its own.
+    Input { id: String, keyboard: Option<bool>, mouse: Option<bool> },
 }
 pub enum Command {
     HostRefresh,
@@ -297,6 +314,8 @@ impl Panel {
                                 requester: own.clone(),
                                 input: "view".into(),
                                 connect: "ask".into(),
+                                keyboard: None,
+                                mouse: None,
                             },
                             Friend {
                                 id: "00000000-0000-4000-8000-000000000003".into(),
@@ -305,6 +324,8 @@ impl Panel {
                                 requester: "00000000-0000-4000-8000-000000000003".into(),
                                 input: "view".into(),
                                 connect: "ask".into(),
+                                keyboard: None,
+                                mouse: None,
                             },
                             Friend {
                                 id: "00000000-0000-4000-8000-000000000004".into(),
@@ -313,6 +334,8 @@ impl Panel {
                                 requester: own.clone(),
                                 input: "view".into(),
                                 connect: "ask".into(),
+                                keyboard: None,
+                                mouse: None,
                             },
                         ]
                     } else {
@@ -906,12 +929,15 @@ impl Panel {
                                 |ui| {
                                     ui.menu_button("…", |ui| {
                                         if friend.state == "accepted" {
-                                            ui.label("Keyboard and mouse");
-                                            for (value, label) in [("full", "Allow"), ("view", "View only")] {
-                                                if ui.radio(friend.input == value, label).clicked() {
-                                                    self.send(Command::Action(Action::Setting { id: friend.id.clone(), input: Some(value), connect: None }));
-                                                    ui.close();
-                                                }
+                                            ui.label("Control");
+                                            let (mut keyboard, mut mouse) = (friend.keyboard(), friend.mouse());
+                                            if ui.checkbox(&mut keyboard, "Keyboard").changed() {
+                                                self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: Some(keyboard), mouse: None }));
+                                                ui.close();
+                                            }
+                                            if ui.checkbox(&mut mouse, "Mouse").changed() {
+                                                self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: None, mouse: Some(mouse) }));
+                                                ui.close();
                                             }
                                             ui.separator();
                                             ui.label("Connecting");
@@ -945,7 +971,7 @@ impl Panel {
                                     });
                                     if friend.state == "accepted" {
                                         ui.label(
-                                            egui::RichText::new(friend_summary(&friend.input, &friend.connect))
+                                            egui::RichText::new(friend_summary(&friend))
                                                 .size(12.)
                                                 .color(crate::design::MUTED),
                                         );
@@ -1278,12 +1304,13 @@ fn action_request(action: &Action) -> Result<(Method, String), String> {
         Action::Remove(id) => (Method::DELETE, format!("/v1/friends/{}", path_id(id)?)),
         Action::Block(id) => (Method::PUT, format!("/v1/blocks/{}", path_id(id)?)),
         Action::Unblock(id) => (Method::DELETE, format!("/v1/blocks/{}", path_id(id)?)),
-        Action::Setting { id, .. } => (Method::PUT, format!("/v1/friends/{}/settings", path_id(id)?)),
+        Action::Setting { id, .. } | Action::Input { id, .. } => (Method::PUT, format!("/v1/friends/{}/settings", path_id(id)?)),
     })
 }
 fn action_body(action: &Action) -> Option<Value> {
     match action {
         Action::Setting { input, connect, .. } => Some(json!({"input": input, "connect": connect})),
+        Action::Input { keyboard, mouse, .. } => Some(json!({"keyboard": keyboard, "mouse": mouse})),
         _ => None,
     }
 }
@@ -1751,8 +1778,15 @@ mod tests {
     }
     #[test]
     fn what_a_friend_may_do_is_shown_in_short_words() {
-        assert_eq!(friend_summary("view", "ask"), "Ask first · View only");
-        assert_eq!(friend_summary("full", "always"), "Any time · Keyboard and mouse");
+        let mut f = friend("a", "accepted", "a");
+        assert_eq!(friend_summary(&f), "Ask first · View only");
+        f.input = "full".into();
+        f.connect = "always".into();
+        assert_eq!(friend_summary(&f), "Any time · Keyboard and mouse");
+        f.keyboard = Some(true);
+        f.mouse = Some(false);
+        assert_eq!(friend_summary(&f), "Any time · Keyboard only");
+        assert_eq!(action_body(&Action::Input { id: "a".into(), keyboard: None, mouse: Some(true) }), Some(json!({"keyboard": null, "mouse": true})));
     }
     #[test]
     fn old_servers_without_settings_read_as_view_only_and_ask() {
@@ -1762,7 +1796,7 @@ mod tests {
         assert!(!u.visible);
     }
     fn friend(id: &str, state: &str, requester: &str) -> Friend {
-        Friend { id: id.into(), handle: id.into(), state: state.into(), requester: requester.into(), input: "view".into(), connect: "ask".into() }
+        Friend { id: id.into(), handle: id.into(), state: state.into(), requester: requester.into(), input: "view".into(), connect: "ask".into(), keyboard: None, mouse: None }
     }
     fn incoming(id: &str, owner: &str, state: &str) -> Incoming {
         Incoming { id: id.into(), owner: owner.into(), guest_handle: "bob".into(), computer_name: Some("Studio".into()), requested: "[\"view\"]".into(), state: state.into() }

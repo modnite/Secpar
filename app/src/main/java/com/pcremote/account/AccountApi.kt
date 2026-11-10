@@ -107,7 +107,9 @@ class OkHttpAccountTransport : AccountTransport {
 data class AccountUser(val id: String, val handle: String, val visible: Boolean = false)
 /** [input] is "view" or "full" and [connect] is "ask" or "always": what this friend may do on the computers you host. */
 data class Friend(val id: String, val handle: String, val state: String, val requester: String,
-    val input: String = "view", val connect: String = "ask") {
+    val input: String = "view", val connect: String = "ask",
+    /** Keyboard and mouse are set apart. An older service sends only [input], which then decides both. */
+    val keyboard: Boolean = input == "full", val mouse: Boolean = input == "full") {
     val accepted get() = state == "accepted"
     val pending get() = state == "pending"
 }
@@ -165,6 +167,7 @@ interface AccountService {
     suspend fun setVisible(visible: Boolean) {}
     /** Null leaves that setting as it is. */
     suspend fun friendSetting(id: String, input: String?, connect: String?) {}
+    suspend fun friendInput(id: String, keyboard: Boolean?, mouse: Boolean?) {}
     suspend fun requests(): List<ConnectionRequest> = emptyList()
     suspend fun answer(answer: Answer, id: String) {}
     suspend fun friendComputers(): List<FriendComputer> = emptyList()
@@ -245,9 +248,11 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         return rows.map { row ->
             val o = row.objectValue()
             val state = o.text("state").also { valid(it == "accepted" || it == "pending") }
+            val input = o.optionalChoice("input", "view", "full")
+            fun flag(key: String) = (o[key] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: (input == "full")
             Friend(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) },
                 state, o.text("requester").also { valid(UUID.matches(it)) },
-                o.optionalChoice("input", "view", "full"), o.optionalChoice("connect", "ask", "always"))
+                input, o.optionalChoice("connect", "ask", "always"), flag("keyboard"), flag("mouse"))
         }
     }
 
@@ -275,6 +280,15 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         call("PUT", "/v1/friends/$id/settings", buildJsonObject {
             input?.let { put("input", it) }
             connect?.let { put("connect", it) }
+        })
+    }
+
+    override suspend fun friendInput(id: String, keyboard: Boolean?, mouse: Boolean?) {
+        pathId(id)
+        argument(keyboard != null || mouse != null)
+        call("PUT", "/v1/friends/$id/settings", buildJsonObject {
+            keyboard?.let { put("keyboard", it) }
+            mouse?.let { put("mouse", it) }
         })
     }
 

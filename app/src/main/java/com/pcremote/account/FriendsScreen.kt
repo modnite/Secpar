@@ -184,8 +184,11 @@ private fun FriendRow(friend: Friend, ownId: String, working: Boolean, acts: Acc
             else -> Text(FriendsModel.labelText(label), color = c.textDim, style = MaterialTheme.typography.bodySmall)
         }
         val settings = if (friend.accepted) listOf(
-            MenuItem(R.drawable.lucide_keyboard, if (friend.input == "full") "View only" else "Allow keyboard and mouse") {
-                acts.friendSetting(friend.id, if (friend.input == "full") "view" else "full", null)
+            MenuItem(R.drawable.lucide_keyboard, if (friend.keyboard) "Block keyboard" else "Allow keyboard") {
+                acts.friendInput(friend.id, !friend.keyboard, null)
+            },
+            MenuItem(R.drawable.lucide_mouse, if (friend.mouse) "Block mouse" else "Allow mouse") {
+                acts.friendInput(friend.id, null, !friend.mouse)
             },
             MenuItem(R.drawable.lucide_circle_check, if (friend.connect == "always") "Ask me first" else "Connect any time") {
                 acts.friendSetting(friend.id, null, if (friend.connect == "always") "ask" else "always")

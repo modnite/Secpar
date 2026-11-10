@@ -15,6 +15,7 @@ class AccountActions(
     val search: (String) -> Unit = {},
     val setVisible: (Boolean) -> Unit = {},
     val friendSetting: (String, String?, String?) -> Unit = { _, _, _ -> },
+    val friendInput: (String, Boolean?, Boolean?) -> Unit = { _, _, _ -> },
     val answer: (Answer, String) -> Unit = { _, _ -> },
     /** Ask to use a friend's computer with these permissions. */
     val connectFriend: (FriendComputer, List<String>) -> Unit = { _, _ -> },

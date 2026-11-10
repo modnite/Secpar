@@ -50,7 +50,14 @@ object FriendsModel {
 
     /** What this friend may do on the computers you host. Same wording as desktop. */
     fun summary(friend: Friend) =
-        "${if (friend.connect == "always") "Any time" else "Ask first"} · ${if (friend.input == "full") "Keyboard and mouse" else "View only"}"
+        "${if (friend.connect == "always") "Any time" else "Ask first"} · ${control(friend)}"
+
+    private fun control(friend: Friend) = when {
+        friend.keyboard && friend.mouse -> "Keyboard and mouse"
+        friend.keyboard -> "Keyboard only"
+        friend.mouse -> "Mouse only"
+        else -> "View only"
+    }
 
     /** The state shown at the right of a search result. Null means an Add button. */
     fun personLabel(entry: DirectoryEntry): String? = when (entry.relation) {

@@ -294,7 +294,7 @@ class MainActivity : ComponentActivity() {
                                 dismissError = { browserError = null; account.dismissError() },
                                 friend = account::friendAction, note = account::showNote,
                                 search = account::search, setVisible = account::setVisible,
-                                friendSetting = account::friendSetting, answer = account::answerRequest,
+                                friendSetting = account::friendSetting, friendInput = account::friendInput, answer = account::answerRequest,
                                 connectFriend = { computer, permissions ->
                                     account.connectFriend(computer, permissions) { route -> nav.navigate(Routes.mode(route, Mode.SCREEN)) }
                                 },

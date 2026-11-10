@@ -67,6 +67,20 @@ class FriendsDirectoryTest {
         assertEquals("""{"input":"full"}""", f.requests[1].body)
     }
 
+    @Test fun `keyboard and mouse are sent apart and read apart`() = runBlocking {
+        val f = Fake().apply {
+            reply("""{"input":"view","connect":"ask","keyboard":true,"mouse":false}""")
+            reply("""[{"id":"$other","handle":"bob","state":"accepted","requester":"$me","input":"view","connect":"ask","keyboard":true,"mouse":false},{"id":"$me","handle":"x","state":"accepted","requester":"$me","input":"full","connect":"always"}]""")
+        }
+        api(f).friendInput(other, true, null)
+        assertEquals("""{"keyboard":true}""", f.requests[0].body)
+        val list = api(f).friends()
+        assertEquals("Ask first · Keyboard only", FriendsModel.summary(list[0]))
+        // An older service sends only input, which decides both.
+        assertEquals("Any time · Keyboard and mouse", FriendsModel.summary(list[1]))
+        try { api(f).friendInput(other, null, null); fail() } catch (e: AccountException) { assertEquals(AccountError.INVALID_ARGUMENT, e.kind) }
+    }
+
     @Test fun `friend settings refuse bad ids and values before any request`() = runBlocking {
         val f = Fake()
         for ((id, input, connect) in listOf(Triple("../me", "full", null), Triple(other, "admin", null), Triple(other, null, "never"), Triple(other, null, null)))

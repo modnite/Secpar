@@ -374,6 +374,26 @@ class AccountController(
         }
     }
 
+    /** Allows or blocks keyboard and mouse for one friend, each on its own. */
+    fun friendInput(id: String, keyboard: Boolean?, mouse: Boolean?) {
+        val service = api ?: return
+        if (session == null || state.value.working) return
+        val epoch = generation
+        mutable.value = state.value.copy(working = true, error = null, note = null)
+        scope.launch {
+            try {
+                service.friendInput(id, keyboard, mouse)
+                val friends = service.friends()
+                if (epoch == generation) mutable.value = state.value.copy(friends = friends, working = false)
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (epoch != generation) return@launch
+                if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
+                else mutable.value = state.value.copy(working = false, error = message(e))
+            }
+        }
+    }
+
     /** Keyboard and mouse ("view" or "full") and connect policy ("ask" or "always") for one friend. */
     fun friendSetting(id: String, input: String?, connect: String?) {
         val service = api ?: return
