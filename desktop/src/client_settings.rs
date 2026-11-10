@@ -128,7 +128,7 @@ mod tests {
         let old=br#"{"width":1920,"height":1080,"fps":60,"kbps":30000,"audio":true,"clipboard":true,"shortcut":"CtrlAltZ","decoder":"Automatic","files_dir":""}"#;
         let loaded:Settings=serde_json::from_slice(old).unwrap();
         assert!(loaded.system_keys);
-        assert_eq!(loaded.escape,keys::EscapeKeys::CtrlAltShift);
+        assert_eq!(loaded.escape,keys::EscapeKeys::CtrlAlt);
         assert_eq!(loaded.width,1920);
         assert!(loaded.shortcut==CaptureShortcut::CtrlAltZ);
         let empty:Settings=serde_json::from_slice(b"{}").unwrap();

@@ -981,7 +981,7 @@ Not verified: a physical controller of any kind, macOS, DualShock without a wrap
   while a stream is on screen with focus and the keys going to the host, sends Win, Alt+Tab,
   Alt+F4 and the other system shortcuts to the host first, with a heartbeat watchdog and
   release of held keys on removal. The client's own hotkeys moved behind the escape keys
-  (Ctrl+Alt+Shift by default, changeable in Settings, Keyboard). Details and what cannot be
+  (Ctrl+Alt by default, changeable in Settings, Keyboard). Details and what cannot be
   intercepted (Ctrl+Alt+Del, Linux grabs): docs/stream-keyboard.md. Verified with unit tests
   on Windows and the OMV box, a real window driven through the fullscreen rules, and the real
   hook fed synthetic events. Not verified: real Alt+Tab or Win swallowing on a live desktop

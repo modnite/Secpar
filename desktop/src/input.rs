@@ -2,7 +2,7 @@ use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, PointerButton};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-/// Client hotkeys, all behind the escape modifiers (Ctrl+Alt+Shift by default): W fullscreen for
+/// Client hotkeys, all behind the escape modifiers (Ctrl+Alt by default): W fullscreen for
 /// the stream, Q disconnect, S hide or show the Secpar button. Nothing else is taken from the host.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Shortcut {
@@ -357,12 +357,13 @@ mod tests {
         use crate::keys::EscapeKeys;
         let key=|key,modifiers,repeat| Event::Key{key,physical_key:Some(key),pressed:true,repeat,modifiers};
         let mods=|ctrl,alt,shift| Modifiers{ctrl,alt,shift,..Default::default()};
-        let default=EscapeKeys::default();
+        assert_eq!(shortcut(&key(Key::W,mods(true,true,false),false),EscapeKeys::default()).map(|s|s.0),Some(Shortcut::Fullscreen),"Ctrl+Alt+W stays the default");
+        let default=EscapeKeys::CtrlAltShift;
         assert_eq!(shortcut(&key(Key::W,mods(true,true,true),false),default).map(|s|s.0),Some(Shortcut::Fullscreen));
         assert_eq!(shortcut(&key(Key::Q,mods(true,true,true),false),default).map(|s|s.0),Some(Shortcut::Disconnect));
         assert_eq!(shortcut(&key(Key::S,mods(true,true,true),false),default).map(|s|s.0),Some(Shortcut::MenuButton));
         for letter in [Key::W,Key::Q,Key::S] {
-            assert!(shortcut(&key(letter,mods(true,true,false),false),default).is_none(),"plain Ctrl+Alt belongs to host programs now");
+            assert!(shortcut(&key(letter,mods(true,true,false),false),default).is_none(),"plain Ctrl+Alt belongs to host programs with the Ctrl+Alt+Shift chord");
         }
         assert!(shortcut(&key(Key::W,mods(true,true,true),true),default).is_none(),"no key repeat");
         assert!(shortcut(&key(Key::W,mods(true,false,true),false),default).is_none());

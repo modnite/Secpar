@@ -12,8 +12,7 @@ Leaving it by any route (hotkey, menu, disconnect, error) restores them.
 ## Escape chord
 
 The client keeps three hotkeys of its own. They sit behind one set of modifiers, the
-escape keys. The default is Ctrl+Alt+Shift because a host program is unlikely to want it.
-Settings, Keyboard offers Ctrl+Alt+Shift, Ctrl+Shift and the old Ctrl+Alt.
+escape keys. The default is Ctrl+Alt, as in 3.16 and earlier. Settings, Keyboard also offers Ctrl+Shift and Ctrl+Alt+Shift, which a host program is less likely to want.
 
 | Keys | Action |
 | --- | --- |

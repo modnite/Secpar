@@ -19,14 +19,14 @@ pub const VK_RWIN: u16 = 0x5C;
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum EscapeKeys {
     /// Rare enough that a host program will not want it.
-    #[default]
     CtrlAltShift,
     CtrlShift,
-    /// The chord of 3.16 and earlier. Host programs and AltGr layouts can collide with it.
+    /// The chord of 3.16 and earlier, and the default. Host programs and AltGr layouts can collide with it.
+    #[default]
     CtrlAlt,
 }
 impl EscapeKeys {
-    pub const ALL: [Self; 3] = [Self::CtrlAltShift, Self::CtrlShift, Self::CtrlAlt];
+    pub const ALL: [Self; 3] = [Self::CtrlAlt, Self::CtrlShift, Self::CtrlAltShift];
     pub fn label(self) -> &'static str {
         match self {
             Self::CtrlAltShift => "Ctrl+Alt+Shift",
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn escape_chord_text_and_exact_modifiers() {
-        assert_eq!(EscapeKeys::default(), EscapeKeys::CtrlAltShift);
+        assert_eq!(EscapeKeys::default(), EscapeKeys::CtrlAlt);
         assert_eq!(EscapeKeys::CtrlAltShift.chord(Escape::Disconnect), "Ctrl+Alt+Shift+Q");
         assert_eq!(EscapeKeys::CtrlAlt.chord(Escape::Fullscreen), "Ctrl+Alt+W");
         assert_eq!(EscapeKeys::CtrlShift.chord(Escape::MenuButton), "Ctrl+Shift+S");
@@ -382,7 +382,7 @@ mod tests {
         f.key(CTRL, true);
         f.key(ALT, true);
         let v = f.key(0x51, true);
-        assert_eq!(v.escape, None, "Ctrl+Alt+Q is the host's with the default chord");
+        assert_eq!(v.escape, None, "Ctrl+Alt+Q is the host's when the chord is Ctrl+Alt+Shift");
         assert_eq!(v.send, vec![(0x51, true)]);
         // the Win key in the mix makes it a host chord too
         let mut f = filter();
