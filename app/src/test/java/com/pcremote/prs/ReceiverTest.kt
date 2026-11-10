@@ -158,7 +158,7 @@ class ReceiverTest {
         // appear 205 ms late after a changed clock/path until reconnection.
         fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(59_800_000).putLong(11_000_000).array(),11_020_000)
         assertEquals(11_010_000L,r.audioCaptureToLocalUs(59_800_000))
-        assertTrue(!AudioPlayout.decide(r.audioCaptureToLocalUs(59_800_000),11_020_000,0,false).discard)
+        assertTrue(!AudioPlayout.decide(r.audioCaptureToLocalUs(59_800_000),11_020_000,0).discard)
         // Preserve the best recent sample instead of following every slow echo.
         fromHost(Header(Prs.PROBE),ByteBuffer.allocate(16).putLong(59_810_000).putLong(11_030_000).array(),11_080_000)
         assertEquals(11_010_000L,r.audioCaptureToLocalUs(59_800_000))

@@ -22,7 +22,6 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private var writer = PcmWriter()
     private var head = PlaybackHead()
     private var playing = false
-    private var lastUnderruns = 0
     private var fading = true
     private var previousLeft = 0
     private var previousRight = 0
@@ -134,7 +133,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         if (android.os.Build.VERSION.SDK_INT >= 31) track!!.setStartThresholdInFrames(PRIME_FRAMES)
         Log.i(TAG, "start decoder=${codec!!.name} bufferFrames=${track!!.bufferSizeInFrames} primeFrames=$PRIME_FRAMES")
         pump = exec.scheduleWithFixedDelay({
-            if (!dead) runCatching { checkUnderrun(track!!); drain(codec!!, track!!, 0) }
+            if (!dead) runCatching { drain(codec!!, track!!, 0) }
                 .onFailure { recoverAudio(it) }
         }, 5, 5, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
@@ -152,7 +151,6 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         val t = track!!
         // Free decoded output before waiting for another input slot. Never silently
         // discard an Opus packet because the asynchronous decoder is briefly busy.
-        checkUnderrun(t)
         drain(c, t, 0)
         val deadline = System.nanoTime() + 100_000_000
         var inIdx = c.dequeueInputBuffer(5_000)
@@ -195,7 +193,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 decodedAgeUs = captureUs?.let { nowUs - it } ?: 0
                 if (!playing && firstBufferedCaptureUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t)
                 val queued = queuedFrames(t)
-                val decision = AudioPlayout.decide(captureUs, nowUs, queued, false)
+                val decision = AudioPlayout.decide(captureUs, nowUs, queued)
                 if (decision.reset && (playing || writer.writtenFrames > 0)) resetOutput(t)
                 if (decision.discard) { staleFrames++; continue }
                 if (gapCaptureUs?.let { hostCaptureUs >= it } == true) {
@@ -232,12 +230,8 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
 
     private fun queuedFrames(t: AudioTrack) = if (playing) (writer.writtenFrames - head.frames(t.playbackHeadPosition)).coerceAtLeast(0) else writer.writtenFrames
 
-    private fun checkUnderrun(t: AudioTrack) {
-        val count = t.underrunCount
-        if (playing && count > lastUnderruns && AudioPlayout.needsReprime(queuedFrames(t))) resetOutput(t)
-        lastUnderruns = count
-    }
-
+    // AudioTrack resumes when fresh PCM arrives. Flushing on its cumulative
+    // underrun counter can itself starve playback and start another reset cycle.
     private fun resetOutput(t: AudioTrack) {
         t.pause()
         t.flush()
@@ -247,7 +241,6 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         fading = true
         previousLeft = 0; previousRight = 0
         firstBufferedCaptureUs = null
-        lastUnderruns = t.underrunCount
         recoveries++
     }
 
@@ -263,7 +256,6 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         previousLeft = 0; previousRight = 0
         firstBufferedCaptureUs = null
         gapCaptureUs = null
-        lastUnderruns = 0
     }
 
     private fun recoverAudio(failure: Throwable) {
