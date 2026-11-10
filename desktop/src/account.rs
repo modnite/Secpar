@@ -427,6 +427,19 @@ impl Panel {
     pub fn local_id(&self) -> Option<&str> {
         self.host.as_ref().and_then(|state| state.as_ref().ok()).and_then(|state| state.computer.as_deref())
     }
+    /// Computers that friends share with you, drawn like your own.
+    fn friend_cards(&mut self, ui: &mut eframe::egui::Ui) {
+        use crate::design;
+        for computer in self.friend_computers.clone() {
+            let platform = match computer.platform.as_str() { "windows" => "Windows", "linux" => "Linux", "macos" => "macOS", _ => "" };
+            let status = format!("@{} · Online", computer.owner_handle);
+            let enabled = !self.busy && !self.session_open;
+            let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: None, connect: Some(enabled), menu: None });
+            if clicked {
+                self.guest_choice = Some((computer, PERMISSION_DEFAULTS));
+            }
+        }
+    }
     pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
         use crate::design;
         use eframe::egui;
@@ -461,8 +474,11 @@ impl Panel {
                 let clicked=crate::card::show(ui,crate::card::Card{name:&computer.name,status:Some((status,color)),platform,preview,connect:Some(!self.busy && computer.linked==1),menu:None});
                 if clicked { connect=Some(computer.id.clone()); }
             }
+            let none_of_ours = shown.is_empty();
+            let waiting = self.guest_flow_ui(ui);
+            if !waiting { self.friend_cards(ui); }
             ui.spacing_mut().item_spacing.y=8.;
-            if shown.is_empty() { ui.label(egui::RichText::new(if self.computers.is_empty() {NO_COMPUTERS}else{NO_OTHER_COMPUTERS}).color(design::MUTED)); }
+            if none_of_ours && self.friend_computers.is_empty() { ui.label(egui::RichText::new(if self.computers.is_empty() {NO_COMPUTERS}else{NO_OTHER_COMPUTERS}).color(design::MUTED)); }
             if let Some(id)=connect { self.connect_owned(id); }
             if !self.note.is_empty() { ui.label(&self.note); }
             ui.add_space(6.);
@@ -663,9 +679,11 @@ impl Panel {
             });
         }
     }
-    fn friend_computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
+    /// The waiting line and the permission choice for a friend's computer. True when one is showing,
+    /// and the list of computers stays hidden meanwhile.
+    fn guest_flow_ui(&mut self, ui: &mut eframe::egui::Ui) -> bool {
         use eframe::egui;
-        egui::CollapsingHeader::new("Friends' computers").default_open(true).show(ui, |ui| {
+        {
             if let Some(owner) = self.guest_waiting.clone() {
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new(format!("Waiting for @{owner}")).truncate());
@@ -677,7 +695,7 @@ impl Panel {
                         }
                     });
                 });
-                return;
+                return true;
             }
             if let Some((computer, mut flags)) = self.guest_choice.clone() {
                 ui.add(egui::Label::new(format!("{} (@{})", computer.name, computer.owner_handle)).truncate());
@@ -703,6 +721,15 @@ impl Panel {
                 } else {
                     self.guest_choice = Some((computer, flags));
                 }
+                return true;
+            }
+        }
+        false
+    }
+    fn friend_computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use eframe::egui;
+        egui::CollapsingHeader::new("Friends' computers").default_open(true).show(ui, |ui| {
+            if self.guest_flow_ui(ui) {
                 return;
             }
             if self.friend_computers.is_empty() {
