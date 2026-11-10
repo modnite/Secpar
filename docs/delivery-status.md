@@ -1,5 +1,21 @@
 # Secpar delivery record
 
+## WINDOWS HARDWARE DECODE (branch claude/hwdecode, based on 3.16.7, not released)
+
+- The Windows client decoded with OpenH264 only: 17.4 ms median per 1080p frame and a
+  full core at 60 fps. It now decodes on the GPU through the Media Foundation DXVA
+  decoder (D3D11 device manager, low latency mode, NV12 surfaces, copied to the NV12
+  shader path). Code in desktop/src/video/dxva.rs, chosen by the existing Decoder setting
+  (Automatic, Hardware (D3D11), Software). The stream menu and stats strip show the
+  active decoder. A failed frame flushes the decoder and asks for a keyframe, three in a
+  row or a lost device switch to OpenH264 at the next keyframe.
+- Measured here (RTX 2060, recorded host stream, 1080p60, release build): decode median
+  4.0 ms and p95 7.8 ms against 17.4 and 22.4 ms in software. Hardware pictures are
+  identical to OpenH264 pictures, frame for frame.
+- The client only negotiates H.264. The decoder also takes HEVC and AV1 but this PC has
+  no HEVC or AV1 decoder MFT installed, so those paths are not verified.
+- desktop/tests/capture_stream.rs records real host output for the measurements.
+
 ## SLOW CONNECTION SETUP (branch claude/slow-connect, based on 3.16.6, not released)
 
 Report: the Windows desktop took very long to connect to a Linux host (Files, previews, stream).
@@ -931,3 +947,30 @@ This list is a work record, not a claim that the app family is complete.
   the stream with an error. The abort itself was not reproduced here: this iHD does not
   abort. Real Android app on emulator-5556, HEVC, nine live size changes: host stays up
   and every size is right. Tools and numbers: test/linux-perf/README.md.
+
+## Controllers from physical pads (branch claude/gamepad, not released)
+
+Before this the Android app only had the on-screen pad, and neither desktop client read any
+physical controller. Now the Windows client reads XInput, the Linux client reads evdev and
+Android forwards Bluetooth and USB controllers in Screen, Remote and Gamepad modes. Details:
+docs/gamepad.md. The Windows host looks for ViGEmBus on every connection and Hosting says when
+it is missing. The desktop client shows a notice when a controller is plugged in and the host
+cannot create virtual pads. New `session::Event::Rumble` and `Event::PadSupport` carry the
+host's rumble and ability to the UI. The wire protocol is unchanged.
+Verified on real hosts: Windows XInput capture and rumble through ViGEmBus on this PC
+(desktop/tests/gamepad_windows.rs). Linux capture to the host's real uinput virtual pad and
+rumble back, with fake uinput pads on the OMV box (as root, test only).
+Android: unit tests, plus the debug app on emulator-5556 against this PC's Windows host. An injected
+gamepad key in Gamepad mode created a virtual pad on the host and leaving the screen removed it.
+Not verified: a physical controller of any kind, macOS, DualShock without a wrapper on Windows.
+
+- Files page slow through the account path (branch claude/files-slow, not released). The
+  LAN connection itself takes 40 to 60 ms from a Windows PC to a Linux host (TLS, upgrade
+  and hello are each a few ms). The time went into the account path around it: every
+  Open asked the account for the computer list first, the account worker held commands
+  behind a 30 s sync, pairing was polled every 2 to 3 s, and a second connection was made
+  next to the preview's. Now a saved credential connects at once, the sync and pairing
+  run beside commands, pairing is automatic in the background (300 ms polls), the Files
+  page takes the preview's connection, LAN addresses on this network start first and the
+  last working route is kept on disk. A timing log (docs/account-owned-access.md) shows
+  every step. Numbers and what was not measured are in the commit message.

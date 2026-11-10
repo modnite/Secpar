@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "3.16.7"
+version = "3.16.8"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 sha2 = "0.10.9"
 secpar-client = { path = "../crates/secpar-client" }
+secpar-stream = { path = "../crates/secpar-stream" }
 secpar-clipboard = { path = "../crates/secpar-clipboard" }
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
@@ -19,7 +20,6 @@ qrcode = { version = "0.14.1", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json"] }
 open = "5"
-gilrs = { version = "=0.11.2", default-features = false, features = ["wgi"] }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
@@ -62,8 +62,9 @@ tauri-winres = "0.3.6"
 # The hosting service and server run from this same executable (--service, --server).
 secpar-host = { path = "../host/src-tauri", default-features = false }
 raw-window-handle = "0.6.2"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Variant"] }
 tray-icon = { version = "0.25.1", default-features = false }
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_System_Power", "Win32_System_Com", "Win32_UI_Controls_Dialogs", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_System_Power", "Win32_System_Com", "Win32_UI_Controls_Dialogs", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_LibraryLoader", "Win32_Media"] }
 
 [features]
 tray-review = []
@@ -77,6 +78,7 @@ required-features = ["ui-review"]
 [target.'cfg(target_os = "linux")'.dependencies]
 secpar-host-linux = { path = "../crates/secpar-host-linux" }
 dbus = "0.9"
+libc = "0.2"
 gstreamer = "0.24.5"
 gstreamer-app = "0.24.5"
 gstreamer-video = "0.24.5"
@@ -87,6 +89,7 @@ path = "src/tray_review_main.rs"
 required-features = ["tray-review"]
 
 [dev-dependencies]
+tokio = { version = "1.53.3", features = ["test-util"] }
 secpar-stream = { path = "../crates/secpar-stream" }
 base64 = "0.23.1"
 futures-util = { version = "0.3.34", features = ["sink"] }

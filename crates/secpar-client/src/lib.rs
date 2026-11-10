@@ -1,4 +1,5 @@
 //! Portable desktop client: pinned pairing/control and bounded PRS reception.
+pub mod connlog;
 pub mod control;
 pub mod files;
 pub mod pairing;

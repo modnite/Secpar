@@ -45,26 +45,8 @@ fun GuestSessionEffects(session: AgentSession, onEnded: () -> Unit) {
 
 @Composable
 private fun GuestControllers(session: AgentSession) {
-    val ctx = LocalContext.current
-    val activity = ctx as? MainActivity
-    val scope = rememberCoroutineScope()
     val state by session.conn.state.collectAsState()
-    // the welcome lists `pad` only when the grant allows controllers
+    // The welcome lists `pad` only when the grant allows controllers.
     val allowed = (state as? AgentState.Online)?.caps?.contains("pad") == true
-    DisposableEffect(session, allowed, activity) {
-        if (!allowed || activity == null) return@DisposableEffect onDispose {}
-        val forwarder = GamepadForwarder(ctx, session::send, scope)
-        val key: (android.view.KeyEvent) -> Boolean = forwarder::onKey
-        val motion: (android.view.MotionEvent) -> Boolean = forwarder::onMotion
-        forwarder.start()
-        activity.gamepadKey = key
-        activity.gamepadMotion = motion
-        val rumble = scope.launch { session.conn.incoming.collect { if (it is Msg.Rumble) forwarder.rumble(it) } }
-        onDispose {
-            rumble.cancel()
-            if (activity.gamepadKey === key) activity.gamepadKey = null
-            if (activity.gamepadMotion === motion) activity.gamepadMotion = null
-            forwarder.stop()
-        }
-    }
+    com.pcremote.modes.PhysicalPadsEffect(session::send, session.conn.incoming, allowed)
 }

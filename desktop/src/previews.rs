@@ -5,12 +5,13 @@ use crate::vault;
 use eframe::egui::{self, ColorImage};
 use secpar_client::control::{self, Computer, Connected, Incoming};
 use serde_json::json;
+use secpar_client::connlog;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{watch, Notify};
+use tokio::sync::{mpsc, oneshot, watch, Notify};
 
 /// Logical size of a preview in a computer card (16:9). It sits beside the text.
 pub const WIDTH: f32 = 80.;
@@ -20,6 +21,10 @@ const RADIUS: u8 = 4;
 const RETRY: Duration = Duration::from_secs(10);
 /// Pause before asking a host again that cannot give previews (no thumbnails, credential gone).
 const UNSUPPORTED_RETRY: Duration = Duration::from_secs(300);
+/// A preview that was just used for the Files page starts again soon, not after the usual pause.
+const AFTER_HANDOFF: Duration = Duration::from_secs(1);
+/// How long the Files page waits for a preview to hand over its connection before it connects itself.
+pub const HANDOFF_WAIT: Duration = Duration::from_millis(1500);
 /// Hosts send 320 px wide frames. Anything much larger is not a thumbnail.
 const MAX_SIDE: u32 = 1280;
 
@@ -37,6 +42,53 @@ pub struct Wanted {
 }
 
 type Pending = Arc<Mutex<HashMap<String, Option<ColorImage>>>>;
+
+/// Open connections that can change hands. A preview keeps an authenticated connection to a
+/// computer; the Files page asks for it instead of connecting a second time. The connection comes
+/// back with its welcome already done, so the page starts listing at once.
+pub struct Handoffs<T> {
+    slots: Mutex<HashMap<String, mpsc::Sender<oneshot::Sender<T>>>>,
+}
+/// A connection on offer. Dropping it takes the offer back.
+pub struct Offer<'a, T> {
+    pub requests: mpsc::Receiver<oneshot::Sender<T>>,
+    owner: &'a Handoffs<T>,
+    key: String,
+}
+impl<T> Drop for Offer<'_, T> {
+    fn drop(&mut self) {
+        if let Ok(mut slots) = self.owner.slots.lock() {
+            slots.remove(&self.key);
+        }
+    }
+}
+impl<T> Default for Handoffs<T> {
+    fn default() -> Self {
+        Self { slots: Mutex::new(HashMap::new()) }
+    }
+}
+impl<T> Handoffs<T> {
+    pub fn offer(&self, key: &str) -> Offer<'_, T> {
+        let (tx, requests) = mpsc::channel(1);
+        if let Ok(mut slots) = self.slots.lock() {
+            slots.insert(key.to_string(), tx);
+        }
+        Offer { requests, owner: self, key: key.to_string() }
+    }
+    /// The connection offered under `key`, or None at once when nothing is offered, or after
+    /// `wait` when the owner does not answer.
+    pub async fn take(&self, key: &str, wait: Duration) -> Option<T> {
+        let tx = self.slots.lock().ok()?.get(key)?.clone();
+        let (reply, answer) = oneshot::channel();
+        tx.try_send(reply).ok()?;
+        tokio::time::timeout(wait, answer).await.ok()?.ok()
+    }
+}
+/// The connections the previews have open, offered to the Files page.
+pub fn handoffs() -> &'static Handoffs<Connected> {
+    static SHELF: std::sync::OnceLock<Handoffs<Connected>> = std::sync::OnceLock::new();
+    SHELF.get_or_init(Handoffs::default)
+}
 
 pub struct Previews {
     wanted: Option<watch::Sender<Wanted>>,
@@ -167,6 +219,8 @@ struct Task {
     live: Arc<AtomicBool>,
     /// Set when the host cannot give previews, so it is not asked again every few seconds.
     unsupported: Arc<AtomicBool>,
+    /// The connection went to the Files page.
+    handed: Arc<AtomicBool>,
     stopping: bool,
 }
 
@@ -191,7 +245,13 @@ async fn manage(mut wanted: watch::Receiver<Wanted>, pending: Pending, ctx: egui
             if !task.handle.is_finished() {
                 return true;
             }
-            let wait = if task.unsupported.load(Ordering::Acquire) { UNSUPPORTED_RETRY } else { RETRY };
+            let wait = if task.unsupported.load(Ordering::Acquire) {
+                UNSUPPORTED_RETRY
+            } else if task.handed.load(Ordering::Acquire) {
+                AFTER_HANDOFF
+            } else {
+                RETRY
+            };
             retry.insert(key.clone(), Instant::now() + wait);
             publish(&pending, &ctx, &task.id, None);
             false
@@ -213,10 +273,10 @@ async fn manage(mut wanted: watch::Receiver<Wanted>, pending: Pending, ctx: egui
                 continue;
             }
             let Some(target) = want.targets.iter().find(|t| t.key == key).cloned() else { continue };
-            let (stop, live, unsupported) = (Arc::new(Notify::new()), Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)));
+            let (stop, live, unsupported, handed) = (Arc::new(Notify::new()), Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
             let id = target.id.clone();
-            let handle = tokio::spawn(watch_one(target, stop.clone(), live.clone(), unsupported.clone(), pending.clone(), ctx.clone()));
-            tasks.insert(key, Task { id, handle, stop, live, unsupported, stopping: false });
+            let handle = tokio::spawn(watch_one(target, stop.clone(), live.clone(), unsupported.clone(), handed.clone(), pending.clone(), ctx.clone()));
+            tasks.insert(key, Task { id, handle, stop, live, unsupported, handed, stopping: false });
         }
     }
     for task in tasks.values() {
@@ -226,22 +286,24 @@ async fn manage(mut wanted: watch::Receiver<Wanted>, pending: Pending, ctx: egui
     tokio::time::sleep(Duration::from_millis(300)).await;
 }
 
-async fn watch_one(target: Target, stop: Arc<Notify>, live: Arc<AtomicBool>, unsupported: Arc<AtomicBool>, pending: Pending, ctx: egui::Context) {
+async fn watch_one(target: Target, stop: Arc<Notify>, live: Arc<AtomicBool>, unsupported: Arc<AtomicBool>, handed: Arc<AtomicBool>, pending: Pending, ctx: egui::Context) {
     let Some(saved) = vault::load(&target.key)
         .ok()
         .flatten()
         .and_then(|value| serde_json::from_str::<Computer>(&value).ok())
         .filter(|saved| saved.fingerprint == target.fingerprint)
     else {
-        unsupported.store(true, Ordering::Release);
+        // No credential yet. The account worker pairs in the background, so look again soon.
         return;
     };
     let device = crate::device_name();
+    let started = Instant::now();
     let connected = tokio::select! {
         _ = stop.notified() => return,
         connected = Connected::reconnect(saved, &device) => connected,
     };
     let Ok(mut conn) = connected else { return };
+    connlog::note(&connlog::short_label(&conn.computer.id), "preview", "connected", started.elapsed().as_millis() as u64);
     if !conn.caps.iter().any(|cap| cap == "thumb") {
         unsupported.store(true, Ordering::Release);
         return;
@@ -249,8 +311,10 @@ async fn watch_one(target: Target, stop: Arc<Notify>, live: Arc<AtomicBool>, uns
     if control::send(&mut conn.socket, json!({"t":"thumb.sub","on":true})).await.is_err() {
         return;
     }
-    loop {
+    let mut offer = handoffs().offer(&target.key);
+    let request = loop {
         tokio::select! {
+            request = offer.requests.recv() => break request,
             _ = stop.notified() => {
                 let off = control::send(&mut conn.socket, json!({"t":"thumb.sub","on":false}));
                 let _ = tokio::time::timeout(Duration::from_secs(1), off).await;
@@ -268,6 +332,14 @@ async fn watch_one(target: Target, stop: Arc<Notify>, live: Arc<AtomicBool>, uns
                 Ok(Incoming::Text(_)) => {}
                 Err(_) => return,
             },
+        }
+    };
+    // The Files page wants this connection: stop the thumbnails, then give it over.
+    drop(offer);
+    if let Some(reply) = request {
+        if control::send(&mut conn.socket, json!({"t":"thumb.sub","on":false})).await.is_ok() {
+            handed.store(true, Ordering::Release);
+            let _ = reply.send(conn);
         }
     }
 }

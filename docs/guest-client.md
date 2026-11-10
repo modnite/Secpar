@@ -43,4 +43,4 @@ Plug a USB or Bluetooth controller into the client and it appears as a controlle
 - The host gives a friend at most 2 controllers, and at most 4 across everyone on that PC. A `pad` that does not fit is answered with `error{code:"pad_limit"}`.
 - A grant needs `gamepad`. Without it the host ignores `pad`.
 
-Mapping is the client's job. Use a maintained library with a controller database: `gilrs` on Windows and Linux, and the platform input framework on Android. DualShock, DualSense, Xbox, Switch Pro and 8BitDo pads should all arrive as the XInput layout above. Gyro, touchpad and adaptive triggers are not forwarded.
+Mapping is the client's job. Use a maintained library with a controller database: the controller code of the Secpar apps (XInput on Windows, evdev on Linux, the platform input framework on Android). DualShock, DualSense, Xbox, Switch Pro and 8BitDo pads should all arrive as the XInput layout above. Gyro, touchpad and adaptive triggers are not forwarded.

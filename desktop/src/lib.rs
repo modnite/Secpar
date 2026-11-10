@@ -14,9 +14,9 @@ mod audio_worker;
 mod design;
 mod dialogs;
 mod files;
+pub mod gamepad;
 mod hosting;
 mod input;
-mod pad;
 mod stream_menu;
 mod icons;
 mod local_host;
@@ -209,7 +209,6 @@ struct App {
     account: account::Panel,
     files: files::Panel,
     page: Page,
-    pair_link: String,
     status: String,
     command: Option<mpsc::Sender<Command>>,
     events: Option<mpsc::Receiver<Event>>,
@@ -220,7 +219,6 @@ struct App {
     /// A friend's computer is open. Nothing about it is remembered.
     guest_session: bool,
     guest_error: bool,
-    pads: Option<pad::Pads>,
     decoder: Option<video::Worker>,
     audio: Option<audio_worker::Worker>,
     audio_route:audio_worker::Route,
@@ -256,6 +254,8 @@ struct App {
     cursor_shape: Option<(TextureHandle, [i32; 2])>,
     fullscreen: bool,
     focused: bool,
+    pads: gamepad::Runner,
+    pad_unsupported: bool,
     auto_capture_pending: bool,
     video_rect: Option<egui::Rect>,
     video_layer: Option<egui::LayerId>,
@@ -309,7 +309,6 @@ impl App {
             account: account::Panel::new(cc.egui_ctx.clone()),
             files: new_files(cc.egui_ctx.clone(), &client_files_dir),
             page: initial_page(),
-            pair_link: String::new(),
             status: initial_status(),
             command: None,
             events: None,
@@ -319,7 +318,6 @@ impl App {
             owned_connecting: None,
             guest_session: false,
             guest_error: false,
-            pads: None,
             decoder: None,
             audio: None,
             audio_route:audio_worker::Route::default(),
@@ -353,6 +351,8 @@ impl App {
             cursor_shape: None,
             fullscreen: false,
             focused: true,
+            pads: Default::default(),
+            pad_unsupported: false,
             auto_capture_pending: false,
             video_rect: None, video_layer: None, remote_keyboard: false, pointer_in_video: false,
             observed_fullscreen: None,
@@ -372,50 +372,37 @@ impl App {
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("resolution")) {app.menu_page=4;}
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("audio")) {app.menu_page=3;}
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("waiting")) {app.stream_stats=None;}
+            if let Some(path)=std::env::var_os("SECPAR_REVIEW_STREAM") {
+                // Recorded host frames through the real decode worker, GL shader and stats strip.
+                let (tx,rx)=mpsc::channel(256);app.events=Some(rx);
+                let ctx=cc.egui_ctx.clone();
+                std::thread::spawn(move||{
+                    let bytes=std::fs::read(path).unwrap_or_default();
+                    let mut id=0u32;
+                    // Loops: a keyframe only comes again at the start of the file.
+                    if bytes.is_empty() {return}
+                    loop {let mut at=0;
+                    while at+5<=bytes.len() {
+                        let len=u32::from_be_bytes(bytes[at..at+4].try_into().unwrap()) as usize;
+                        let key=bytes[at+4]==1;
+                        let Some(data)=bytes.get(at+5..at+5+len) else {break};
+                        at+=5+len;
+                        let header=secpar_stream::frame::FrameHeader{len:len as u32,capture_us:0,keyframe:key,codec:secpar_stream::frame::Codec::H264};
+                        if tx.blocking_send(Event::Video(secpar_client::receiver::VideoFrame{id,header,data:data.to_vec()})).is_err() {break}
+                        id+=1;ctx.request_repaint();std::thread::sleep(Duration::from_micros(16_667));
+                    }
+                    }
+                });
+            }
         }
         app
     }
-    fn pairing_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        design::surface().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("Pair a computer").size(14.).strong());
-            ui.add_sized(
-                [ui.available_width(), 34.],
-                egui::TextEdit::singleline(&mut self.pair_link)
-                    .hint_text("Paste a Secpar Host pairing link")
-                    .password(true)
-                    .margin(egui::vec2(10., 8.)),
-            );
-            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), design::CONTROL), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        !self.pair_link.trim().is_empty(),
-                        design::primary("Pair and connect"),
-                    )
-                    .clicked()
-                {
-                    self.start(ctx, false);
-                }
-            });
-        });
-    }
-    fn start(&mut self, ctx: &egui::Context, reconnect: bool) {
+    /// Reconnects to the computer this device remembers. Account computers pair themselves.
+    fn start(&mut self, ctx: &egui::Context) {
         if self.command.is_some() {
             return;
         }
-        let pairing = if reconnect {
-            None
-        } else {
-            match Pairing::parse(&self.pair_link) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    self.status = e;
-                    return;
-                }
-            }
-        };
-        if !reconnect { self.computer_account=None; self.owned_connecting=None; }
-        self.connect(ctx,pairing);
+        self.connect(ctx,None);
     }
     fn connect(&mut self, ctx: &egui::Context, pairing: Option<Pairing>) {
         self.connect_with(ctx, pairing, None);
@@ -425,7 +412,6 @@ impl App {
         self.session_account=self.computer_account.clone();
         self.guest_session=guest.is_some();
         self.guest_error=false;
-        self.pads=None;
         if guest.is_some() { self.session_account=self.account.user.as_ref().map(|u|u.id.clone()); }
         let lan_first = self.computer_account.is_some();
         let computer = self.computer.clone();
@@ -434,7 +420,7 @@ impl App {
         self.open_audio();
         let clipboard=self.client.clipboard && guest.as_ref().is_none_or(|g|g.allows("clipboard"));
         self.clipboard=clipboard.then(secpar_clipboard::Bridge::start);
-        self.notice=None;self.connection_error=None;
+        self.notice=None;self.connection_error=None;self.pad_unsupported=false;
         self.stream_stats=None;
         let options = Options {
             audio: self.client.audio && guest.as_ref().is_none_or(|g|g.allows("audio")),
@@ -543,9 +529,6 @@ impl App {
                 None=>{},
             }
         }
-        if self.pads.as_ref().is_some_and(|pads|pads.failed()) {
-            self.pads=None;self.notice=Some("Controllers are not available on this system".into());
-        }
         if self.audio.as_ref().is_some_and(|audio|audio.failed()) {
             self.audio_route.output(None);self.audio=None;self.audio_error=Some("Audio output stopped. Check the selected system output and retry.".into());
         }
@@ -575,17 +558,10 @@ impl App {
                         // Files the computer offers while we stream arrive through a second, quiet connection.
                         self.files.background(&c.id, &c.name, self.session_account.clone(), files::Source::Saved(c.clone()));
                         self.computer = Some(c);
-                        self.pair_link.clear();
                     }
                 }
                 Event::Status(s) => { self.status=s; }
-                Event::Caps(caps) => {
-                    // Controllers run only in a friend session whose grant has them.
-                    if self.guest_session && self.pads.is_none() && caps.iter().any(|c|c=="pad") {
-                        if let Some(tx)=self.command.clone() { self.pads=Some(pad::Pads::start(tx)); }
-                    }
-                }
-                Event::Rumble{id,lo,hi} => { if let Some(pads)=&self.pads { pads.rumble(id,lo,hi); } }
+                Event::Caps(_) => {}
                 Event::Notice(text) => self.notice=Some(text),
                 Event::Audio{packet,received_at} => {
                     // A covered window may resume with a few old events queued.
@@ -640,10 +616,11 @@ impl App {
                     }
                 }
                 Event::Cursor { x, y, visible } => self.cursor = (x, y, visible),
+                Event::PadSupport(ok) => self.pad_unsupported = !ok,
+                Event::Rumble(levels) => for (id, (lo, hi)) in levels.into_iter().enumerate() { self.pads.rumble(id as u8, lo, hi); },
                 Event::Ended(s) => {
                     self.guest_error=self.guest_session && s!="Disconnected";
                     self.guest_session=false;
-                    self.pads=None;
                     self.files.end_background();
                     self.connection_error=if s=="Disconnected" {None}else{Some(s.clone())};
                     self.clipboard=None;
@@ -835,6 +812,15 @@ impl eframe::App for App {
                 self.stream_menu_open = false;
             }
         }
+        // Controllers are read only while a stream is showing and this window has focus.
+        let pads_on = self.command.is_some() && self.texture.is_some() && self.focused;
+        self.pads.set_active(pads_on, { let ctx = ctx.clone(); move || ctx.request_repaint() });
+        if self.pad_unsupported && self.notice.is_none() && self.pads.connected() > 0 {
+            self.notice = Some("This computer has no virtual gamepad, so your controller is not passed. See Hosting on that computer.".into());
+        }
+        for message in self.pads.take() {
+            if pads_on || message["t"] == "pad.off" { self.send(Command::Input(message)); }
+        }
         if self.command.is_some() {
             if self.awake.is_none() && !self.awake_tried {
                 self.awake_tried = true;
@@ -896,7 +882,7 @@ impl eframe::App for App {
         }
         self.account.session_open = self.command.is_some();
         if signed_out && self.guest_session {
-            self.pads=None;self.clipboard=None;self.capture(ctx,false);self.send(Command::Stop);
+            self.clipboard=None;self.capture(ctx,false);self.send(Command::Stop);
         }
         if self.command.is_none() {
             if let Some(grant)=self.account.guest_grant.take() {
@@ -1061,8 +1047,7 @@ impl eframe::App for App {
                         ui.colored_label(design::BAD,friendly.unwrap_or(&error));
                         if !self.guest_error && ui.small_button("Retry").clicked() {
                             self.connection_error=None;
-                            if !self.pair_link.trim().is_empty() {self.start(ctx,false);}
-                            else if self.computer.is_some() {self.start(ctx,true);}
+                            if self.computer.is_some() {self.start(ctx);}
                         }
                         if ui.small_button("Copy error").clicked(){ui.ctx().copy_text(error);}
                         if ui.small_button("Dismiss").clicked(){self.connection_error=None;}
@@ -1170,14 +1155,9 @@ impl eframe::App for App {
                                 let preview = self.account.preview(&computer.id).cloned();
                                 let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: preview.as_ref(), connect: Some(true), menu: Some(&mut menu) });
                                 if forget { self.account.forget_computer(); }
-                                if connect { self.start(ctx, true); }
-                                ui.add_space(8.);
-                                egui::CollapsingHeader::new("Add computer")
-                                    .show(ui, |ui| self.pairing_ui(ui, ctx));
-                            } else if self.account.user.is_some() {
-                                egui::CollapsingHeader::new("Add computer").show(ui,|ui|self.pairing_ui(ui,ctx));
-                            } else {
-                                self.pairing_ui(ui, ctx);
+                                if connect { self.start(ctx); }
+                            } else if self.account.user.is_none() {
+                                ui.label(egui::RichText::new("Sign in to see your computers").color(design::MUTED));
                             }
                         });
                         #[cfg(feature = "ui-review")]
@@ -1199,7 +1179,7 @@ impl eframe::App for App {
         #[cfg(feature = "ui-review")]
         if let Some(path) = std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO") {
             self.review_frames += 1;
-            if self.review_frames >= 12 && !self.review_shot && (self.files.review_ready() || self.review_frames > 3000) {
+            if self.review_frames >= if std::env::var_os("SECPAR_REVIEW_STREAM").is_some() {150} else {12} && !self.review_shot && (self.files.review_ready() || self.review_frames > 3000) {
                 self.review_shot = true;
                 ctx.send_viewport_cmd(ViewportCommand::Screenshot(Default::default()));
             }

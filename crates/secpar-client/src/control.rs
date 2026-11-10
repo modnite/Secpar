@@ -1,4 +1,5 @@
 use crate::{
+    connlog,
     pairing::Pairing,
     route::{self, Attempt, Timing},
 };
@@ -21,7 +22,7 @@ use tokio_rustls::rustls::{
 };
 use tokio_tungstenite::{
     tungstenite::{protocol::WebSocketConfig, Message},
-    Connector, MaybeTlsStream, WebSocketStream,
+    MaybeTlsStream, WebSocketStream,
 };
 
 pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -149,8 +150,8 @@ impl ServerCertVerifier for Pinned {
 async fn open(url: &str, pin: Option<[u8; 32]>) -> Result<Socket, String> {
     let t = Timing::default();
     match pin {
-        Some(_) => open_with(url, pin, t.direct_tcp, t.direct_open).await,
-        None => open_with(url, pin, t.relay_open, t.relay_open).await,
+        Some(_) => open_with(url, pin, t.direct_tcp, t.direct_open, None).await,
+        None => open_with(url, pin, t.relay_open, t.relay_open, None).await,
     }
 }
 
@@ -198,21 +199,49 @@ async fn connect_tcp(url: &url::Url, port: u16, limit: Duration) -> Result<TcpSt
     won.map(|(_, s)| s)
 }
 
+/// Names a route in the connection log: its kind and last address part, never a URL.
+#[derive(Clone)]
+struct Probe {
+    log: connlog::Conn,
+    route: String,
+}
+impl Probe {
+    fn step(&self, phase: &str, outcome: &str, started: std::time::Instant) {
+        self.log.step(phase, &format!("{} {outcome}", self.route), started);
+    }
+}
+/// A short word for why a step failed, safe for the log.
+fn why(error: &str) -> &'static str {
+    let e = error.to_ascii_lowercase();
+    if e.contains("timed out") {
+        "timeout"
+    } else if e.contains("does not match") || e.contains("certificate") {
+        "pin_mismatch"
+    } else if e.contains("closed") {
+        "closed"
+    } else if e.contains("secure connection") {
+        "failed"
+    } else {
+        "error"
+    }
+}
+
 /// TCP, TLS and the WebSocket upgrade. `tcp` limits the first, `total` all three.
-async fn open_with(url: &str, pin: Option<[u8; 32]>, tcp: Duration, total: Duration) -> Result<Socket, String> {
+async fn open_with(url: &str, pin: Option<[u8; 32]>, tcp: Duration, total: Duration, probe: Option<&Probe>) -> Result<Socket, String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let connector = pin.map(|fingerprint| {
+    let tls_config = pin.map(|fingerprint| {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let cfg = rustls::ClientConfig::builder_with_provider(provider.clone())
-            .with_safe_default_protocol_versions()
-            .expect("TLS versions")
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(Pinned {
-                fingerprint,
-                provider,
-            }))
-            .with_no_client_auth();
-        Connector::Rustls(Arc::new(cfg))
+        Arc::new(
+            rustls::ClientConfig::builder_with_provider(provider.clone())
+                .with_safe_default_protocol_versions()
+                .expect("TLS versions")
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(Pinned {
+                    fingerprint,
+                    provider,
+                }))
+                .with_no_client_auth(),
+        )
     });
     let config = WebSocketConfig::default()
         .max_message_size(Some(1024 * 1024))
@@ -220,12 +249,58 @@ async fn open_with(url: &str, pin: Option<[u8; 32]>, tcp: Duration, total: Durat
     let parsed = url::Url::parse(url).map_err(|_| "Invalid address")?;
     let port = parsed.port_or_known_default().ok_or("Invalid address")?;
     let work = async {
-        let stream = connect_tcp(&parsed, port, tcp).await?;
+        let t0 = std::time::Instant::now();
+        let stream = match connect_tcp(&parsed, port, tcp).await {
+            Ok(s) => s,
+            Err(e) => {
+                if let Some(p) = probe {
+                    p.step("tcp", why(&e), t0);
+                }
+                return Err(e);
+            }
+        };
+        if let Some(p) = probe {
+            p.step("tcp", "ok", t0);
+        }
         let _ = stream.set_nodelay(true);
-        tokio_tungstenite::client_async_tls_with_config(url, stream, Some(config), connector)
-            .await
-            .map(|(s, _)| s)
-            .map_err(|_| "Could not establish a secure connection".to_string())
+        match tls_config {
+            // A pinned computer: TLS and the upgrade are separate steps, so the log can tell them apart.
+            Some(cfg) => {
+                let name = rustls::pki_types::ServerName::try_from(parsed.host_str().unwrap_or("host").trim_matches(|c| c == '[' || c == ']').to_string())
+                    .map_err(|_| "Invalid address".to_string())?;
+                let t1 = std::time::Instant::now();
+                let tls = match tokio_rustls::TlsConnector::from(cfg).connect(name, stream).await {
+                    Ok(tls) => tls,
+                    Err(e) => {
+                        let pinned = e.to_string().to_ascii_lowercase().contains("does not match");
+                        if let Some(p) = probe {
+                            p.step("tls", if pinned { "pin_mismatch" } else { "failed" }, t1);
+                        }
+                        // A different certificate than the one this computer was paired with: say so,
+                        // so the app can ask for a new credential instead of reporting "unreachable".
+                        return Err(if pinned { "Host certificate does not match the pairing code" } else { "Could not establish a secure connection" }.to_string());
+                    }
+                };
+                if let Some(p) = probe {
+                    p.step("tls", "ok", t1);
+                }
+                let t2 = std::time::Instant::now();
+                let ws = tokio_tungstenite::client_async_with_config(url, MaybeTlsStream::Rustls(tls), Some(config)).await;
+                if let Some(p) = probe {
+                    p.step("ws_upgrade", if ws.is_ok() { "ok" } else { "failed" }, t2);
+                }
+                ws.map(|(s, _)| s).map_err(|_| "Could not establish a secure connection".to_string())
+            }
+            // The relay: TLS with the usual roots, together with the upgrade.
+            None => {
+                let t1 = std::time::Instant::now();
+                let ws = tokio_tungstenite::client_async_tls_with_config(url, stream, Some(config), None).await;
+                if let Some(p) = probe {
+                    p.step("tls_ws", if ws.is_ok() { "ok" } else { "failed" }, t1);
+                }
+                ws.map(|(s, _)| s).map_err(|_| "Could not establish a secure connection".to_string())
+            }
+        }
     };
     tokio::time::timeout(total, work)
         .await
@@ -303,7 +378,9 @@ fn remote(v: &Value) -> Option<Relay> {
 }
 
 /// Which route worked last for a computer. The next connection tries it first, so the Files page,
-/// the previews and the stream that follow one another do not repeat the search.
+/// the previews and the stream that follow one another do not repeat the search. It is also kept in
+/// a small file (addresses only, no credentials), so the first connection after the app starts
+/// begins with the route that worked last time.
 #[derive(Clone, PartialEq, Debug)]
 enum Remembered {
     Direct(String),
@@ -311,11 +388,94 @@ enum Remembered {
 }
 fn remembered() -> &'static Mutex<HashMap<[u8; 32], Remembered>> {
     static LAST: OnceLock<Mutex<HashMap<[u8; 32], Remembered>>> = OnceLock::new();
-    LAST.get_or_init(Default::default)
+    LAST.get_or_init(|| Mutex::new(load_routes()))
+}
+fn routes_file() -> Option<std::path::PathBuf> {
+    // Only when an app switched the log on, so tests never touch a user's files.
+    connlog::enabled().then(|| connlog::state_dir().map(|d| d.join("routes.json"))).flatten()
+}
+fn hex32(b: &[u8; 32]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+fn unhex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+fn routes_from_json(text: &str) -> HashMap<[u8; 32], Remembered> {
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(text) else { return HashMap::new() };
+    map.into_iter()
+        .take(64)
+        .filter_map(|(k, v)| {
+            let fp = unhex32(&k)?;
+            let v = v.as_str()?;
+            Some((fp, if v == "relay" { Remembered::Relay } else { Remembered::Direct(v.parse::<std::net::IpAddr>().ok()?.to_string()) }))
+        })
+        .collect()
+}
+fn routes_to_json(map: &HashMap<[u8; 32], Remembered>) -> String {
+    let json: serde_json::Map<String, Value> = map
+        .iter()
+        .map(|(k, v)| (hex32(k), Value::String(match v { Remembered::Relay => "relay".into(), Remembered::Direct(h) => h.clone() })))
+        .collect();
+    Value::Object(json).to_string()
+}
+fn load_routes() -> HashMap<[u8; 32], Remembered> {
+    routes_file().and_then(|p| std::fs::read_to_string(p).ok()).map(|text| routes_from_json(&text)).unwrap_or_default()
+}
+fn save_routes(map: &HashMap<[u8; 32], Remembered>) {
+    let Some(path) = routes_file() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let temp = path.with_extension("tmp");
+    if std::fs::write(&temp, routes_to_json(map)).is_ok() {
+        let _ = std::fs::rename(&temp, &path);
+    }
 }
 fn remember(fingerprint: [u8; 32], route: Remembered) {
     if let Ok(mut map) = remembered().lock() {
-        map.insert(fingerprint, route);
+        if map.get(&fingerprint) != Some(&route) {
+            map.insert(fingerprint, route);
+            save_routes(&map);
+        }
+    }
+}
+
+/// How likely a LAN address is to be the one to use from here, lower first. The system is asked
+/// which of this computer's own addresses it would send from (no packet is sent). An address in
+/// the same /24 is on the same network. Other private addresses might be, public ones rarely,
+/// link-local ones almost never. The order the host gave is kept inside each class.
+fn locality(host: &str) -> u8 {
+    use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(ip)) => {
+            if ip.is_link_local() {
+                return 4;
+            }
+            let source = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+                .and_then(|s| s.connect((ip, 9)).map(|_| s))
+                .and_then(|s| s.local_addr());
+            match source {
+                Ok(std::net::SocketAddr::V4(mine)) if mine.ip().octets()[..3] == ip.octets()[..3] => 0,
+                Ok(_) if ip.is_private() => 1,
+                Ok(_) => 2,
+                Err(_) => 5,
+            }
+        }
+        Ok(IpAddr::V6(ip)) => {
+            if (ip.segments()[0] & 0xffc0) == 0xfe80 {
+                4
+            } else {
+                3
+            }
+        }
+        Err(_) => 2,
     }
 }
 
@@ -329,11 +489,15 @@ impl Route {
     fn label(&self) -> String {
         self.direct.clone().unwrap_or_else(|| "relay".into())
     }
-    async fn open(&self, pin: [u8; 32], t: &Timing) -> Result<Socket, String> {
+    async fn open(&self, pin: [u8; 32], t: &Timing, probe: &Probe) -> Result<Socket, String> {
         match self.direct {
-            Some(_) => open_with(&self.url, Some(pin), t.direct_tcp, t.direct_open).await,
-            None => open_with(&self.url, None, t.relay_open, t.relay_open).await,
+            Some(_) => open_with(&self.url, Some(pin), t.direct_tcp, t.direct_open, Some(probe)).await,
+            None => open_with(&self.url, None, t.relay_open, t.relay_open, Some(probe)).await,
         }
+    }
+    /// What the connection log calls this route: `lan4:.131`, `ll6:1` or `relay`.
+    fn kind(&self) -> String {
+        self.direct.as_deref().map_or_else(|| "relay".into(), connlog::addr)
     }
     /// A host that answers and says no is final on a LAN address. Through the relay it may only
     /// be that the computer is offline, so another route can still work.
@@ -355,6 +519,7 @@ fn schedule(
     mut relay_first: bool,
     t: &Timing,
 ) -> (Vec<Route>, Vec<Duration>) {
+    urls.sort_by_key(|(host, _)| locality(host));
     match remembered().lock().ok().and_then(|m| m.get(&fingerprint).cloned()) {
         Some(Remembered::Direct(host)) => {
             if let Some(at) = urls.iter().position(|(h, _)| *h == host) {
@@ -408,6 +573,7 @@ impl Connected {
     pub async fn pair_with(p: Pairing, device: &str, lan_first: bool, t: &Timing) -> Result<Self, String> {
         let (routes, starts) = schedule(direct_urls(&p.hosts, p.port), p.relay_url.clone(), p.fingerprint, !lan_first, t);
         let labels = routes.iter().map(Route::label).collect();
+        let log = connlog::Conn::new(p.pc_id.as_deref().unwrap_or("pairing"));
         // One route at a time may spend the one-time code. The others wait here and are dropped
         // if that one finishes.
         let turn = Arc::new(tokio::sync::Mutex::new(()));
@@ -415,20 +581,36 @@ impl Connected {
             let (route, turn) = (routes[i].clone(), turn.clone());
             let (pin, otp, device, expected) = (p.fingerprint, p.otp.clone(), device.to_string(), p.pc_id.clone());
             let name = p.name.clone();
+            let probe = Probe { log: log.clone(), route: route.kind() };
             async move {
-                let mut ws = match route.open(pin, t).await {
+                let started = std::time::Instant::now();
+                let mut ws = match route.open(pin, t, &probe).await {
                     Ok(s) => s,
-                    Err(e) => return Attempt::Retry(e),
+                    Err(e) => {
+                        probe.step("route_try", why(&e), started);
+                        return Attempt::Retry(e);
+                    }
                 };
                 let _turn = turn.lock().await;
+                let asked = std::time::Instant::now();
                 if send(&mut ws, json!({"t":"pair","otp":otp,"device":device,"pin":""})).await.is_err() {
+                    probe.step("route_try", "closed", started);
                     return Attempt::Retry("Connection closed".into());
                 }
                 let v = match tokio::time::timeout(t.answer, next(&mut ws)).await {
                     Ok(Ok(v)) => v,
-                    Ok(Err(e)) => return route.refusal(e),
-                    Err(_) => return route.refusal("Host did not answer pairing"),
+                    Ok(Err(e)) => {
+                        probe.step("pair", why(&e), asked);
+                        probe.step("route_try", why(&e), started);
+                        return route.refusal(e);
+                    }
+                    Err(_) => {
+                        probe.step("pair", "timeout", asked);
+                        probe.step("route_try", "timeout", started);
+                        return route.refusal("Host did not answer pairing");
+                    }
                 };
+                probe.step("pair", if v["t"] == "paired" { "ok" } else { "refused" }, asked);
                 if v["t"] != "paired" {
                     return Attempt::Fatal("Pairing was refused. Generate a fresh pairing link on the host.".into());
                 }
@@ -461,11 +643,13 @@ impl Connected {
                     return Attempt::Fatal("Host paired but did not provide remote reconnection credentials".into());
                 }
                 let name = v["pc"]["name"].as_str().unwrap_or(&name).to_string();
+                probe.step("route_try", "connected", started);
                 Attempt::Done(Paired { ws, id, name, token, remote })
             }
         })
         .await;
         let (i, paired) = won?;
+        log.note("welcome", &format!("{} paired", routes[i].kind()), log.began().elapsed().as_millis() as u64);
         let direct_host = routes[i].direct.clone();
         remember(p.fingerprint, direct_host.clone().map_or(Remembered::Relay, Remembered::Direct));
         let computer = Computer {
@@ -492,32 +676,57 @@ impl Connected {
             return Err("Computer is offline".into());
         }
         let labels = routes.iter().map(Route::label).collect();
+        let log = connlog::Conn::new(&computer.id);
+        log.note("schedule", &format!("routes={} first={}", routes.len(), routes[0].kind()), 0);
         // The device credential is not single use, but the host counts one connection per device.
         // Only one route talks to it at a time, and a route that loses never says hello.
         let turn = Arc::new(tokio::sync::Mutex::new(()));
         let (won, trace) = route::race(labels, starts, |i| {
             let (route, turn) = (routes[i].clone(), turn.clone());
             let (pin, device, token, id) = (computer.fingerprint, device.to_string(), computer.token.clone(), computer.id.clone());
+            let probe = Probe { log: log.clone(), route: route.kind() };
             async move {
-                let mut ws = match route.open(pin, t).await {
+                let started = std::time::Instant::now();
+                let mut ws = match route.open(pin, t, &probe).await {
                     Ok(s) => s,
-                    Err(e) => return Attempt::Retry(e),
+                    Err(e) => {
+                        probe.step("route_try", why(&e), started);
+                        return Attempt::Retry(e);
+                    }
                 };
+                let waited = std::time::Instant::now();
                 let _turn = turn.lock().await;
+                if waited.elapsed() > Duration::from_millis(5) {
+                    probe.step("turn_wait", "ok", waited);
+                }
+                let asked = std::time::Instant::now();
                 if send(&mut ws, json!({"t":"hello","v":1,"token":token,"device":device})).await.is_err() {
+                    probe.step("route_try", "closed", started);
                     return Attempt::Retry("Connection closed".into());
                 }
                 let v = match tokio::time::timeout(t.answer, next(&mut ws)).await {
                     Ok(Ok(v)) => v,
-                    Ok(Err(e)) => return Attempt::Retry(e),
-                    Err(_) => return Attempt::Retry("Host did not answer".into()),
+                    Ok(Err(e)) => {
+                        probe.step("hello", why(&e), asked);
+                        probe.step("route_try", why(&e), started);
+                        return Attempt::Retry(e);
+                    }
+                    Err(_) => {
+                        probe.step("hello", "timeout", asked);
+                        probe.step("route_try", "timeout", started);
+                        return Attempt::Retry("Host did not answer".into());
+                    }
                 };
+                probe.step("hello", if v["t"] == "welcome" { "welcome" } else { "refused" }, asked);
                 if v["t"] != "welcome" {
+                    probe.step("route_try", "refused", started);
                     return route.refusal("Access was refused or revoked. Pair this computer again.");
                 }
                 if v["pc"]["id"].as_str() != Some(&id) {
+                    probe.step("route_try", "identity", started);
                     return route.refusal("Host identity changed");
                 }
+                probe.step("route_try", "connected", started);
                 let caps: Vec<String> = v["caps"]
                     .as_array()
                     .map(|a| a.iter().filter_map(|c| c.as_str().map(Into::into)).collect())
@@ -526,7 +735,14 @@ impl Connected {
             }
         })
         .await;
-        let (i, (socket, caps)) = won?;
+        let (i, (socket, caps)) = match won {
+            Ok(w) => w,
+            Err(e) => {
+                log.note("welcome", "failed", log.began().elapsed().as_millis() as u64);
+                return Err(e);
+            }
+        };
+        log.note("welcome", &routes[i].kind(), log.began().elapsed().as_millis() as u64);
         let direct_host = routes[i].direct.clone();
         remember(computer.fingerprint, direct_host.clone().map_or(Remembered::Relay, Remembered::Direct));
         Ok(Self { socket, computer, direct_host, caps, route_log: trace })
@@ -594,7 +810,7 @@ impl Connected {
     pub async fn guest(relay: &str, pc: &str, grant: &str, fallback_name: &str) -> Result<Self, String> {
         let url = guest_url(relay, pc)?;
         let t = Timing::default();
-        let ws = open_with(&url, None, t.relay_open, t.relay_open)
+        let ws = open_with(&url, None, t.relay_open, t.relay_open, None)
             .await
             .map_err(|_| "Could not reach the computer through the relay".to_string())?;
         Self::guest_over(ws, pc, grant, fallback_name).await
@@ -755,9 +971,11 @@ mod tests {
         let mut c = Connected::reconnect(computer, "Desktop").await.unwrap();
         c.socket.close(None).await.unwrap();
         drop(c);
-        assert!(open(&format!("wss://{addr}/v1"), Some([0; 32]))
-            .await
-            .is_err());
+        assert_eq!(
+            open(&format!("wss://{addr}/v1"), Some([0; 32])).await.err().as_deref(),
+            Some("Host certificate does not match the pairing code"),
+            "a computer that was set up again says so, which the app answers with a new credential"
+        );
         server.await.unwrap();
     }
 
@@ -848,6 +1066,80 @@ mod tests {
     async fn guest_to_a_bad_relay_never_opens_a_socket() {
         let e = Connected::guest("http://127.0.0.1:9", "pc1", "g", "F").await.err().unwrap();
         assert_eq!(e, "The computer gave an invalid relay address");
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_rustls::{rustls::pki_types::PrivatePkcs8KeyDer, TlsAcceptor};
+
+    #[test]
+    fn the_address_on_this_network_goes_first() {
+        assert_eq!(locality("127.0.0.1"), 0, "same network as the address the system would send from");
+        assert!(locality("169.254.10.20") > locality("127.0.0.1"));
+        assert!(locality("fe80::1") > locality("2001:db8::1"));
+        let urls = direct_urls(&["169.254.10.20".into(), "fe80::1".into(), "127.0.0.1".into()], 48999);
+        let (routes, starts) = schedule(urls, None, [7; 32], false, &Timing::default());
+        let order: Vec<_> = routes.iter().map(Route::label).collect();
+        assert_eq!(order, ["127.0.0.1", "169.254.10.20", "fe80::1"], "link-local addresses wait their turn");
+        assert_eq!(starts[0], Duration::ZERO);
+    }
+
+    #[test]
+    fn remembered_routes_survive_a_restart_and_ignore_junk() {
+        let mut map = HashMap::new();
+        map.insert([1u8; 32], Remembered::Direct("192.168.100.5".into()));
+        map.insert([2u8; 32], Remembered::Relay);
+        let text = routes_to_json(&map);
+        assert_eq!(routes_from_json(&text), map);
+        assert!(!text.contains("token"), "addresses only");
+        assert!(routes_from_json("not json").is_empty());
+        let junk = format!("{{\"{}\":\"https://evil.example/\",\"zz\":\"relay\",\"{}\":7}}", hex32(&[3; 32]), hex32(&[4; 32]));
+        assert!(routes_from_json(&junk).is_empty(), "only an IP address or the word relay is taken back");
+    }
+
+    /// A real connection with the log on: every step is there, the token is not.
+    #[tokio::test]
+    async fn a_connection_leaves_a_readable_log_without_secrets() {
+        let _serial = crate::connlog::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let pin: [u8; 32] = ring::digest::digest(&ring::digest::SHA256, cert.der()).as_ref().try_into().unwrap();
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.der().clone()], PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into())
+            .unwrap();
+        let accept = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([9; 32]);
+        let server_token = token.clone();
+        tokio::spawn(async move {
+            let (s, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(accept.accept(s).await.unwrap()).await.unwrap();
+            let m = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            assert!(m.contains(&server_token));
+            ws.send(Message::text(json!({"t":"welcome","pc":{"id":"abcdef0123456789","name":"X"},"caps":["files"]}).to_string())).await.unwrap();
+            while ws.next().await.is_some() {}
+        });
+        let dir = std::env::temp_dir().join(format!("secpar-connlog-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::connlog::set_path(Some(dir.join("connect.log")));
+        let computer = Computer { id: "abcdef0123456789".into(), name: "X".into(), hosts: vec!["127.0.0.1".into()], port, fingerprint: pin, token: token.clone(), relay: None };
+        let c = Connected::reconnect(computer, "Desktop").await.unwrap();
+        crate::connlog::flush();
+        crate::connlog::set_path(None);
+        drop(c);
+        let text = std::fs::read_to_string(dir.join("connect.log")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        for phase in [" schedule ", " tcp ", " tls ", " ws_upgrade ", " hello ", " route_try ", " welcome "] {
+            assert!(text.contains(phase), "missing{phase}in\n{text}");
+        }
+        assert!(text.contains("lo4:.1 connected") && text.contains(" abcdef01 "), "{text}");
+        assert!(!text.contains(&token) && !text.contains("127.0.0.1") && !text.contains(&token[..12]), "{text}");
+        assert!(text.lines().all(|l| l.contains(" ms=") && l.contains(" at=")), "{text}");
     }
 }
 

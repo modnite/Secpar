@@ -15,6 +15,20 @@ impl ViGEm {
 
 struct X360(vigem_client::Xbox360Wired<Arc<vigem_client::Client>>);
 
+/// Whether virtual controllers can be created on this PC, and if not, why (shown in Hosting).
+/// Checked live, so installing the driver needs no restart.
+pub fn status() -> (bool, &'static str) {
+    status_for(ViGEm::connect().is_some())
+}
+
+fn status_for(driver_found: bool) -> (bool, &'static str) {
+    if driver_found {
+        (true, "Gamepad ready")
+    } else {
+        (false, "Gamepad unavailable: the ViGEmBus driver is not installed")
+    }
+}
+
 impl Bus for ViGEm {
     fn plug(&self, _id: u8, rumble: Rumble) -> Option<Box<dyn Target>> {
         let mut t = vigem_client::Xbox360Wired::new(self.0.clone(), vigem_client::TargetId::XBOX360_WIRED);
@@ -158,6 +172,14 @@ mod tests {
         assert_eq!(*states.lock().unwrap(),vec![Some(st(1)),Some(st(2)),Some(st(4))]);
         devices[0].off(0);
         assert_eq!(*states.lock().unwrap(),vec![None,Some(st(2)),Some(st(4))]);
+    }
+
+    #[test]
+    fn status_text_names_the_missing_driver() {
+        assert_eq!(status_for(true), (true, "Gamepad ready"));
+        let (ok, text) = status_for(false);
+        assert!(!ok && text.contains("ViGEmBus"));
+        assert_eq!(status().0, ViGEm::connect().is_some());
     }
 
     #[test]

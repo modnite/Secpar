@@ -56,6 +56,10 @@ pub fn explain(error: &str, name: &str) -> (String, bool) {
     if unreachable.iter().any(|k| lower.contains(k)) {
         return (format!("Can't reach {name}. Check that it is on, online and running Secpar."), false);
     }
+    // The computer shows another certificate than the one it was paired with: it was set up again.
+    if lower.contains("does not match the pairing code") {
+        return (format!("{name} was set up again and no longer accepts this device."), true);
+    }
     if lower.contains("pairing was refused") {
         return (format!("{name} did not accept the pairing. Open Secpar there and try again."), false);
     }
@@ -311,6 +315,8 @@ pub struct Panel {
     /// An account computer waiting for the account worker to hand over its credential.
     pending: Option<String>,
     pending_since: Option<Instant>,
+    /// When the person asked to open a computer, until its first folder listing is on screen.
+    asked_at: Option<Instant>,
     /// A refused saved credential to drop before asking the account again.
     stale: Option<(String, String)>,
     /// The account computer that already got one automatic new credential.
@@ -344,6 +350,7 @@ impl Panel {
             chosen: None,
             pending: None,
             pending_since: None,
+            asked_at: None,
             stale: None,
             renewed: None,
             name: String::new(),
@@ -502,6 +509,8 @@ impl Panel {
         let (note_tx, notices) = mpsc::unbounded_channel();
         let (event_tx, events) = mpsc::unbounded_channel();
         let (save, ctx) = (self.save_dir.clone(), self.ctx.clone());
+        // A preview may already hold an authenticated connection to this computer.
+        let borrow_key = owner.as_deref().and_then(|owner| crate::account::owned_key(owner, id).ok());
         std::thread::spawn(move || {
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
                 let _ = event_tx.send(Event::Failed("Could not start the file connection".into()));
@@ -512,7 +521,20 @@ impl Panel {
                 let device = crate::device_name();
                 let paired = matches!(source, Source::Pair(_));
                 let connected = match source {
-                    Source::Saved(computer) => Connected::reconnect(computer, &device).await,
+                    Source::Saved(computer) => {
+                        let asked = Instant::now();
+                        let borrowed = match &borrow_key {
+                            Some(key) => crate::previews::handoffs().take(key, crate::previews::HANDOFF_WAIT).await.filter(|c| c.computer.token == computer.token && c.computer.fingerprint == computer.fingerprint),
+                            None => None,
+                        };
+                        match borrowed {
+                            Some(connected) => {
+                                secpar_client::connlog::note(&secpar_client::connlog::short_label(&connected.computer.id), "handoff", "preview", asked.elapsed().as_millis() as u64);
+                                Ok(connected)
+                            }
+                            None => Connected::reconnect(computer, &device).await,
+                        }
+                    }
                     Source::Pair(pairing) => Connected::pair_lan_first(pairing, &device).await,
                 };
                 match connected {
@@ -578,6 +600,7 @@ impl Panel {
     pub fn fail(&mut self, why: &str) {
         if self.pending.take().is_some() {
             self.pending_since = None;
+            self.asked_at = None;
             self.view.conn = Conn::Closed(why.to_string());
         }
     }
@@ -617,6 +640,11 @@ impl Panel {
             }
             while let Ok(notice) = session.notices.try_recv() {
                 let lost = matches!(&notice, Notice::Closed(why) if why != "Disconnected");
+                if let (Notice::Listed { .. }, Some(asked)) = (&notice, self.asked_at.take()) {
+                    // Everything between the click and the first folder on screen, in one line.
+                    let label = self.chosen.as_deref().unwrap_or("");
+                    secpar_client::connlog::note(&secpar_client::connlog::short_label(label), "first_reply", "click_to_listing", asked.elapsed().as_millis() as u64);
+                }
                 let applied = self.view.apply(notice);
                 if let (true, Conn::Closed(why)) = (lost, &mut self.view.conn) {
                     *why = explain(why, &self.name).0;
@@ -636,6 +664,7 @@ impl Panel {
         self.run_script();
         if ended {
             self.session = None;
+            self.asked_at = None;
         }
         if let Some((owner, id)) = renew {
             let name = self.name.clone();
@@ -757,11 +786,13 @@ impl Panel {
         self.renewed = None;
         match pick.saved {
             Some(computer) => {
+                self.asked_at = Some(Instant::now());
                 self.open(&pick.id, &pick.name, None, Source::Saved(computer));
                 None
             }
             None => {
                 self.wait_for(&pick.id, &pick.name);
+                self.asked_at = Some(Instant::now());
                 Some(Action::Owned(pick.id))
             }
         }

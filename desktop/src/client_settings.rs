@@ -75,15 +75,14 @@ impl Settings {
                 egui::ComboBox::from_id_salt("client-bitrate").width(c[0].available_width()).selected_text(format!("{} Mbps",self.kbps/1000)).show_ui(&mut c[0],|ui| {for kbps in [5000,10000,20000,30000,50000,80000] {ui.selectable_value(&mut self.kbps,kbps,format!("{} Mbps",kbps/1000));}});
                 c[1].label("Decoder");
                 let hardware=video::hardware_available(c[1].ctx());
-                let selected=match self.decoder {video::Preference::Automatic=>"Automatic",video::Preference::Software=>"Software",video::Preference::Vaapi=>"VA-API"};
+                let selected=self.decoder.label();
                 egui::ComboBox::from_id_salt("client-decoder").width(c[1].available_width()).selected_text(selected).show_ui(&mut c[1],|ui| {
-                    ui.selectable_value(&mut self.decoder,video::Preference::Automatic,"Automatic");
-                    if hardware==Some(true) {ui.selectable_value(&mut self.decoder,video::Preference::Vaapi,"VA-API");}
-                    ui.selectable_value(&mut self.decoder,video::Preference::Software,"Software");
+                    ui.selectable_value(&mut self.decoder,video::Preference::Automatic,video::Preference::Automatic.label());
+                    if hardware==Some(true) {ui.selectable_value(&mut self.decoder,video::Preference::HARDWARE,video::Preference::HARDWARE.label());}
+                    ui.selectable_value(&mut self.decoder,video::Preference::Software,video::Preference::Software.label());
                 }).response.on_hover_text(match hardware {
-                    Some(true)=>"H.264 VA-API decode verified on this computer",
-                    Some(false) if cfg!(target_os="linux")=>"No working VA-API H.264 decoder detected",
-                    Some(false)=>"Hardware decoding is currently implemented for Linux only",
+                    Some(true)=>"H.264 hardware decode verified on this computer",
+                    Some(false)=>"No working hardware H.264 decoder detected",
                     None=>"Checking hardware decoding",
                 });
             });

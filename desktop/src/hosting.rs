@@ -542,6 +542,12 @@ impl Panel {
                     self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
                     self.setting_toggle(ui,&config,"allow_clip","Allow clipboard sharing","Allow clipboard exchange with paired devices.");
                     self.setting_toggle(ui,&config,"friends","Let friends connect","Friends you added still need your approval unless you set them to connect at any time.");
+                    if let Some(ok) = self.settings["pad"]["ok"].as_bool() {
+                        ui.horizontal(|ui| {
+                            design::dot(ui, if ok { design::ACCENT } else { design::MUTED });
+                            ui.label(egui::RichText::new(self.settings["pad"]["text"].as_str().unwrap_or("")).size(12.).color(design::MUTED));
+                        });
+                    }
                     self.friends_ui(ui, config["friends"].as_bool().unwrap_or(true));
                 });
                 design::surface().inner_margin(10).show(&mut columns[1], |ui| {

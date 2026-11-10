@@ -73,6 +73,7 @@ The host releases every key and button that is still held when a connection clos
 - Without a working controller driver the host answers `pad` with `error{code:"unsupported", of:"pad"}`.
 - `{"t":"pad.off","id":0}` removes it immediately.
 - Host → client: `{"t":"rumble","id":0,"lo":0-255,"hi":0-255}`.
+- Which clients send `pad` from physical controllers, and what each host needs: `docs/gamepad.md`.
 
 ## Media (cap `media`)
 ```json

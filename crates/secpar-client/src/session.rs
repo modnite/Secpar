@@ -42,8 +42,10 @@ pub enum Event {
     AudioUnavailable(String),
     StreamInfo {width:u32,height:u32,fps:u32},
     Stats {rtt_ms:Option<u16>,mbps:f32,received_fps:f32},
-    /// Host rumble for the controller with this id (0 to 3). Both motors at 0 means stop.
-    Rumble {id:u8,lo:u8,hi:u8},
+    /// Latest rumble (large, small motor) the host asked for, per controller id 0..=3.
+    Rumble([(u8,u8);4]),
+    /// Whether the host can create virtual controllers. Sent once, only when the host listed its abilities.
+    PadSupport(bool),
     /// A refusal that leaves the session open, such as a message the grant does not allow.
     Notice(String),
     /// What the host allows this connection to do, from a friend's `welcome`.
@@ -269,7 +271,7 @@ pub async fn run(
 ) -> Result<(), String> {
     let mut events=UiEvents::new(events);
     events.emit(Event::Paired(conn.computer.clone()))?;
-    if !conn.caps.is_empty(){events.emit(Event::Caps(conn.caps.clone()))?;}
+    if !conn.caps.is_empty(){events.emit(Event::Caps(conn.caps.clone()))?;events.emit(Event::PadSupport(conn.caps.iter().any(|c|c=="pad")))?;}
     events.emit(Event::Status("Finding a stream route".into()))?;
     let direct = conn.direct_host.clone();
     let discover_public = options.discover_public;
@@ -319,6 +321,7 @@ pub async fn run(
     let mut turn_started = false;
     let (turn_tx, mut turn_rx) = mpsc::channel::<Option<SocketAddrV4>>(1);
     let mut inputs = std::collections::VecDeque::new();
+    let mut rumble=[(0u8,0u8);4];
     let mut input_id = 0u64;
     let (mut stats_at,mut stats_bytes,mut stats_frames,mut rtt_known)=(Instant::now(),0u64,0u32,false);
     let result:Result<(),String>=async {loop{
@@ -368,6 +371,10 @@ pub async fn run(
                     }
                     "stream.cand"=>if let Some(c)=v["c"].as_str().and_then(|s|s.parse::<SocketAddr>().ok()).filter(SocketAddr::is_ipv4){if peer.targets.len()<32 && !peer.targets.contains(&c){peer.targets.push(c);peer.permit();}},
                     "stream.displays"=>events.emit(Event::Displays(v))?,
+                    "rumble"=>if let Some(slot)=v["id"].as_u64().and_then(|i|rumble.get_mut(i as usize)){
+                        *slot=(v["lo"].as_u64().unwrap_or(0).min(255) as u8,v["hi"].as_u64().unwrap_or(0).min(255) as u8);
+                        events.emit(Event::Rumble(rumble))?;
+                    },
                     "cursor.shape"=>{
                         if let(Some(encoded),Some(hx),Some(hy))=(v["png"].as_str().filter(|s|s.len()<=350_000),v["hx"].as_i64().and_then(|n|i32::try_from(n).ok()),v["hy"].as_i64().and_then(|n|i32::try_from(n).ok())) {
                             if let Ok(png)=base64::engine::general_purpose::STANDARD.decode(encoded){events.emit(Event::CursorShape{png,hotspot:[hx,hy]})?;}
@@ -375,10 +382,6 @@ pub async fn run(
                     },
                     "clip"=>if clipboard_enabled && v["mime"]=="text/plain" {
                         if let Some(text)=v["data"].as_str().filter(|s|s.len()<=1_000_000){events.emit(Event::Clipboard(text.into()))?;}
-                    },
-                    "rumble"=>if let Some(id)=v["id"].as_u64().filter(|id|*id<4){
-                        let motor=|k:&str|v[k].as_u64().unwrap_or(0).min(255) as u8;
-                        events.emit(Event::Rumble{id:id as u8,lo:motor("lo"),hi:motor("hi")})?;
                     },
                     "error" if soft_error(&v).is_some()=>events.emit(Event::Notice(soft_error(&v).unwrap_or_default().into()))?,
                     "error" if v["code"]=="audio_unavailable"=>events.emit(Event::AudioUnavailable(v["msg"].as_str().unwrap_or("Host audio is unavailable").into()))?,

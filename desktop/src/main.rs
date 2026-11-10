@@ -34,5 +34,7 @@ fn main() -> eframe::Result {
     {
         let _ = pc_remote_host::win::sys::register_send_verb();
     }
+    // Connection timing log, so a slow connection can be read off a file.
+    secpar_client::connlog::init_default();
     secpar_desktop::run()
 }

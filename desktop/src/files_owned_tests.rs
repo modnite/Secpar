@@ -168,7 +168,7 @@ async fn ask_worker_pin(pin: &[u8; 32], vault: Option<Computer>) -> (account::Ow
     let (api, requests) = account_worker(pin).await;
     let (events, mut output) = tokio::sync::mpsc::channel(8);
     let mut pending = None;
-    let result = account::connect_owned_for_test(&api, OWNER, ACCOUNT_ID, vault, &mut pending, &events).await;
+    let result = account::connect_owned_for_test(&api, OWNER, ACCOUNT_ID, &[], vault, &mut pending, &events).await;
     result.expect("the worker accepts the request");
     drop(events);
     let first = output.recv().await;
@@ -448,4 +448,47 @@ fn real_host_through_the_account_path() {
     assert_eq!(a, b);
     p.close();
     drop(preview);
+}
+
+/// The preview keeps an authenticated connection. The Files page takes it over instead of
+/// connecting again: the host sees one connection, and the first listing needs no handshake.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_previews_connection_is_reused_instead_of_opening_a_second_one() {
+    const OWNER2: &str = "00000000-0000-4000-8000-0000000000b2";
+    const ID2: &str = "11111111-aaaa-4aaa-8aaa-bbbbbbbbbbbb";
+    let host = start_host(Mode::Normal).await;
+    let preview = Connected::reconnect(saved(&host, TOKEN), "Desktop").await.unwrap();
+    let key = account::owned_key(OWNER2, ID2).unwrap();
+    let mut offer = crate::previews::handoffs().offer(&key);
+    tokio::spawn(async move {
+        if let Some(reply) = offer.requests.recv().await {
+            let _ = reply.send(preview);
+        }
+    });
+    let log = std::env::temp_dir().join(format!("secpar-files-handoff-{}", std::process::id()));
+    secpar_client::connlog::set_path(Some(log.join("connect.log")));
+    let cached = OwnedConnection::Cached { owner: OWNER2.into(), id: ID2.into(), computer: saved(&host, TOKEN) };
+    tokio::task::spawn_blocking(move || {
+        let mut p = panel();
+        p.wait_for(ID2, "Office");
+        assert!(p.receive(cached, Some(OWNER2), |_| "Office".into()));
+        run_until(&mut p, |p| p.view.conn == Conn::Online && !p.view.loading);
+        assert_eq!(p.view.entries[0].name, "C:");
+        p.close();
+    })
+    .await
+    .unwrap();
+    secpar_client::connlog::flush();
+    secpar_client::connlog::set_path(None);
+    assert_eq!(host.connections.load(Ordering::SeqCst), 1, "no second connection was made");
+    let text = std::fs::read_to_string(log.join("connect.log")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&log);
+    assert!(text.contains(" handoff preview ") && text.contains(" first_reply fs.list "), "{text}");
+}
+
+#[test]
+fn a_computer_set_up_again_is_renewed_through_the_account_not_reported_unreachable() {
+    let (text, renew) = explain("Host certificate does not match the pairing code", "Office");
+    assert!(renew, "a new credential is requested once");
+    assert!(text.contains("set up again"), "{text}");
 }
