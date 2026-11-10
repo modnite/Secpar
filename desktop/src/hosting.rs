@@ -140,7 +140,14 @@ impl Panel {
                 friends: Vec::new(),
                 locked: false,
             }),
-            friend_rows: Vec::new(),
+            friend_rows: if sample {
+                vec![
+                    FriendRow { id: "a".into(), handle: "Jamie".into(), connect: "always".into(), keyboard: true, mouse: true },
+                    FriendRow { id: "b".into(), handle: "Riley".into(), connect: "ask".into(), keyboard: true, mouse: false },
+                ]
+            } else {
+                Vec::new()
+            },
             settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"friends":true,"anywhere":false},"displays":[],"pad":{"ok":true,"text":"Gamepad ready"}}),
             error: String::new(),
             busy: false,
@@ -460,6 +467,7 @@ impl Panel {
         if !on || self.friend_rows.is_empty() {
             return;
         }
+        ui.add_space(6.);
         ui.label(egui::RichText::new("Friends").strong());
         let mut change = None;
         for f in &self.friend_rows {

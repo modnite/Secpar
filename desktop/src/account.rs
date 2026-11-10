@@ -369,6 +369,18 @@ impl Panel {
                     people: vec![],
                     requests: vec![],
                     busy: false,
+                    friend_computers: if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("owned")) {
+                        vec![
+                            FriendComputer { id: "00000000-0000-4000-8000-000000000020".into(), name: "Jamie's desktop".into(), platform: "windows".into(), owner_handle: "Jamie".into(), connect: "always".into(), keyboard: true, mouse: true },
+                            FriendComputer { id: "00000000-0000-4000-8000-000000000021".into(), name: "Riley's laptop".into(), platform: "linux".into(), owner_handle: "Riley".into(), connect: "ask".into(), keyboard: false, mouse: false },
+                        ]
+                    } else {
+                        Vec::new()
+                    },
+                    guest_choice: None,
+                    guest_waiting: None,
+                    session_open: false,
+                    guest_grant: None,
                     tx,
                     events: rx,
                 };
