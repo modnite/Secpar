@@ -17,8 +17,10 @@ struct Encoder {
     NV_ENCODE_API_FUNCTION_LIST api{};
     void* session = nullptr;
     ID3D11Device* device = nullptr;
-    ID3D11Texture2D* texture = nullptr;
-    NV_ENC_REGISTERED_PTR registered = nullptr;
+    struct Input { ID3D11Texture2D* texture; NV_ENC_REGISTERED_PTR registered; };
+    // Conversion cycles through a three-texture ring. Register each resource once.
+    // Eight slots also bound resources retained across converter reinitialization.
+    std::vector<Input> inputs;
     NV_ENC_INPUT_PTR mapped = nullptr;
     NV_ENC_OUTPUT_PTR output = nullptr;
     HANDLE event = nullptr;
@@ -31,7 +33,7 @@ struct Encoder {
     ~Encoder() {
         if (session) {
             if (mapped) api.nvEncUnmapInputResource(session, mapped);
-            if (registered) api.nvEncUnregisterResource(session, registered);
+            for (const auto& input : inputs) api.nvEncUnregisterResource(session, input.registered);
             if (output) api.nvEncDestroyBitstreamBuffer(session, output);
             if (event_registered) {
                 NV_ENC_EVENT_PARAMS p{}; p.version = NV_ENC_EVENT_PARAMS_VER; p.completionEvent = event;
@@ -39,7 +41,7 @@ struct Encoder {
             }
             api.nvEncDestroyEncoder(session);
         }
-        if (texture) texture->Release();
+        for (const auto& input : inputs) input.texture->Release();
         if (device) device->Release();
         if (event) CloseHandle(event);
         if (library) FreeLibrary(library);
@@ -112,15 +114,27 @@ struct Encoder {
     }
 
     NVENCSTATUS encode(ID3D11Texture2D* tex, uint64_t timestamp, bool idr) {
-        if (tex != texture) {
-            if (registered) { api.nvEncUnregisterResource(session, registered); registered = nullptr; }
-            if (texture) { texture->Release(); texture = nullptr; }
+        auto it = std::find_if(inputs.begin(), inputs.end(), [tex](const Input& input) { return input.texture == tex; });
+        NV_ENC_REGISTERED_PTR registered = nullptr;
+        if (it != inputs.end()) {
+            registered = it->registered;
+        } else {
             NV_ENC_REGISTER_RESOURCE p{}; p.version = NV_ENC_REGISTER_RESOURCE_VER;
             p.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
             p.width = init.encodeWidth; p.height = init.encodeHeight;
             p.resourceToRegister = tex; p.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12; p.bufferUsage = NV_ENC_INPUT_IMAGE;
             auto status = api.nvEncRegisterResource(session, &p); if (status != NV_ENC_SUCCESS) return status;
-            registered = p.registeredResource; texture = tex; texture->AddRef();
+            registered = p.registeredResource;
+            try { inputs.push_back({tex, registered}); }
+            catch (...) { api.nvEncUnregisterResource(session, registered); return NV_ENC_ERR_OUT_OF_MEMORY; }
+            tex->AddRef();
+            if (inputs.size() > 8) {
+                // Only one frame is in flight, and its previous mapping is already
+                // complete before this call. Evict the oldest unused resource.
+                api.nvEncUnregisterResource(session, inputs.front().registered);
+                inputs.front().texture->Release();
+                inputs.erase(inputs.begin());
+            }
         }
         NV_ENC_MAP_INPUT_RESOURCE mp{}; mp.version = NV_ENC_MAP_INPUT_RESOURCE_VER; mp.registeredResource = registered;
         auto status = api.nvEncMapInputResource(session, &mp); if (status != NV_ENC_SUCCESS) return status;
