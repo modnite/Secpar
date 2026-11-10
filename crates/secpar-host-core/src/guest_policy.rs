@@ -25,6 +25,17 @@ pub enum Connect {
 pub struct Policy {
     pub input: Input,
     pub connect: Connect,
+    /// Set when the owner chose keyboard and mouse separately. Absent means follow `input`.
+    pub keyboard: Option<bool>,
+    pub mouse: Option<bool>,
+}
+impl Policy {
+    pub fn allows_keyboard(&self) -> bool {
+        self.keyboard.unwrap_or(self.input == Input::Full)
+    }
+    pub fn allows_mouse(&self) -> bool {
+        self.mouse.unwrap_or(self.input == Input::Full)
+    }
 }
 #[derive(Deserialize)]
 struct Row {
@@ -98,7 +109,8 @@ pub struct Gate(Arc<GateState>);
 struct GateState {
     permissions: BTreeSet<String>,
     open: AtomicBool,
-    input_off: AtomicBool,
+    keyboard_off: AtomicBool,
+    mouse_off: AtomicBool,
     closed: tokio::sync::Notify,
     reason: std::sync::Mutex<&'static str>,
 }
@@ -110,12 +122,13 @@ impl PartialEq for Gate {
 impl Eq for Gate {}
 impl Gate {
     fn new(permissions: BTreeSet<String>) -> Self {
-        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), input_off: AtomicBool::new(false), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
+        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), keyboard_off: AtomicBool::new(false), mouse_off: AtomicBool::new(false), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
     }
     pub fn has(&self, permission: &str) -> bool {
         self.0.open.load(Ordering::SeqCst)
             && self.0.permissions.contains(permission)
-            && !(self.0.input_off.load(Ordering::SeqCst) && matches!(permission, "keyboard" | "mouse"))
+            && !(self.0.keyboard_off.load(Ordering::SeqCst) && permission == "keyboard")
+            && !(self.0.mouse_off.load(Ordering::SeqCst) && permission == "mouse")
     }
     pub fn view(&self) -> bool {
         self.has("view")
@@ -163,7 +176,14 @@ impl Gate {
     }
     /// The owner lowered the friend to view only. Keyboard and mouse stop, the rest stays.
     pub fn strip_input(&self) {
-        self.0.input_off.store(true, Ordering::SeqCst);
+        self.strip_keyboard();
+        self.strip_mouse();
+    }
+    pub fn strip_keyboard(&self) {
+        self.0.keyboard_off.store(true, Ordering::SeqCst);
+    }
+    pub fn strip_mouse(&self) {
+        self.0.mouse_off.store(true, Ordering::SeqCst);
     }
 }
 /// `signed` is the permission set of the verified grant.
@@ -185,7 +205,11 @@ pub fn admit(
     }
     let allowed: BTreeSet<String> = signed
         .iter()
-        .filter(|p| policy.input == Input::Full || !matches!(p.as_str(), "keyboard" | "mouse"))
+        .filter(|p| match p.as_str() {
+            "keyboard" => policy.allows_keyboard(),
+            "mouse" => policy.allows_mouse(),
+            _ => true,
+        })
         .cloned()
         .collect();
     if allowed.is_empty() {
@@ -228,7 +252,7 @@ mod tests {
     #[test]
     fn missing_fields_mean_view_only_and_ask() {
         let r = Roster::parse(&json!([{"id":"x"}])).unwrap();
-        assert_eq!(r.policy("x"), Some(Policy { input: Input::View, connect: Connect::Ask }));
+        assert_eq!(r.policy("x"), Some(Policy { input: Input::View, connect: Connect::Ask, ..Default::default() }));
         assert_eq!(r.policy("y"), None);
     }
     #[test]
@@ -253,6 +277,26 @@ mod tests {
         assert!(matches!(&got, Admission::Allow(g) if g.keyboard() && g.mouse() && g.view()));
         let asked = admit(&roster(), &lease("dan", &["view", "keyboard", "mouse"], true), &signed, "dan").unwrap();
         assert!(matches!(asked, Admission::AskOwner(_)));
+    }
+    #[test]
+    fn keyboard_and_mouse_can_be_allowed_apart() {
+        let signed = set(&["view", "keyboard", "mouse"]);
+        let lease = lease("eve", &["view", "keyboard", "mouse"], true);
+        let keys_only = Roster::parse(&json!([{"id":"eve","input":"view","connect":"always","keyboard":true,"mouse":false}])).unwrap();
+        let got = admit(&keys_only, &lease, &signed, "eve").unwrap();
+        assert!(matches!(&got, Admission::Allow(g) if g.keyboard() && !g.mouse() && g.view()));
+        let mouse_only = Roster::parse(&json!([{"id":"eve","input":"view","connect":"ask","keyboard":false,"mouse":true}])).unwrap();
+        let got = admit(&mouse_only, &lease, &signed, "eve").unwrap();
+        assert!(matches!(&got, Admission::AskOwner(g) if !g.keyboard() && g.mouse()));
+        // Without the new fields the old single setting decides.
+        let old_full = Roster::parse(&json!([{"id":"eve","input":"full","connect":"ask"}])).unwrap();
+        assert!(matches!(admit(&old_full, &lease, &signed, "eve").unwrap(), Admission::AskOwner(g) if g.keyboard() && g.mouse()));
+    }
+    #[test]
+    fn lowering_one_of_the_two_keeps_the_other() {
+        let gate = Gate::new(set(&["view", "keyboard", "mouse"]));
+        gate.strip_mouse();
+        assert!(gate.keyboard() && !gate.mouse() && gate.view());
     }
     #[test]
     fn input_only_grant_for_a_view_only_friend_is_refused() {

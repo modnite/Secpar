@@ -1,5 +1,6 @@
 import { importX509, exportJWK, calculateJwkThumbprint, jwtVerify, type JWTPayload } from "jose";
 import { ownerRoutes } from "./ownership";
+import { EFFECTIVE, flags, friendSettings, saveSettings } from "./settings";
 
 interface Environment { DB: D1Database; PUBLIC_ORIGIN: string; GRANT_PRIVATE_JWK: string }
 interface Owner { id: string }
@@ -61,8 +62,15 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
     }
     if(path==="/v1/host/friends" && method==="GET") {
       await api.limit(request,env,"host_friends",120);
-      const rows=await q(env,"SELECT x.id,x.handle,COALESCE(s.input,'view') AS input,COALESCE(s.connect,'ask') AS connect FROM friends f JOIN accounts x ON x.id=CASE WHEN f.a=? THEN f.b ELSE f.a END LEFT JOIN friend_settings s ON s.owner=? AND s.friend=x.id WHERE (f.a=? OR f.b=?) AND f.state='accepted' AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?))",machine.owner,machine.owner,machine.owner,machine.owner,machine.owner,machine.owner).all();
-      return json(rows.results);
+      const rows=await q(env,"SELECT x.id,x.handle,COALESCE(s.input,'view') AS input,COALESCE(s.connect,'ask') AS connect,"+EFFECTIVE+" FROM friends f JOIN accounts x ON x.id=CASE WHEN f.a=? THEN f.b ELSE f.a END LEFT JOIN friend_settings s ON s.owner=? AND s.friend=x.id WHERE (f.a=? OR f.b=?) AND f.state='accepted' AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?))",machine.owner,machine.owner,machine.owner,machine.owner,machine.owner,machine.owner).all();
+      return json(flags(rows.results));
+    }
+    const setting=path.match(/^\/v1\/host\/friends\/([A-Za-z0-9_-]{1,64})\/settings$/);
+    if(setting && method==="PUT") {
+      await api.limit(request,env,"host_friend_settings",120);
+      if(!await friends(env,machine.owner,setting[1])) api.fail(404,"account_unavailable");
+      if(!await saveSettings(env,machine.owner,setting[1],await api.body(request))) api.fail(400,"invalid_value");
+      return json(await friendSettings(env,machine.owner,setting[1]));
     }
     const lease=path.match(/^\/v1\/host\/requests\/([a-f0-9-]{36})$/);
     if(lease && method==="GET") {

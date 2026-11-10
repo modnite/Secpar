@@ -82,8 +82,11 @@ impl GuestAdmission {
         };
         match admit(&roster, &lease, pass.grant.permissions(), &pass.guest) {
             Ok(fresh) => {
-                if !(fresh.gate().keyboard() && fresh.gate().mouse()) {
-                    pass.gate.strip_input();
+                if !fresh.gate().keyboard() {
+                    pass.gate.strip_keyboard();
+                }
+                if !fresh.gate().mouse() {
+                    pass.gate.strip_mouse();
                 }
                 Recheck::Good
             }

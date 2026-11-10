@@ -1,4 +1,5 @@
 import { hostRoutes } from "./hosts";
+import { EFFECTIVE, flags, friendSettings, saveSettings } from "./settings";
 import { passwordRoutes, accountPage } from "./passwords";
 import { assetRoute, escapeHtml, heading, renderPage } from "./ui";
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
@@ -201,15 +202,6 @@ async function friends(env: Env, a: string, b: string): Promise<boolean> {
       high,
     ).first())
   );
-}
-async function friendSettings(env: Env, owner: string, friend: string) {
-  const row = await q(
-    env,
-    "SELECT input,connect FROM friend_settings WHERE owner=? AND friend=?",
-    owner,
-    friend,
-  ).first<{ input: string; connect: string }>();
-  return { input: row?.input ?? "view", connect: row?.connect ?? "ask" };
 }
 async function signing(env: Env) {
   let jwk: JWK;
@@ -668,7 +660,7 @@ export async function handle(
     if (path === "/v1/friends" && method === "GET") {
       const rows = await q(
         env,
-        "SELECT x.id,x.handle,x.name,f.state,f.requester,COALESCE(s.input,'view') AS input,COALESCE(s.connect,'ask') AS connect FROM friends f JOIN accounts x ON x.id=CASE WHEN f.a=? THEN f.b ELSE f.a END LEFT JOIN friend_settings s ON s.owner=? AND s.friend=x.id WHERE (f.a=? OR f.b=?) AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?))",
+        "SELECT x.id,x.handle,x.name,f.state,f.requester,COALESCE(s.input,'view') AS input,COALESCE(s.connect,'ask') AS connect,"+EFFECTIVE+" FROM friends f JOIN accounts x ON x.id=CASE WHEN f.a=? THEN f.b ELSE f.a END LEFT JOIN friend_settings s ON s.owner=? AND s.friend=x.id WHERE (f.a=? OR f.b=?) AND NOT EXISTS(SELECT 1 FROM blocks z WHERE (z.owner=? AND z.blocked=x.id) OR (z.owner=x.id AND z.blocked=?))",
         me.id,
         me.id,
         me.id,
@@ -676,40 +668,14 @@ export async function handle(
         me.id,
         me.id,
       ).all();
-      return response(rows.results);
+      return response(flags(rows.results));
     }
     const settings = path.match(/^\/v1\/friends\/([^/]+)\/settings$/);
     if (settings && ["GET", "PUT"].includes(method)) {
       const other = settings[1];
       if (!(await friends(env, me.id, other))) deny(404, "account_unavailable");
       if (method === "PUT") {
-        const b = await body(request);
-        const input = b.input ?? null,
-          connect = b.connect ?? null;
-        if (
-          (input !== null && input !== "view" && input !== "full") ||
-          (connect !== null && connect !== "ask" && connect !== "always") ||
-          (input === null && connect === null)
-        )
-          deny(400, "invalid_value");
-        await q(
-          env,
-          "INSERT INTO friend_settings(owner,friend,input,connect) VALUES(?,?,COALESCE(?,'view'),COALESCE(?,'ask')) ON CONFLICT(owner,friend) DO UPDATE SET input=COALESCE(?,input),connect=COALESCE(?,connect)",
-          me.id,
-          other,
-          input,
-          connect,
-          input,
-          connect,
-        ).run();
-        if (input === "view")
-          // A view only friend cannot keep a grant that already allows input.
-          await q(
-            env,
-            "UPDATE connection_requests SET state='revoked' WHERE owner=? AND guest=? AND state IN ('pending','approved','claimed') AND (requested LIKE '%\"keyboard\"%' OR requested LIKE '%\"mouse\"%') AND (COALESCE(approved,requested) LIKE '%\"keyboard\"%' OR COALESCE(approved,requested) LIKE '%\"mouse\"%')",
-            me.id,
-            other,
-          ).run();
+        if (!(await saveSettings(env, me.id, other, await body(request)))) deny(400, "invalid_value");
       }
       return response(await friendSettings(env, me.id, other));
     }
@@ -879,10 +845,7 @@ export async function handle(
         deny(403, "friend_access_required");
       const policy = await friendSettings(env, host.owner, me.id);
       // A view only friend never gets keyboard or mouse, whatever the app asks for.
-      const allowed =
-        policy.input === "full"
-          ? requested
-          : requested.filter((p) => p !== "keyboard" && p !== "mouse");
+      const allowed = requested.filter((p) => (p !== "keyboard" || policy.keyboard) && (p !== "mouse" || policy.mouse));
       if (!allowed.length) deny(403, "input_not_allowed");
       const id = crypto.randomUUID();
       const auto = policy.connect === "always";
@@ -939,10 +902,8 @@ export async function handle(
           requested = new Set(JSON.parse(row.requested) as string[]);
         if (!approved.every((p) => requested.has(p)))
           deny(400, "cannot_expand_requested_permissions");
-        if (
-          (await friendSettings(env, row.owner, row.guest)).input !== "full" &&
-          approved.some((p) => p === "keyboard" || p === "mouse")
-        )
+        const may = await friendSettings(env, row.owner, row.guest);
+        if (approved.some((p) => (p === "keyboard" && !may.keyboard) || (p === "mouse" && !may.mouse)))
           deny(400, "input_not_allowed");
         const changed = await q(
           env,
