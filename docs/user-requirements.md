@@ -202,3 +202,18 @@ Hard release gate, 2026-11-10: the next public release must fix frame pacing on
 Android and Linux. No UI-only or audio-only release while it remains unresolved.
 Preserve the physically accepted Android audio fix and validate actual presentation,
 not just received FPS. Include the shared host encoder/capture path in the diagnosis.
+
+
+2026-11-10 host test and encoder direction: user reports pacing seems okay after
+installing the private Windows3.19.0 host; this is encouraging physical feedback,
+not full Android/Linux release-gate acceptance. The S23 pacing APK is authorized
+but not yet installed because ADB is disconnected; preserve accepted audio.
+User explicitly authorizes a stripped custom FFmpeg dependency for the Sunshine
+encoding path, overriding the earlier no-FFmpeg restriction. Aim below10MB total,
+measure both delivered package and installed payload, and report actual sizes.
+Follow pinned Sunshine implementation and per-vendor routing, including native
+NVENC where upstream uses it. Expose a persisted host encoder selection and real
+supported encoder controls; unavailable backends must not masquerade as working.
+Do not silently fall back to Media Foundation for explicit encoder selections.
+Desktop Settings must show Client and Host settings expanded, with one vertical
+layout. Files belongs on computer cards, matching Android, not in Settings.
