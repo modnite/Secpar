@@ -128,6 +128,21 @@ impl GuestState {
             gate.close_because(reason);
         }
     }
+    /// Ends preview sessions to make room: all of this friend's own, or one of anybody's when `guest` is None.
+    /// True when one was ended.
+    pub fn evict_preview(&self, guest: Option<&str>) -> bool {
+        let mut any = false;
+        for (g, gate) in self.sessions.lock().unwrap().iter() {
+            if gate.is_preview() && gate.is_open() && guest.is_none_or(|w| w == g) {
+                gate.close_because("replaced");
+                any = true;
+                if guest.is_none() {
+                    break; // One seat is enough.
+                }
+            }
+        }
+        any
+    }
     pub fn close_one(&self, guest: &str, reason: &'static str) {
         for (g, gate) in self.sessions.lock().unwrap().iter() {
             if g == guest {
@@ -228,9 +243,11 @@ pub fn verdict(m: &ClientMsg, gate: &Gate) -> Verdict {
         FileBegin { .. } | FileEnd { .. } | FileAccept { .. } | FileReject { .. } | FileCancel { .. } => need("files"),
         StreamStart { .. } | StreamDisplay { .. } | StreamSize { .. } | StreamCand { .. } => need("view"),
         StreamStop => Allow,
+        // The small picture on a card. It needs the view permission, like the stream.
+        ThumbSub { .. } => need("view"),
         // Owner only, whatever the grant says.
         Pair { .. } | Hello { .. } | Guest { .. } | GameStreamInfo { .. } | GameStreamPair { .. } | MediaSub { .. }
-        | MediaCmd { .. } | Power { .. } | ThumbSub { .. } | Net | Unlock { .. } | FsList { .. } | FsGet { .. } => Deny,
+        | MediaCmd { .. } | Power { .. } | Net | Unlock { .. } | FsList { .. } | FsGet { .. } => Deny,
     }
 }
 
@@ -259,6 +276,7 @@ pub(crate) fn caps(all: &[String], gate: &Gate) -> Vec<String> {
             "clip" => gate.has("clipboard"),
             "files" => gate.has("files"),
             "pad" => gate.has("gamepad"),
+            "thumb" => gate.view(),
             _ => false,
         })
         .cloned()
@@ -292,6 +310,7 @@ impl Session for Filtered {
                 return Some(ServerMsg::error("busy", "The owner is using this PC.", Some(of)));
             }
             *audio = *audio && self.gate.has("audio");
+            self.gate.mark_streaming();
         }
         self.inner.on_msg(m)
     }
@@ -370,11 +389,24 @@ mod tests {
             ClientMsg::FsGet { path: "C:/x".into() },
             ClientMsg::Net,
             ClientMsg::MediaSub { on: true },
-            ClientMsg::ThumbSub { on: true },
             ClientMsg::GameStreamInfo { id: "x".into() },
         ] {
             assert!(matches!(verdict(&m, &g), Verdict::Deny), "{}", m.t());
         }
+    }
+
+    #[test]
+    fn a_card_preview_needs_view_and_is_marked_until_a_stream_starts() {
+        let viewer = gate(&["view"], "view");
+        assert!(allowed(ClientMsg::ThumbSub { on: true }, &viewer));
+        assert!(viewer.is_preview());
+        assert_eq!(caps(&["thumb".to_string(), "stream".to_string()], &viewer), vec!["thumb", "stream"]);
+        viewer.mark_streaming();
+        assert!(!viewer.is_preview());
+        let files_only = gate(&["files"], "view");
+        assert!(matches!(verdict(&ClientMsg::ThumbSub { on: true }, &files_only), Verdict::Deny));
+        assert!(!caps(&["thumb".to_string()], &files_only).contains(&"thumb".to_string()));
+        assert!(!gate(&["view", "audio"], "view").is_preview());
     }
 
     #[test]
@@ -426,9 +458,9 @@ mod tests {
     #[test]
     fn welcome_lists_only_what_the_grant_allows() {
         let all: Vec<String> = ["input", "power", "media", "files", "clip", "thumb", "net", "stream", "unlock", "fsbrowse", "pad"].map(String::from).to_vec();
-        assert_eq!(caps(&all, &gate(&["view"], "view")), vec!["stream"]);
-        assert_eq!(caps(&all, &gate(&["view", "keyboard"], "view")), vec!["stream"]);
-        assert_eq!(caps(&all, &gate(&["view", "keyboard"], "full")), vec!["input", "stream"]);
+        assert_eq!(caps(&all, &gate(&["view"], "view")), vec!["thumb", "stream"]);
+        assert_eq!(caps(&all, &gate(&["view", "keyboard"], "view")), vec!["thumb", "stream"]);
+        assert_eq!(caps(&all, &gate(&["view", "keyboard"], "full")), vec!["input", "thumb", "stream"]);
         assert_eq!(caps(&all, &gate(&["gamepad"], "view")), vec!["pad"]);
     }
 }

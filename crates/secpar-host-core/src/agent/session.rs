@@ -239,7 +239,8 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
             },
             Some(b) = bin_rx.recv() => match b {
                 Bin::Frame(b) => {
-                    if gate.as_ref().is_some_and(|g| !g.has("files")) { continue }
+                    // A leading 0x02 is a thumbnail (view). Everything else is file data.
+                    if gate.as_ref().is_some_and(|g| if b.first() == Some(&2) { !g.view() } else { !g.has("files") }) { continue }
                     if ws.send(Message::binary(b)).await.is_err() { break }
                 }
                 Bin::Then(m) => {
@@ -283,11 +284,31 @@ async fn admit_guest(ctx: &Arc<Ctx>, grant: &str) -> Result<(Arc<guest::GuestAdm
     if ctx.guest.owner_streams.load(std::sync::atomic::Ordering::SeqCst) > 0 {
         return refuse("busy", "This PC is in use.");
     }
+    // A card preview gives way to a real connection, of the same friend or of another.
+    let mut evicted = false;
     if ctx.guest.has(&pass.guest) {
-        return refuse("busy", "You are already connected to this PC.");
+        if !ctx.guest.evict_preview(Some(&pass.guest)) {
+            return refuse("busy", "You are already connected to this PC.");
+        }
+        evicted = true;
     }
-    if ctx.guest.count() >= guest::MAX_FRIENDS {
-        return refuse("busy", "Three friends are already connected.");
+    if ctx.guest.count() >= guest::MAX_FRIENDS && !evicted {
+        if !ctx.guest.evict_preview(None) {
+            return refuse("busy", "Three friends are already connected.");
+        }
+        evicted = true;
+    }
+    if evicted {
+        // The closed sessions release their seats as they end. Give them a moment.
+        for _ in 0..40 {
+            if !ctx.guest.has(&pass.guest) && ctx.guest.count() < guest::MAX_FRIENDS {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        if ctx.guest.has(&pass.guest) || ctx.guest.count() >= guest::MAX_FRIENDS {
+            return refuse("busy", "Three friends are already connected.");
+        }
     }
     if adm.consume(&pass).is_err() {
         return refuse("guest_refused", "This grant was already used.");
@@ -546,6 +567,55 @@ mod guest_tests {
         let mut retry = connect(&r.ctx);
         retry.say(serde_json::json!({"t":"guest","grant":fourth_grant})).await;
         assert_eq!(retry.next().await.unwrap()["t"], "welcome");
+    }
+
+    fn preview_token(n: u8) -> String {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let (token, _) = signed(|_, c| {
+            c["sub"] = guest_id(n).into();
+            c["jti"] = format!("00000000-0000-4000-8000-0000000000c{n}").into();
+            c["aud"] = COMPUTER.into();
+            c["iat"] = now.into();
+            c["exp"] = (now + 30).into();
+            c["permissions"] = serde_json::json!(["view"]);
+        });
+        token
+    }
+    #[tokio::test]
+    async fn a_card_preview_gives_way_to_the_same_friend_and_to_a_full_house() {
+        let r = rig("full", "always", true).await;
+        // The lease for the preview request approves only view.
+        for n in 0..4u8 {
+            Mock::given(method("GET")).and(path(format!("/v1/host/requests/00000000-0000-4000-8000-0000000000c{n}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(
+                    {"id":format!("00000000-0000-4000-8000-0000000000c{n}"),"guest":guest_id(n),"approved":["view"],"state":"claimed","expires":1,"active":true})))
+                .mount(&r.server).await;
+        }
+        let mut preview = connect(&r.ctx);
+        preview.say(serde_json::json!({"t":"guest","grant":preview_token(0)})).await;
+        assert_eq!(preview.next().await.unwrap()["t"], "welcome");
+        // The same friend connecting for real replaces the preview.
+        let mut real = connect(&r.ctx);
+        real.say(serde_json::json!({"t":"guest","grant":token_for(0)})).await;
+        assert_eq!(real.next().await.unwrap()["t"], "welcome");
+        assert_eq!(r.ctx.guest.count(), 1);
+        // Two more friends fill the house with previews. A fourth, real one still gets in.
+        let mut held = Vec::new();
+        for n in 1..3u8 {
+            let mut c = connect(&r.ctx);
+            c.say(serde_json::json!({"t":"guest","grant":preview_token(n)})).await;
+            assert_eq!(c.next().await.unwrap()["t"], "welcome");
+            held.push(c);
+        }
+        assert_eq!(r.ctx.guest.count(), 3);
+        let mut fourth = connect(&r.ctx);
+        fourth.say(serde_json::json!({"t":"guest","grant":token_for(3)})).await;
+        assert_eq!(fourth.next().await.unwrap()["t"], "welcome");
+        assert_eq!(r.ctx.guest.count(), 3);
+        // A real session is never pushed out by another preview.
+        let mut late = connect(&r.ctx);
+        late.say(serde_json::json!({"t":"guest","grant":preview_token(0)})).await;
+        assert_eq!(late.next().await.unwrap()["msg"], "You are already connected to this PC.");
     }
 
     #[tokio::test]

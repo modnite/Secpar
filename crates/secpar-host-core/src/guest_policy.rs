@@ -111,6 +111,7 @@ struct GateState {
     open: AtomicBool,
     keyboard_off: AtomicBool,
     mouse_off: AtomicBool,
+    streaming: AtomicBool,
     closed: tokio::sync::Notify,
     reason: std::sync::Mutex<&'static str>,
 }
@@ -122,7 +123,7 @@ impl PartialEq for Gate {
 impl Eq for Gate {}
 impl Gate {
     fn new(permissions: BTreeSet<String>) -> Self {
-        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), keyboard_off: AtomicBool::new(false), mouse_off: AtomicBool::new(false), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
+        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), keyboard_off: AtomicBool::new(false), mouse_off: AtomicBool::new(false), streaming: AtomicBool::new(false), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
     }
     pub fn has(&self, permission: &str) -> bool {
         self.0.open.load(Ordering::SeqCst)
@@ -138,6 +139,15 @@ impl Gate {
     }
     pub fn mouse(&self) -> bool {
         self.has("mouse")
+    }
+    /// The friend started a stream, so this is more than a preview.
+    pub fn mark_streaming(&self) {
+        self.0.streaming.store(true, Ordering::SeqCst);
+    }
+    /// A session that holds only the view permission and never started a stream. It is a card preview and
+    /// gives way to a real connection, so it never takes a seat from one.
+    pub fn is_preview(&self) -> bool {
+        !self.0.streaming.load(Ordering::SeqCst) && self.0.permissions.len() == 1 && self.0.permissions.contains("view")
     }
     pub fn permissions(&self) -> &BTreeSet<String> {
         &self.0.permissions
