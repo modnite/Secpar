@@ -256,6 +256,9 @@ struct App {
     fullscreen: bool,
     focused: bool,
     pads: gamepad::Runner,
+    /// A pairing link being typed, and whether its box is open. Only used without an account.
+    pair_link: String,
+    pair_open: bool,
     pad_unsupported: bool,
     auto_capture_pending: bool,
     video_rect: Option<egui::Rect>,
@@ -353,6 +356,8 @@ impl App {
             fullscreen: false,
             focused: true,
             pads: Default::default(),
+            pair_link: String::new(),
+            pair_open: false,
             pad_unsupported: false,
             auto_capture_pending: false,
             video_rect: None, video_layer: None, remote_keyboard: false, pointer_in_video: false,
@@ -399,6 +404,39 @@ impl App {
         app
     }
     /// Reconnects to the computer this device remembers. Account computers pair themselves.
+    /// Pairing by link, for a computer with no account behind it.
+    fn pairing_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        design::surface().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new("Pair a computer").size(14.).strong());
+            ui.add_sized(
+                [ui.available_width(), 34.],
+                egui::TextEdit::singleline(&mut self.pair_link)
+                    .hint_text("Paste a Secpar Host pairing link")
+                    .password(true)
+                    .margin(egui::vec2(10., 8.)),
+            );
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), design::CONTROL), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add_enabled(!self.pair_link.trim().is_empty(), design::primary("Pair and connect")).clicked() {
+                    self.pair_and_connect(ctx);
+                }
+            });
+        });
+    }
+    fn pair_and_connect(&mut self, ctx: &egui::Context) {
+        if self.command.is_some() {
+            return;
+        }
+        match Pairing::parse(&self.pair_link) {
+            Ok(p) => {
+                self.pair_link.clear();
+                self.computer_account = None;
+                self.owned_connecting = None;
+                self.connect(ctx, Some(p));
+            }
+            Err(e) => self.status = e,
+        }
+    }
     fn start(&mut self, ctx: &egui::Context) {
         if self.command.is_some() {
             return;
@@ -1157,8 +1195,15 @@ impl eframe::App for App {
                                 let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: preview.as_ref(), connect: Some(true), menu: Some(&mut menu) });
                                 if forget { self.account.forget_computer(); }
                                 if connect { self.start(ctx); }
-                            } else if self.account.user.is_none() {
-                                ui.label(egui::RichText::new("Sign in to see your computers").color(design::MUTED));
+                            }
+                            // Without an account a computer is still paired by its link, kept out of the way.
+                            if self.account.user.is_none() {
+                                ui.add_space(8.);
+                                let text = if self.pair_open { "Hide" } else { "Use without an account" };
+                                if ui.add(egui::Label::new(egui::RichText::new(text).color(design::ACCENT)).sense(egui::Sense::click())).clicked() {
+                                    self.pair_open = !self.pair_open;
+                                }
+                                if self.pair_open { self.pairing_ui(ui, ctx); }
                             }
                         });
                         #[cfg(feature = "ui-review")]
