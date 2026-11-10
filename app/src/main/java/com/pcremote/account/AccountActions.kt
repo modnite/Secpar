@@ -20,7 +20,7 @@ class AccountActions(
     val friendInput: (String, Boolean?, Boolean?) -> Unit = { _, _, _ -> },
     val answer: (Answer, String) -> Unit = { _, _ -> },
     /** Ask to use a friend's computer with these permissions. */
-    val connectFriend: (FriendComputer, List<String>) -> Unit = { _, _ -> },
+    val connectFriend: (FriendComputer, List<String>, com.pcremote.nav.Mode) -> Unit = { _, _, _ -> },
     val cancelFriendConnect: () -> Unit = {},
     /** Turn request notifications on or off. */
     val setAlerts: (Boolean) -> Unit = {},

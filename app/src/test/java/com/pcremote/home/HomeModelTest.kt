@@ -74,6 +74,10 @@ class HomeModelTest {
         assertEquals(listOf("friend:f"), ComputerList.rows(emptyList(), emptyList(), listOf(shared)).map { it.key })
         assertEquals("Any time · Keyboard only", ComputerList.access(shared))
         assertEquals("Ask first · View only", ComputerList.access(shared.copy(connect = "ask", keyboard = false)))
+        // A friend's card offers only what the owner's settings allow. Media and Files are never offered.
+        assertEquals(listOf(Mode.PAD, Mode.SLIDES, Mode.REMOTE).sortedBy { it.ordinal }, ComputerList.friendTiles(shared.copy(keyboard = true, mouse = true)).map { it.mode }.sortedBy { it.ordinal })
+        assertEquals(listOf(Mode.PAD), ComputerList.friendTiles(shared.copy(keyboard = false, mouse = false)).map { it.mode })
+        assertEquals(listOf("mouse"), ComputerList.friendTiles(shared.copy(keyboard = false, mouse = true)).first { it.mode == Mode.REMOTE }.permissions)
     }
 
     @Test fun `a card without a fingerprint never hides an account computer`() {

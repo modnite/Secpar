@@ -267,7 +267,20 @@ private fun FriendCard(computer: FriendComputer, account: AccountUi, acts: Accou
         if (progress != null) {
             Text(FriendsConnect.phaseText(progress), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
             GhostButton(FriendsConnect.CANCEL, acts.cancelFriendConnect)
-        } else PrimaryButton(stringResource(R.string.pcr_connect), { acts.connectFriend(computer, GuestChoices().permissions()) }, enabled = account.guest == null)
+        } else Column(Modifier.widthIn(max = 360.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // The same strip as an own card: Connect first, then what the owner's settings allow, each a glyph.
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val ready = account.guest == null
+                GlyphTile(R.drawable.lucide_monitor, stringResource(R.string.pcr_connect), Modifier.weight(1f), primary = true) {
+                    if (ready) acts.connectFriend(computer, GuestChoices().permissions(), Mode.SCREEN)
+                }
+                ComputerList.friendTiles(computer).forEach { tile ->
+                    GlyphTile(tile.mode.iconRes(), stringResource(tile.mode.label()), Modifier.weight(1f)) {
+                        if (ready) acts.connectFriend(computer, tile.permissions, tile.mode)
+                    }
+                }
+            }
+        }
     }
 }
 

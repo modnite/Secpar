@@ -288,8 +288,8 @@ class MainActivity : ComponentActivity() {
                                 friend = account::friendAction, note = account::showNote,
                                 search = account::search, setVisible = account::setVisible,
                                 friendSetting = account::friendSetting, friendInput = account::friendInput, answer = account::answerRequest,
-                                connectFriend = { computer, permissions ->
-                                    account.connectFriend(computer, permissions) { route -> nav.navigate(Routes.mode(route, Mode.SCREEN)) }
+                                connectFriend = { computer, permissions, mode ->
+                                    account.connectFriend(computer, permissions) { route -> nav.navigate(Routes.mode(route, mode)) }
                                 },
                                 cancelFriendConnect = account::cancelFriendConnection,
                                 setAlerts = com.pcremote.account.AccountRuntime.get(this@MainActivity)::setAlerts)

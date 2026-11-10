@@ -137,7 +137,7 @@ private fun FriendComputersList(state: AccountUi, acts: AccountActions) {
             FlatCheckbox(choices.controller, FriendsConnect.CONTROLLER, { choices = choices.copy(controller = it) })
             FlatCheckbox(choices.clipboard, FriendsConnect.CLIPBOARD, { choices = choices.copy(clipboard = it) })
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PrimaryButton(FriendsConnect.ASK, { picking = null; acts.connectFriend(computer, choices.permissions()) },
+                PrimaryButton(FriendsConnect.ASK, { picking = null; acts.connectFriend(computer, choices.permissions(), com.pcremote.nav.Mode.SCREEN) },
                     enabled = choices.permissions().isNotEmpty())
                 GhostButton(FriendsConnect.CANCEL, { picking = null })
             }

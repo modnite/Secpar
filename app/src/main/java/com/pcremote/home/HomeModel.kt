@@ -79,6 +79,20 @@ object ComputerList {
             shared.filter { s -> cards.none { it.id == s.id } && owned.none { it.id == s.id } }.map { ComputerRow.Friends(it) }
     }
 
+    /** A mode a friend's card offers, and the permissions to ask for when it is opened. */
+    data class FriendTile(val mode: Mode, val permissions: List<String>)
+
+    /**
+     * What a friend's card can open. The owner's grant decides. Controllers need nothing from the owner's
+     * keyboard and mouse settings. Remote and Slides need those. Media and Files stay owner only: the host
+     * never lets a friend browse its disks or drive its media, so they are not offered.
+     */
+    fun friendTiles(c: FriendComputer): List<FriendTile> = buildList {
+        add(FriendTile(Mode.PAD, listOf("gamepad")))
+        if (c.keyboard || c.mouse) add(FriendTile(Mode.REMOTE, listOfNotNull("keyboard".takeIf { c.keyboard }, "mouse".takeIf { c.mouse })))
+        if (c.keyboard) add(FriendTile(Mode.SLIDES, listOf("keyboard")))
+    }
+
     /** What the owner lets you do on a friend's computer, in the words of the Friends page. */
     fun access(c: FriendComputer): String {
         val control = when {
