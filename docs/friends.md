@@ -10,20 +10,24 @@ An account is hidden until its owner turns on Show me in search. The Friends pag
 
 ## What a friend may do
 
-Each accepted friend has two settings. Defaults are View only and Ask first.
+Each accepted friend has these settings. Defaults are View only and Ask first.
 
 | Setting | Values | Meaning |
 | --- | --- | --- |
-| `input` | `view`, `full` | `full` allows keyboard and mouse. |
+| `keyboard` | `true`, `false` | Allows the keyboard. |
+| `mouse` | `true`, `false` | Allows the mouse. |
 | `connect` | `ask`, `always` | `always` approves a request at once. `ask` waits for the owner. |
+| `input` | `view`, `full` | The older single setting. `full` means keyboard and mouse both on. Kept so older apps and hosts still work. |
 
-`GET` and `PUT /v1/friends/:id/settings` read and change them. `GET /v1/friends` includes both for every friend.
+`GET` and `PUT /v1/friends/:id/settings` read and change them. `GET /v1/friends` includes all of them for every friend. A row saved before migration `0008_keyboard_and_mouse.sql` has no `keyboard` or `mouse` of its own and follows `input`. Choosing `input` again sets both. Choosing `keyboard` or `mouse` sets `input` to `full` only while both are on, so an older host never allows more than the owner chose.
+
+The owner can change these from the app, or from the host itself. The host settings on Windows and Linux list each friend with Keyboard, Mouse and Connect without asking. The host uses `GET /v1/host/friends` and `PUT /v1/host/friends/:id/settings` with its own credential. A friend sees what the owner allows on a computer in `GET /v1/friend-computers` (`connect`, `keyboard`, `mouse`).
 
 The Worker enforces them when a request is made:
 
-- A view only friend loses `keyboard` and `mouse` from the request. A request that asks for nothing else is refused with `403 input_not_allowed`.
-- The owner cannot approve keyboard or mouse for a view only friend.
-- Lowering a friend to view only revokes their open requests that include input.
+- A request loses `keyboard` or `mouse` when the owner has not allowed it for that friend. A request that asks for nothing else is refused with `403 input_not_allowed`.
+- The owner cannot approve keyboard or mouse for a friend who may not have it.
+- Turning both off revokes the friend's open requests that include input. Turning off one of them takes effect on a running session at the host's next check, and the other keeps working.
 - A friend set to `always` gets an `approved` request and claims it without waiting.
 
 The host checks again with `secpar_host_core::guest_policy`. `Account::admit_guest` reads the owner's friend list and the request lease with the machine credential, then decides:
