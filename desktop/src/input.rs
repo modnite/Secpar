@@ -2,8 +2,8 @@ use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, PointerButton};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-/// Client hotkeys: Ctrl+Alt+W windowed/fullscreen, Ctrl+Alt+Q disconnect, Ctrl+Alt+S hide or show
-/// the Secpar button.
+/// Client hotkeys, all behind the escape modifiers (Ctrl+Alt by default): W fullscreen for
+/// the stream, Q disconnect, S hide or show the Secpar button. Nothing else is taken from the host.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Shortcut {
     Fullscreen,
@@ -11,16 +11,15 @@ pub enum Shortcut {
     MenuButton,
 }
 
-pub fn shortcut(event: &Event) -> Option<(Shortcut, Key)> {
+pub fn shortcut(event: &Event, escape: crate::keys::EscapeKeys) -> Option<(Shortcut, Key)> {
     let Event::Key { key, pressed: true, repeat: false, modifiers: m, .. } = event else { return None };
-    if m.mac_cmd {
+    if m.mac_cmd || !escape.matches(m.ctrl, m.alt, m.shift) {
         return None;
     }
-    let ctrl_alt = m.ctrl && m.alt && !m.shift;
     let found = match key {
-        Key::W if ctrl_alt => Shortcut::Fullscreen,
-        Key::Q if ctrl_alt => Shortcut::Disconnect,
-        Key::S if ctrl_alt => Shortcut::MenuButton,
+        Key::W => Shortcut::Fullscreen,
+        Key::Q => Shortcut::Disconnect,
+        Key::S => Shortcut::MenuButton,
         _ => return None,
     };
     Some((found, *key))
@@ -30,6 +29,8 @@ pub fn shortcut(event: &Event) -> Option<(Shortcut, Key)> {
 pub struct Input {
     pub captured: bool,
     pub enabled: bool,
+    /// The Windows keyboard hook owns every key, so window key events must not be sent twice.
+    pub hooked: bool,
     held: BTreeSet<u32>,
     buttons: BTreeSet<&'static str>,
     ignore_ctrl: bool,
@@ -70,8 +71,22 @@ impl Input {
         out.extend(self.release_buttons());
         out
     }
+    /// Hands the keyboard to the hook (true) or back to the window (false). Keys the window
+    /// path holds are lifted first. Keys already down when the window path resumes stay
+    /// unsent until released, so nothing sticks on the host.
+    pub fn keys_to_hook(&mut self, hook: bool) -> Vec<Value> {
+        self.hooked = hook;
+        if hook {
+            std::mem::take(&mut self.held).into_iter().map(|vk| json!({"t":"key","vk":vk,"down":false})).collect()
+        } else {
+            self.ignore_ctrl = true;
+            self.ignore_alt = true;
+            self.ignore_shift = true;
+            vec![]
+        }
+    }
     pub fn modifiers(&mut self, m: Modifiers) -> Vec<Value> {
-        if !self.enabled {
+        if !self.enabled || self.hooked {
             return vec![];
         }
         if !m.ctrl {
@@ -94,6 +109,9 @@ impl Input {
     }
     pub fn event(&mut self, event: &Event) -> Vec<Value> {
         if !self.enabled {
+            return vec![];
+        }
+        if self.hooked && matches!(event, Event::Copy | Event::Cut | Event::Paste(_) | Event::Key { .. }) {
             return vec![];
         }
         match event {
@@ -335,18 +353,46 @@ mod tests {
     }
 
     #[test]
-    fn client_hotkeys_follow_parsec_and_need_the_exact_modifiers() {
+    fn client_hotkeys_need_the_exact_escape_modifiers() {
+        use crate::keys::EscapeKeys;
         let key=|key,modifiers,repeat| Event::Key{key,physical_key:Some(key),pressed:true,repeat,modifiers};
-        let ctrl_alt=Modifiers{ctrl:true,alt:true,..Default::default()};
-        assert_eq!(shortcut(&key(Key::W,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::Fullscreen));
-        assert_eq!(shortcut(&key(Key::Q,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::Disconnect));
-        assert_eq!(shortcut(&key(Key::S,ctrl_alt,false)).map(|s|s.0),Some(Shortcut::MenuButton));
-        assert!(shortcut(&key(Key::F,Modifiers{alt:true,..Default::default()},false)).is_none(), "Alt+F is gone");
-        assert!(shortcut(&key(Key::W,ctrl_alt,true)).is_none(), "no key repeat");
-        assert!(shortcut(&key(Key::W,Modifiers{ctrl:true,shift:true,..Default::default()},false)).is_none());
-        assert!(shortcut(&key(Key::W,Modifiers{ctrl:true,..Default::default()},false)).is_none());
-        assert!(shortcut(&key(Key::S,Modifiers{ctrl:true,alt:true,shift:true,..Default::default()},false)).is_none());
-        assert!(shortcut(&key(Key::Q,Modifiers{alt:true,..Default::default()},false)).is_none());
+        let mods=|ctrl,alt,shift| Modifiers{ctrl,alt,shift,..Default::default()};
+        assert_eq!(shortcut(&key(Key::W,mods(true,true,false),false),EscapeKeys::default()).map(|s|s.0),Some(Shortcut::Fullscreen),"Ctrl+Alt+W stays the default");
+        let default=EscapeKeys::CtrlAltShift;
+        assert_eq!(shortcut(&key(Key::W,mods(true,true,true),false),default).map(|s|s.0),Some(Shortcut::Fullscreen));
+        assert_eq!(shortcut(&key(Key::Q,mods(true,true,true),false),default).map(|s|s.0),Some(Shortcut::Disconnect));
+        assert_eq!(shortcut(&key(Key::S,mods(true,true,true),false),default).map(|s|s.0),Some(Shortcut::MenuButton));
+        for letter in [Key::W,Key::Q,Key::S] {
+            assert!(shortcut(&key(letter,mods(true,true,false),false),default).is_none(),"plain Ctrl+Alt belongs to host programs with the Ctrl+Alt+Shift chord");
+        }
+        assert!(shortcut(&key(Key::W,mods(true,true,true),true),default).is_none(),"no key repeat");
+        assert!(shortcut(&key(Key::W,mods(true,false,true),false),default).is_none());
+        assert!(shortcut(&key(Key::W,mods(false,true,true),false),default).is_none());
+        assert!(shortcut(&key(Key::F,mods(true,true,true),false),default).is_none());
+        assert!(shortcut(&key(Key::W,Modifiers{mac_cmd:true,ctrl:true,alt:true,shift:true,..Default::default()},false),default).is_none());
+        assert_eq!(shortcut(&key(Key::Q,mods(true,true,false),false),EscapeKeys::CtrlAlt).map(|s|s.0),Some(Shortcut::Disconnect));
+        assert!(shortcut(&key(Key::Q,mods(true,true,true),false),EscapeKeys::CtrlAlt).is_none());
+        assert_eq!(shortcut(&key(Key::W,mods(true,false,true),false),EscapeKeys::CtrlShift).map(|s|s.0),Some(Shortcut::Fullscreen));
+    }
+
+    #[test]
+    fn hook_owns_the_keyboard_without_double_sending() {
+        let mut input=Input::default();input.free();
+        input.modifiers(Modifiers::default());
+        input.modifiers(Modifiers{shift:true,..Default::default()});
+        let handed=input.keys_to_hook(true);
+        assert_eq!(handed.len(),1);
+        assert_eq!(handed[0]["down"],false,"window-path keys are lifted when the hook takes over");
+        let key=Event::Key{key:Key::A,physical_key:Some(Key::A),pressed:true,repeat:false,modifiers:Modifiers::default()};
+        assert!(input.event(&key).is_empty());
+        assert!(input.event(&Event::Copy).is_empty());
+        assert!(input.modifiers(Modifiers{ctrl:true,..Default::default()}).is_empty());
+        let click=Event::PointerButton{pos:eframe::egui::pos2(1.,1.),button:PointerButton::Primary,pressed:true,modifiers:Modifiers::default()};
+        assert_eq!(input.event(&click).len(),1,"the mouse still works");
+        assert!(input.keys_to_hook(false).is_empty());
+        assert!(input.modifiers(Modifiers{ctrl:true,..Default::default()}).is_empty(),"a modifier still down is not sent");
+        input.modifiers(Modifiers::default());
+        assert_eq!(input.modifiers(Modifiers{ctrl:true,..Default::default()}).len(),1);
     }
 
     #[test]

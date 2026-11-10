@@ -18,6 +18,9 @@ mod files;
 pub mod gamepad;
 mod hosting;
 mod input;
+mod keys;
+#[cfg(windows)]
+mod keyhook;
 mod stream_menu;
 mod icons;
 mod local_host;
@@ -253,7 +256,7 @@ struct App {
     display: String,
     cursor: (i16, i16, bool),
     cursor_shape: Option<(TextureHandle, [i32; 2])>,
-    fullscreen: bool,
+    fs: keys::Fullscreen,
     focused: bool,
     pads: gamepad::Runner,
     /// A pairing link being typed, and whether its box is open. Only used without an account.
@@ -266,6 +269,10 @@ struct App {
     remote_keyboard: bool,
     pointer_in_video: bool,
     observed_fullscreen: Option<bool>,
+    #[cfg(windows)]
+    hook: Option<keyhook::KeyHook>,
+    #[cfg(windows)]
+    native: Option<native_window::NativeWindow>,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -353,7 +360,7 @@ impl App {
             display: String::new(),
             cursor: (0, 0, false),
             cursor_shape: None,
-            fullscreen: false,
+            fs: Default::default(),
             focused: true,
             pads: Default::default(),
             pair_link: String::new(),
@@ -362,6 +369,10 @@ impl App {
             auto_capture_pending: false,
             video_rect: None, video_layer: None, remote_keyboard: false, pointer_in_video: false,
             observed_fullscreen: None,
+            #[cfg(windows)]
+            hook: None,
+            #[cfg(windows)]
+            native: native_window::NativeWindow::from_context(cc),
         };
         #[cfg(feature="ui-review")]
         if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("stream")) {
@@ -538,7 +549,7 @@ impl App {
     }
     fn capture(&mut self, ctx: &egui::Context, on: bool) {
         self.auto_capture_pending = false;
-        if on && self.fullscreen && self.texture.is_some() && self.command.is_some() {
+        if on && self.fs.on && self.texture.is_some() && self.command.is_some() {
             self.input.capture();
             ctx.send_viewport_cmd(ViewportCommand::CursorGrab(CursorGrab::Confined));
             ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
@@ -550,15 +561,124 @@ impl App {
             ctx.send_viewport_cmd(ViewportCommand::CursorVisible(true));
         }
     }
+    /// A stream is on screen: connected and showing a picture.
+    fn stream_active(&self) -> bool {
+        self.command.is_some() && self.texture.is_some()
+    }
+    /// Per-session keyboard permission. The protocol has no view-only state yet, so this is
+    /// always true. When it grows one, this is the single place to read it.
+    fn keyboard_allowed(&self) -> bool {
+        true
+    }
+    fn window_geometry(ctx: &egui::Context) -> Option<keys::Geometry> {
+        ctx.input(|i| {
+            let v = i.viewport();
+            if v.maximized == Some(true) || v.fullscreen == Some(true) {
+                return None;
+            }
+            let (outer, inner) = (v.outer_rect?, v.inner_rect?);
+            Some(keys::Geometry { pos: [outer.min.x, outer.min.y], size: [inner.width(), inner.height()] })
+        })
+    }
+    /// Fullscreen belongs to the stream. The app window never goes fullscreen.
     fn set_fullscreen(&mut self, ctx: &egui::Context, on: bool) {
-        self.stream_menu_open=false;
+        let step = self.fs.request(on, self.stream_active(), Self::window_geometry(ctx));
+        self.apply_fullscreen(ctx, step);
+    }
+    fn apply_fullscreen(&mut self, ctx: &egui::Context, step: keys::Step) {
+        match step {
+            keys::Step::Nothing => return,
+            keys::Step::Enter => ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true)),
+            keys::Step::Leave(saved) => {
+                ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+                if let Some(g) = saved {
+                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(g.pos[0], g.pos[1])));
+                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(g.size[0], g.size[1])));
+                }
+            }
+        }
+        self.fullscreen_changed(ctx);
+    }
+    fn fullscreen_changed(&mut self, ctx: &egui::Context) {
+        self.stream_menu_open = false;
         self.capture(ctx, false);
-        self.fullscreen = on;
         self.remote_keyboard = true;
         self.video_rect = None;
-        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(on));
-        if on && self.focused {self.capture(ctx,true);}
-        else if self.focused && self.texture.is_some() && self.command.is_some() {self.input.free();}
+        if self.fs.on && self.focused {
+            self.capture(ctx, true);
+        } else if self.focused && self.stream_active() {
+            self.input.free();
+        }
+    }
+    /// The stream is gone: the window returns to normal size and position.
+    fn leave_fullscreen_if_idle(&mut self, ctx: &egui::Context) {
+        if self.fs.on && !self.stream_active() {
+            self.set_fullscreen(ctx, false);
+        }
+    }
+    /// What the escape chord does. It is the same from the window path and from the hook.
+    fn escape(&mut self, ctx: &egui::Context, action: keys::Escape) {
+        match action {
+            keys::Escape::Fullscreen => self.set_fullscreen(ctx, !self.fs.on),
+            keys::Escape::Disconnect => {
+                if self.command.is_some() {
+                    self.capture(ctx, false);
+                    self.send(Command::Stop);
+                    self.stream_menu_open = false;
+                }
+            }
+            keys::Escape::MenuButton => {
+                if self.stream_active() {
+                    self.menu_button_hidden = !self.menu_button_hidden;
+                    self.stream_menu_open = false;
+                }
+            }
+        }
+    }
+    /// Keeps the Windows keyboard hook up exactly while the host should get every key.
+    #[cfg(windows)]
+    fn manage_key_hook(&mut self, ctx: &egui::Context) {
+        let wanted = keys::HookWanted {
+            setting: self.client.system_keys,
+            stream_on_screen: self.stream_active(),
+            window_focused: self.focused,
+            keys_go_to_host: self.remote_keyboard && !self.stream_menu_open,
+            keyboard_allowed: self.keyboard_allowed(),
+        }
+        .yes();
+        // Review captures run on the user's desktop: never take their keyboard for a fixture.
+        #[cfg(feature = "ui-review")]
+        let wanted = wanted && std::env::var_os("SECPAR_REVIEW_HOOK").is_some();
+        if let Some(hook) = &self.hook {
+            keyhook::heartbeat();
+            hook.flush();
+            let mut remove = !wanted;
+            for outcome in hook.take_outcomes() {
+                match outcome {
+                    keyhook::Outcome::Escape(action) => self.escape(ctx, action),
+                    keyhook::Outcome::Stalled | keyhook::Outcome::FocusLost => remove = true,
+                }
+            }
+            if remove || !self.stream_active() {
+                self.hook = None;
+                for m in self.input.keys_to_hook(false) {
+                    self.send(Command::Input(m));
+                }
+            } else {
+                ctx.request_repaint_after(keyhook::BEAT_EVERY);
+            }
+        } else if wanted {
+            let (Some(native), Some(tx)) = (self.native, self.command.clone()) else { return };
+            let wake = ctx.clone();
+            let sink = Box::new(move |v| !matches!(tx.try_send(Command::Input(v)), Err(mpsc::error::TrySendError::Full(_))));
+            self.hook = keyhook::KeyHook::install(native.raw(), self.client.escape, true, sink, move || wake.request_repaint());
+            if self.hook.is_some() {
+                for m in self.input.keys_to_hook(true) {
+                    self.send(Command::Input(m));
+                }
+                ctx.request_repaint_after(keyhook::BEAT_EVERY);
+            }
+        }
     }
     fn poll(&mut self, ctx: &egui::Context) {
         if let Some(bridge)=&self.clipboard {
@@ -672,6 +792,7 @@ impl App {
                     self.audio_route.output(None);
                     self.audio = None;
                     self.texture = None;
+                    self.leave_fullscreen_if_idle(ctx);
                     self.video_rect = None;self.pointer_in_video=false;self.remote_keyboard=false;
                     self.cursor = (0, 0, false);
                     self.cursor_shape = None;
@@ -716,18 +837,32 @@ impl App {
         }
         if self.auto_capture_pending && self.focused && self.texture.is_some() {
             self.auto_capture_pending=false;
-            if self.fullscreen {self.capture(ctx,true);} else {self.input.free();}
+            if self.fs.on {self.capture(ctx,true);} else {self.input.free();}
         }
     }
 }
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.focused = raw.focused;
+        #[cfg(windows)]
+        {
+            keyhook::heartbeat();
+            self.input.hooked = self.hook.is_some();
+        }
         if let Some(actual) = raw.viewport().fullscreen {
-            if self.observed_fullscreen.is_some_and(|old| old != actual) && self.fullscreen != actual {
-                self.set_fullscreen(ctx,actual);
+            let changed = self.observed_fullscreen.is_some_and(|old| old != actual);
+            self.observed_fullscreen = Some(actual);
+            // The app window never stays fullscreen. Only a stream adopts an OS change.
+            if changed || (actual && !self.fs.on) {
+                let before = self.fs.on;
+                let step = self.fs.observed(actual, self.stream_active());
+                if let keys::Step::Leave(_) = step {
+                    ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
+                }
+                if before != self.fs.on {
+                    self.fullscreen_changed(ctx);
+                }
             }
-            self.observed_fullscreen=Some(actual);
         }
         if !raw.focused {
             self.capture(ctx, false);
@@ -735,22 +870,13 @@ impl eframe::App for App {
             self.shortcut_key = None;
             return;
         }
-        if let Some((shortcut, key)) = raw.events.iter().find_map(input::shortcut) {
+        if let Some((shortcut, key)) = raw.events.iter().find_map(|e| input::shortcut(e, self.client.escape)) {
             self.shortcut_key = Some(key);
-            match shortcut {
-                input::Shortcut::Fullscreen => self.set_fullscreen(ctx, !self.fullscreen),
-                input::Shortcut::Disconnect => {
-                    if self.command.is_some() {
-                        self.capture(ctx, false);
-                        self.send(Command::Stop);
-                        self.stream_menu_open = false;
-                    }
-                }
-                input::Shortcut::MenuButton => {
-                    self.menu_button_hidden = !self.menu_button_hidden;
-                    self.stream_menu_open = false;
-                }
-            }
+            self.escape(ctx, match shortcut {
+                input::Shortcut::Fullscreen => keys::Escape::Fullscreen,
+                input::Shortcut::Disconnect => keys::Escape::Disconnect,
+                input::Shortcut::MenuButton => keys::Escape::MenuButton,
+            });
         }
         if let Some(key) = self.shortcut_key {
             let released = raw.events.iter().any(|e| matches!(e,UiEvent::Key{key:k,pressed:false,..} if *k==key));
@@ -758,7 +884,7 @@ impl eframe::App for App {
             if released { self.shortcut_key=None; }
         }
         let ready = self.texture.is_some() && self.command.is_some();
-        if ready && self.stream_menu_open && !self.fullscreen {
+        if ready && self.stream_menu_open && !self.fs.on {
             if self.input.enabled {self.capture(ctx,false);}
             self.remote_keyboard=false;
             let button=self.stream_menu_button_bounds.unwrap_or_else(||egui::Rect::from_min_size(egui::pos2(12.,12.),egui::vec2(40.,40.)));
@@ -768,7 +894,7 @@ impl eframe::App for App {
             }
             return;
         }
-        if ready && self.fullscreen {
+        if ready && self.fs.on {
             let button=self.stream_menu_button_bounds.unwrap_or_else(||egui::Rect::from_min_size(egui::pos2(12.,12.),egui::vec2(40.,40.)));
             let pointer=raw.events.iter().rev().find_map(|e|match e {
                 UiEvent::PointerMoved(p)|UiEvent::PointerButton{pos:p,..}=>Some(*p),_=>None
@@ -842,6 +968,9 @@ impl eframe::App for App {
         raw.events=local;
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.leave_fullscreen_if_idle(ctx);
+        #[cfg(windows)]
+        self.manage_key_hook(ctx);
         #[cfg(windows)]
         if let Some(tray) = &self.tray {
             tray.set_connected(self.command.is_some());
@@ -1003,16 +1132,6 @@ impl eframe::App for App {
                             if ui.button("Disconnect").clicked() {
                                 self.capture(ctx, false);
                                 self.send(Command::Stop);
-                            }
-                            if ui
-                                .button(if self.fullscreen {
-                                    "Window · Ctrl+Alt+W"
-                                } else {
-                                    "Fullscreen · Ctrl+Alt+W"
-                                })
-                                .clicked()
-                            {
-                                self.set_fullscreen(ctx, !self.fullscreen);
                             }
                             if self.displays.len() > 1 {
                                 let mut selected = self.display.clone();
@@ -1222,6 +1341,50 @@ impl eframe::App for App {
             self.stream_menu(ctx);
             ctx.request_repaint_after(Duration::from_millis(8));
         }
+        // Drives the real window through the fullscreen rules and prints what the OS reports.
+        #[cfg(feature = "ui-review")]
+        if std::env::var_os("SECPAR_REVIEW_FS").is_some() {
+            self.review_frames += 1;
+            let report = |label: &str, ctx: &egui::Context, this: &Self| {
+                let (outer, inner, full, max) = ctx.input(|i| {
+                    let v = i.viewport();
+                    (v.outer_rect, v.inner_rect, v.fullscreen, v.maximized)
+                });
+                eprintln!("FS {label} state_on={} os_fullscreen={full:?} maximized={max:?} stream={} outer={outer:?} inner={inner:?}", this.fs.on, this.stream_active());
+            };
+            match self.review_frames {
+                10 => report("start", ctx, self),
+                20 => {
+                    if std::env::var_os("SECPAR_REVIEW_FS_OS").is_some() {
+                        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+                    } else {
+                        self.escape(ctx, keys::Escape::Fullscreen);
+                    }
+                }
+                60 => {
+                    report("after fullscreen request", ctx, self);
+                    if self.stream_active() {
+                        self.escape(ctx, keys::Escape::Fullscreen);
+                    }
+                }
+                100 => report("after leaving", ctx, self),
+                110 if self.stream_active() => {
+                    // The stream ends while fullscreen.
+                    self.escape(ctx, keys::Escape::Fullscreen);
+                }
+                150 if self.stream_active() => {
+                    report("fullscreen again", ctx, self);
+                    self.command = None;
+                    self.texture = None;
+                }
+                200 => {
+                    report("after stream ended", ctx, self);
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
+                _ => {}
+            }
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
         #[cfg(feature = "ui-review")]
         if let Some(path) = std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO") {
             self.review_frames += 1;
@@ -1247,6 +1410,10 @@ impl eframe::App for App {
         }
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        #[cfg(windows)]
+        {
+            self.hook = None;
+        }
         self.files.close();
         for m in self.input.release() {
             self.send(Command::Input(m));
