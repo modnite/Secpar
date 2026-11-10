@@ -174,7 +174,6 @@ pub fn computer_status(linked: bool, presence: Presence) -> (&'static str, efram
         Presence::Offline => ("Offline", MUTED),
     }
 }
-pub const SIGN_IN_CONFIRM: &str = "Confirm this code in your browser";
 pub const NO_COMPUTERS: &str = "No computers yet";
 pub const NO_OTHER_COMPUTERS: &str = "No other computers yet";
 /// The computers you can connect to. The one this app is hosting from is left out: you are already
@@ -203,8 +202,8 @@ pub enum Command {
     HostRefresh,
     LinkHost,
     UnlinkHost,
-    SignIn,
-    Cancel,
+    /// One call of the in-app sign-in form.
+    Auth(crate::signin::Request),
     Refresh,
     Action(Action),
     SignOut,
@@ -222,10 +221,8 @@ pub enum Command {
 pub enum Event {
     Host(Result<local_host::State, String>),
     SignedOut(String),
-    Waiting {
-        code: String,
-        url: String,
-    },
+    /// The answer to a sign-in form call. `result` carries the words to show on failure.
+    Auth { route: &'static str, result: Result<(), String> },
     SignedIn {
         user: User,
         friends: Vec<Friend>,
@@ -261,7 +258,7 @@ pub struct Panel {
     textures: previews::Cache<eframe::egui::TextureHandle>,
     friends: Vec<Friend>,
     blocked: Vec<User>,
-    waiting: Option<(String, String)>,
+    form: crate::signin::Form,
     note: String,
     query: String,
     asked: Option<String>,
@@ -365,7 +362,7 @@ impl Panel {
                         vec![]
                     },
                     blocked: vec![],
-                    waiting: None,
+                    form: Default::default(),
                     note: String::new(),
                     query: String::new(),
                     asked: None,
@@ -406,7 +403,7 @@ impl Panel {
             user: None,
             friends: vec![],
             blocked: vec![],
-            waiting: None,
+            form: Default::default(),
             note: String::new(),
             query: String::new(),
             asked: None,
@@ -509,6 +506,15 @@ impl Panel {
             }
         }
     }
+    /// The sign in, sign up and recovery form.
+    pub fn sign_in_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        crate::design::surface().inner_margin(12).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if let Some(request) = self.form.ui(ui, self.busy) {
+                self.send(Command::Auth(request));
+            }
+        });
+    }
     pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
         use crate::design;
         use eframe::egui;
@@ -517,19 +523,11 @@ impl Panel {
                 if ui.add_enabled(!self.busy,egui::Button::new("Sign out")).clicked() { self.send(Command::SignOut); }
                 if ui.add_enabled(!self.busy,egui::Button::new("Refresh")).clicked() { self.send(Command::Refresh); }
                 ui.add(egui::Label::new(user.handle).truncate());
-            } else if ui.add_enabled(!self.busy && self.waiting.is_none(),egui::Button::new("Sign in")).clicked() {
-                self.send(Command::SignIn);
             }
         });
         ui.add_space(6.);
-        if let Some((code,url)) = self.waiting.clone() {
-            design::surface().show(ui,|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(SIGN_IN_CONFIRM); ui.strong(code);
-                    if ui.button("Open browser").clicked() { std::thread::spawn(move || { let _=open::that(url); }); }
-                    if ui.button("Cancel").clicked() { self.send(Command::Cancel); }
-                });
-            });
+        if self.user.is_none() {
+            self.sign_in_ui(ui);
         }
         if self.user.is_some() {
             let mut connect = None;
@@ -572,12 +570,14 @@ impl Panel {
                     self.people.clear();
                     self.asked = None;
                     self.blocked.clear();
-                    self.waiting = None;
+                    self.form.reset();
                     self.note = note;
                 }
-                Event::Waiting { code, url } => {
-                    self.waiting = Some((code, url));
-                    self.note.clear();
+                Event::Auth { route, result } => {
+                    self.busy = false;
+                    if let Some(next) = self.form.done(route, result) {
+                        self.send(Command::Auth(next));
+                    }
                 }
                 Event::SignedIn {
                     user,
@@ -588,7 +588,7 @@ impl Panel {
                     self.user = Some(user);
                     self.friends = friends;
                     self.blocked = blocked;
-                    self.waiting = None;
+                    self.form.reset();
                     self.note = note;
                     self.asked = None;
                 }
@@ -874,36 +874,7 @@ impl Panel {
         });
         ui.add_space(8.);
         if self.user.is_none() {
-            if let Some((code, url)) = self.waiting.clone() {
-                ui.label(SIGN_IN_CONFIRM);
-                ui.heading(code);
-                ui.horizontal(|ui| {
-                    if ui.button("Open browser").clicked() {
-                        std::thread::spawn(move || {
-                            let _ = open::that(url);
-                        });
-                    }
-                    if ui
-                        .add_enabled(!self.busy, egui::Button::new("Cancel"))
-                        .clicked()
-                    {
-                        self.send(Command::Cancel);
-                    }
-                });
-            } else {
-                ui.label("Sign in to add friends.");
-                ui.add_space(8.);
-                if ui
-                    .add_enabled(
-                        !self.busy,
-                        egui::Button::new("Sign in").min_size(egui::vec2(100., 32.)),
-                    )
-                    .clicked()
-                {
-                    self.send(Command::SignIn);
-                }
-                ui.hyperlink_to("Create an account", format!("{ORIGIN}/auth/register"));
-            }
+            self.sign_in_ui(ui);
         } else {
             ui.horizontal_wrapped(|ui| {
                 let handle = self.user.as_ref().map(|u| u.handle.clone()).unwrap_or_default();
@@ -1069,20 +1040,6 @@ impl Panel {
         }
     }
 }
-#[derive(Deserialize)]
-struct Device {
-    device_code: String,
-    user_code: String,
-    verification_uri_complete: String,
-    expires_in: u64,
-    interval: u64,
-}
-struct Pending {
-    secret: String,
-    expires: Instant,
-    next: Instant,
-    interval: Duration,
-}
 #[derive(Clone)]
 pub(crate) struct Api {
     client: Client,
@@ -1133,8 +1090,6 @@ impl Api {
             let code = data["error"].as_str().unwrap_or("request_failed");
             // Map known error codes, never display raw HTTP bodies or credential-bearing URLs.
             let message = match code {
-                "authorization_pending" => "authorization_pending",
-                "slow_down" => "slow_down",
                 "session_expired" | "sign_in_required" => "Your session expired. Sign in again.",
                 "host_already_linked" => "This host is linked to another account. Unlink it first.",
                 "host_challenge_expired_or_used" => "Host linking expired. Please try again.",
@@ -1143,7 +1098,13 @@ impl Api {
                 }
                 "account_unavailable" => "No one with that username can be added.",
                 "rate_limited" => "Too many attempts. Please wait and try again.",
-                "device_code_expired_or_used" => "Sign-in expired. Please start again.",
+                // The service words these for people. Take its text when it is short and plain.
+                "invalid_password" | "invalid_email" | "invalid_username" | "username_taken" | "bad_credentials" | "invalid_code"
+                | "mail_unavailable" | "mail_failed"
+                    if data["message"].as_str().is_some_and(|m| m.len() <= 200 && !m.chars().any(char::is_control)) =>
+                {
+                    data["message"].as_str().unwrap_or_default()
+                }
                 "incoming_request_not_found" => "This friend request is no longer available.",
                 "input_not_allowed" => "This friend may not use the keyboard or mouse.",
                 "request_not_pending" => "This request was already answered or has expired.",
@@ -1627,7 +1588,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             // The local service may be slow to answer. Nothing else waits for it.
             { let host_events=events.clone(); let host_ctx=ctx.clone(); tokio::spawn(async move { let _=host_events.send(Event::Host(local_host::state().await)).await; host_ctx.request_repaint(); }); }
             ctx.request_repaint();
-            let mut api=Api{client,token,base:ORIGIN.into()}; let mut pending: Option<Pending>=None;
+            let mut api=Api{client,token,base:ORIGIN.into()};
             let mut pending_pair: Option<PendingPair> = None;
             let mut pending_guest: Option<PendingGuest> = None;
             let mut next_friend_computers = Instant::now();
@@ -1754,31 +1715,27 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                                 Err(e)=>Err((StatusCode::BAD_GATEWAY,e))
                             }
                         },
-                        Command::SignIn=>{
-                            pending=None;
-                            api.token=None;
-                            let _=vault::forget(CREDENTIAL);
-                            match api.call(Method::POST,"/auth/device",Some(json!({"name":"Secpar Desktop"}))).await {
-                                Ok(data)=>match serde_json::from_value::<Device>(data) {
-                                    Ok(device)=>{
-                                        // The approval destination is pinned, including path. Never open a server-supplied arbitrary URL.
-                                        let expected=format!("{ORIGIN}/activate?code={}",device.user_code);
-                                        if device.verification_uri_complete!=expected || device.user_code.len()!=8 || !device.user_code.bytes().all(|c|c.is_ascii_uppercase()||c.is_ascii_digit()) {
-                                            Err((StatusCode::BAD_GATEWAY,"Invalid device approval response".into()))
-                                        } else {
-                                            let interval=Duration::from_secs(device.interval.clamp(5,60));
-                                            pending=Some(Pending{secret:device.device_code,expires:Instant::now()+Duration::from_secs(device.expires_in.min(600)),next:Instant::now()+interval,interval});
-                                            let _=events.send(Event::Waiting{code:device.user_code,url:expected.clone()}).await;
-                                            let _=open::that(&expected);
-                                            Ok(String::new())
+                        Command::Auth(request)=>{
+                            let route=request.route();
+                            match api.call(Method::POST,&format!("/v1/app/{route}"),Some(request.body())).await {
+                                Ok(data) if route=="sign-in"=>{
+                                    let token=data["token"].as_str().unwrap_or("");
+                                    if token.len()!=64 || !token.bytes().all(|b|b.is_ascii_hexdigit()) {
+                                        let _=events.send(Event::Auth{route,result:Err("The account service sent an invalid session.".into())}).await;
+                                    } else {
+                                        let note=vault::save(CREDENTIAL,token).err().unwrap_or_default();api.token=Some(token.into());
+                                        match api.snapshot().await {
+                                            Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;},
+                                            Err((status,note))=>{if status==StatusCode::UNAUTHORIZED{api.token=None;let _=vault::forget(CREDENTIAL);}let _=events.send(Event::Auth{route,result:Err(note)}).await;}
                                         }
-                                    },Err(_)=>Err((StatusCode::BAD_GATEWAY,"Invalid sign-in response".into()))
-                                },Err(e)=>Err(e)
+                                    }
+                                }
+                                Ok(_)=>{let _=events.send(Event::Auth{route,result:Ok(())}).await;}
+                                Err((_,note))=>{let _=events.send(Event::Auth{route,result:Err(note)}).await;}
                             }
+                            Ok(String::new())
                         }
-                        Command::Cancel=>{pending=None;let _=events.send(Event::SignedOut(String::new())).await;Ok(String::new())}
                         Command::SignOut=>{
-                            pending=None;
                             pending_pair=None;
                             signed_owner=None;
                             // Revoke remotely first. Offline logout still forgets locally and reports the limit.
@@ -1846,26 +1803,6 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                         },_=>{}
                     }
                     let _=events.send(Event::Busy(false)).await;ctx.request_repaint();
-                }
-                if pending.as_ref().is_some_and(|p| Instant::now()>=p.next) {
-                    let p=pending.as_mut().unwrap();
-                    if Instant::now()>=p.expires {pending=None;let _=events.send(Event::SignedOut("Sign-in expired. Try again.".into())).await;ctx.request_repaint();continue;}
-                    p.next=Instant::now()+p.interval;
-                    match api.call(Method::POST,"/auth/device/token",Some(json!({"device_code":p.secret}))).await {
-                        Ok(data)=>{
-                            let token=data["access_token"].as_str().unwrap_or("");
-                            if token.len()!=64 || !token.bytes().all(|b|b.is_ascii_hexdigit()) {pending=None;let _=events.send(Event::SignedOut("Invalid account session".into())).await;}
-                            else {
-                                let note=vault::save(CREDENTIAL,token).err().unwrap_or_default();api.token=Some(token.into());pending=None;
-                                match api.snapshot().await {Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;},Err((status,note))=>{if status==StatusCode::UNAUTHORIZED{api.token=None;let _=vault::forget(CREDENTIAL);}let _=events.send(Event::SignedOut(note)).await;}}
-                            }
-                        }
-                        Err((_,code)) if code=="authorization_pending"=>{},
-                        Err((_,code)) if code=="slow_down"=>{p.interval+=Duration::from_secs(5);p.next=Instant::now()+p.interval;},
-                        Err((status,note)) if status.is_server_error()=>{let _=events.send(Event::Message(note)).await;},
-                        Err((_,note))=>{pending=None;let _=events.send(Event::SignedOut(note)).await;}
-                    }
-                    ctx.request_repaint();
                 }
                 if api.token.is_none() { pending_pair=None; pending_guest=None; signed_owner=None; next_friend_computers=Instant::now(); sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
                 if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
@@ -2428,6 +2365,5 @@ mod status_tests {
     fn strings() {
         assert_eq!(pairing_with("Office"), "Pairing with Office…");
         assert_eq!(NO_COMPUTERS, "No computers yet");
-        assert_eq!(SIGN_IN_CONFIRM, "Confirm this code in your browser");
     }
 }
