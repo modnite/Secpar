@@ -455,6 +455,12 @@ impl Panel {
                     ui.label(egui::RichText::new("Device access").strong());
                     self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
                     self.setting_toggle(ui,&config,"allow_clip","Allow clipboard sharing","Allow clipboard exchange with paired devices.");
+                    if let Some(ok) = self.settings["pad"]["ok"].as_bool() {
+                        ui.horizontal(|ui| {
+                            design::dot(ui, if ok { design::ACCENT } else { design::MUTED });
+                            ui.label(egui::RichText::new(self.settings["pad"]["text"].as_str().unwrap_or("")).size(12.).color(design::MUTED));
+                        });
+                    }
                 });
                 design::surface().inner_margin(10).show(&mut columns[1], |ui| {
                     ui.set_width(ui.available_width());

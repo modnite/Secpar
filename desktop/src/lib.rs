@@ -12,6 +12,7 @@ mod audio_worker;
 mod design;
 mod dialogs;
 mod files;
+pub mod gamepad;
 mod hosting;
 mod input;
 mod stream_menu;
@@ -249,6 +250,8 @@ struct App {
     cursor_shape: Option<(TextureHandle, [i32; 2])>,
     fullscreen: bool,
     focused: bool,
+    pads: gamepad::Runner,
+    pad_unsupported: bool,
     auto_capture_pending: bool,
     video_rect: Option<egui::Rect>,
     video_layer: Option<egui::LayerId>,
@@ -343,6 +346,8 @@ impl App {
             cursor_shape: None,
             fullscreen: false,
             focused: true,
+            pads: Default::default(),
+            pad_unsupported: false,
             auto_capture_pending: false,
             video_rect: None, video_layer: None, remote_keyboard: false, pointer_in_video: false,
             observed_fullscreen: None,
@@ -416,7 +421,7 @@ impl App {
         self.audio_route=audio_worker::Route::default();
         self.open_audio();
         self.clipboard=self.client.clipboard.then(secpar_clipboard::Bridge::start);
-        self.notice=None;self.connection_error=None;
+        self.notice=None;self.connection_error=None;self.pad_unsupported=false;
         self.stream_stats=None;
         let options = Options {
             audio: self.client.audio,
@@ -606,6 +611,8 @@ impl App {
                     }
                 }
                 Event::Cursor { x, y, visible } => self.cursor = (x, y, visible),
+                Event::PadSupport(ok) => self.pad_unsupported = !ok,
+                Event::Rumble(levels) => for (id, (lo, hi)) in levels.into_iter().enumerate() { self.pads.rumble(id as u8, lo, hi); },
                 Event::Ended(s) => {
                     self.files.end_background();
                     self.connection_error=if s=="Disconnected" {None}else{Some(s.clone())};
@@ -797,6 +804,15 @@ impl eframe::App for App {
                 self.send(Command::Stop);
                 self.stream_menu_open = false;
             }
+        }
+        // Controllers are read only while a stream is showing and this window has focus.
+        let pads_on = self.command.is_some() && self.texture.is_some() && self.focused;
+        self.pads.set_active(pads_on, { let ctx = ctx.clone(); move || ctx.request_repaint() });
+        if self.pad_unsupported && self.notice.is_none() && self.pads.connected() > 0 {
+            self.notice = Some("This computer has no virtual gamepad, so your controller is not passed. See Hosting on that computer.".into());
+        }
+        for message in self.pads.take() {
+            if pads_on || message["t"] == "pad.off" { self.send(Command::Input(message)); }
         }
         if self.command.is_some() {
             if self.awake.is_none() && !self.awake_tried {

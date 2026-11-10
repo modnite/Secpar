@@ -931,3 +931,19 @@ This list is a work record, not a claim that the app family is complete.
   the stream with an error. The abort itself was not reproduced here: this iHD does not
   abort. Real Android app on emulator-5556, HEVC, nine live size changes: host stays up
   and every size is right. Tools and numbers: test/linux-perf/README.md.
+
+## Controllers from physical pads (branch claude/gamepad, not released)
+
+Before this the Android app only had the on-screen pad, and neither desktop client read any
+physical controller. Now the Windows client reads XInput, the Linux client reads evdev and
+Android forwards Bluetooth and USB controllers in Screen, Remote and Gamepad modes. Details:
+docs/gamepad.md. The Windows host looks for ViGEmBus on every connection and Hosting says when
+it is missing. The desktop client shows a notice when a controller is plugged in and the host
+cannot create virtual pads. New `session::Event::Rumble` and `Event::PadSupport` carry the
+host's rumble and ability to the UI. The wire protocol is unchanged.
+Verified on real hosts: Windows XInput capture and rumble through ViGEmBus on this PC
+(desktop/tests/gamepad_windows.rs). Linux capture to the host's real uinput virtual pad and
+rumble back, with fake uinput pads on the OMV box (as root, test only).
+Android: unit tests, plus the debug app on emulator-5556 against this PC's Windows host. An injected
+gamepad key in Gamepad mode created a virtual pad on the host and leaving the screen removed it.
+Not verified: a physical controller of any kind, macOS, DualShock without a wrapper on Windows.

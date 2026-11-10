@@ -59,6 +59,7 @@ fun RemoteScreen(pcId: String, onBack: () -> Unit) {
     val session = rememberAgentSession(pcId)
     ModeScaffold(R.string.pcr_mode_remote, session, onBack) { state ->
         val send: (Msg) -> Unit = remember(session) { { m: Msg -> session?.send(m); Unit } }
+        PhysicalPadsEffect(send, session?.conn?.incoming, (state as? AgentState.Online)?.caps?.contains("pad") == true)
         RemoteBody(send)
     }
 }

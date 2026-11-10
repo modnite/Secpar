@@ -42,6 +42,10 @@ pub enum Event {
     AudioUnavailable(String),
     StreamInfo {width:u32,height:u32,fps:u32},
     Stats {rtt_ms:Option<u16>,mbps:f32,received_fps:f32},
+    /// Latest rumble (large, small motor) the host asked for, per controller id 0..=3.
+    Rumble([(u8,u8);4]),
+    /// Whether the host can create virtual controllers. Sent once, only when the host listed its abilities.
+    PadSupport(bool),
 }
 #[derive(Clone)]
 pub struct Options {
@@ -254,6 +258,7 @@ pub async fn run(
 ) -> Result<(), String> {
     let mut events=UiEvents::new(events);
     events.emit(Event::Paired(conn.computer.clone()))?;
+    if !conn.caps.is_empty(){events.emit(Event::PadSupport(conn.caps.iter().any(|c|c=="pad")))?;}
     events.emit(Event::Status("Finding a stream route".into()))?;
     let direct = conn.direct_host.clone();
     let discover_public = options.discover_public;
@@ -303,6 +308,7 @@ pub async fn run(
     let mut turn_started = false;
     let (turn_tx, mut turn_rx) = mpsc::channel::<Option<SocketAddrV4>>(1);
     let mut inputs = std::collections::VecDeque::new();
+    let mut rumble=[(0u8,0u8);4];
     let mut input_id = 0u64;
     let (mut stats_at,mut stats_bytes,mut stats_frames,mut rtt_known)=(Instant::now(),0u64,0u32,false);
     let result:Result<(),String>=async {loop{
@@ -352,6 +358,10 @@ pub async fn run(
                     }
                     "stream.cand"=>if let Some(c)=v["c"].as_str().and_then(|s|s.parse::<SocketAddr>().ok()).filter(SocketAddr::is_ipv4){if peer.targets.len()<32 && !peer.targets.contains(&c){peer.targets.push(c);peer.permit();}},
                     "stream.displays"=>events.emit(Event::Displays(v))?,
+                    "rumble"=>if let Some(slot)=v["id"].as_u64().and_then(|i|rumble.get_mut(i as usize)){
+                        *slot=(v["lo"].as_u64().unwrap_or(0).min(255) as u8,v["hi"].as_u64().unwrap_or(0).min(255) as u8);
+                        events.emit(Event::Rumble(rumble))?;
+                    },
                     "cursor.shape"=>{
                         if let(Some(encoded),Some(hx),Some(hy))=(v["png"].as_str().filter(|s|s.len()<=350_000),v["hx"].as_i64().and_then(|n|i32::try_from(n).ok()),v["hy"].as_i64().and_then(|n|i32::try_from(n).ok())) {
                             if let Ok(png)=base64::engine::general_purpose::STANDARD.decode(encoded){events.emit(Event::CursorShape{png,hotspot:[hx,hy]})?;}

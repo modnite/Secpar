@@ -3848,6 +3848,7 @@ dependencies = [
  "gstreamer-video",
  "image",
  "keyring",
+ "libc",
  "open",
  "openh264",
  "opus",

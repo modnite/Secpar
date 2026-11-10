@@ -164,6 +164,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val currentController by rememberUpdatedState(controller)
     val send: (Msg) -> Unit = { currentController.sendInput(it) }
     val desktop = remember { DesktopInput(send) }
+    com.pcremote.modes.PhysicalPadsEffect(send, session.conn.incoming, (agent as? AgentState.Online)?.caps?.contains("pad") == true)
     val activity = ctx as? com.pcremote.MainActivity
     val inPip = activity?.pipVisible == true
     DisposableEffect(activity, streaming?.w, streaming?.h) {

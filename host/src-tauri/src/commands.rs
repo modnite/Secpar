@@ -123,13 +123,21 @@ fn pairing_relay_url(base: &str, pc: &str, dev: &str, ticket: &[u8], now: u64) -
 pub struct ConfigView {
     config: Config,
     displays: Vec<crate::engine::capture::Display>,
+    pad: PadView,
+}
+
+#[derive(Serialize)]
+struct PadView {
+    ok: bool,
+    text: &'static str,
 }
 
 fn get_config(app: &App) -> ConfigView {
     let store = app.store.lock().unwrap();
     let mut config = store.config().clone();
     config.files_dir = store.files_dir().to_string_lossy().into_owned();
-    ConfigView { config, displays: crate::engine::capture::displays() }
+    let (ok, text) = crate::pad::status();
+    ConfigView { config, displays: crate::engine::capture::displays(), pad: PadView { ok, text } }
 }
 
 async fn set_config(app: &App, config: Config) -> Result<(), String> {

@@ -89,6 +89,8 @@ fun PadScreen(pcId: String, onBack: () -> Unit) {
         while (online) { sender.flush(SystemClock.uptimeMillis())?.let { session?.send(it) }; delay(8) }
     }
     DisposableEffect(session) { onDispose { session?.send(Msg.PadOff(0)) } }
+    // A physical controller is player 2 here: the on-screen pad keeps id 0.
+    PhysicalPadsEffect({ m -> session?.send(m) }, session?.conn?.incoming, online, firstId = 1)
     Rumble(session)
     val gyroUse = current.gyro
     GyroInput(gyroUse, sens) { x, y -> update { if (gyroUse == GyroUse.STEER) it.stick(true, x, it.ly / -32768f) else it.stick(false, x, y) } }

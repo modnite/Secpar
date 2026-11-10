@@ -12,16 +12,26 @@ use std::sync::{Arc, Mutex};
 pub struct Host {
     pub store: Arc<Mutex<Store>>,
     pub outgoing: Outgoing,
-    /// None when the ViGEmBus driver isn't installed.
-    pads: Option<Arc<dyn pad::Bus>>,
+    /// None until the ViGEmBus driver has been found. Looked up again on every connection, so
+    /// installing the driver later needs no restart.
+    pads: Mutex<Option<Arc<dyn pad::Bus>>>,
     lingering: pad::Lingering,
     pub net: Arc<Mutex<net::NetStatus>>,
 }
 
 impl Host {
     pub fn new(store: Arc<Mutex<Store>>) -> Self {
-        let pads = pad::ViGEm::connect().map(|b| Arc::new(b) as Arc<dyn pad::Bus>);
-        Host { store, outgoing: Outgoing::default(), pads, lingering: Default::default(), net: Arc::default() }
+        let host = Host { store, outgoing: Outgoing::default(), pads: Mutex::new(None), lingering: Default::default(), net: Arc::default() };
+        host.bus();
+        host
+    }
+
+    fn bus(&self) -> Option<Arc<dyn pad::Bus>> {
+        let mut pads = self.pads.lock().unwrap();
+        if pads.is_none() {
+            *pads = pad::ViGEm::connect().map(|b| Arc::new(b) as Arc<dyn pad::Bus>);
+        }
+        pads.clone()
     }
 }
 
@@ -35,7 +45,7 @@ impl Handlers for Host {
 
     fn caps(&self) -> Vec<String> {
         let mut c: Vec<String> = ["input", "power", "media", "files", "clip", "thumb", "net", "stream", "unlock", "fsbrowse"].map(String::from).to_vec();
-        if self.pads.is_some() {
+        if self.bus().is_some() {
             c.push("pad".into());
         }
         c
@@ -47,7 +57,7 @@ impl Handlers for Host {
 
     fn session(&self, device: &str, out: Outbox) -> Box<dyn Session> {
         let dir = self.store.lock().unwrap().files_dir();
-        let pads = self.pads.clone().map(|bus| {
+        let pads = self.bus().map(|bus| {
             let out = out.clone();
             Pads::new(bus, Box::new(move |id, lo, hi| {
                 out.send(ServerMsg::Rumble { id, lo, hi });

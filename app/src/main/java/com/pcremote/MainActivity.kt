@@ -144,7 +144,10 @@ class MainActivity : ComponentActivity() {
     var streamChords: ((com.pcremote.stream2.StreamChord) -> Unit)? = null
     private var chordKey: Int? = null
     var desktopMotion: ((android.view.MotionEvent) -> Boolean)? = null
+    /** Set by screens that can forward physical controllers (stream, Remote, Gamepad). */
+    var physicalPads: com.pcremote.modes.PhysicalPads? = null
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
+        (physicalPads?.let { com.pcremote.modes.PadInput.motion(it, event) } == true) ||
         (desktopCapture?.let { it.forwarding && !it.freePointer } == true && desktopMotion?.invoke(event) == true) || super.dispatchGenericMotionEvent(event)
 
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
@@ -156,7 +159,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) desktopCapture?.lostFocus() else desktopCapture?.gainedFocus()
+        if (!hasFocus) { desktopCapture?.lostFocus(); physicalPads?.releaseAll() } else desktopCapture?.gainedFocus()
         if (hasFocus) refreshWindowInsets()
     }
 
@@ -345,6 +348,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (physicalPads?.let { com.pcremote.modes.PadInput.key(it, event) } == true) return true
         val chords = streamChords
         if (event.keyCode == chordKey) {
             if (event.action == android.view.KeyEvent.ACTION_UP) chordKey = null
