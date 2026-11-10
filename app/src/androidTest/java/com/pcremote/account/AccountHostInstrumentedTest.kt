@@ -26,13 +26,8 @@ class AccountHostInstrumentedTest {
         val expiry = System.currentTimeMillis() / 1000 + 110
         val transport = AccountTransport { req ->
             val body = when {
-                req.url.endsWith("/auth/device") -> buildJsonObject {
-                    put("device_code", "d".repeat(64)); put("user_code", "ABCD2345")
-                    put("verification_uri_complete", "https://accounts.secpar.win/activate?code=ABCD2345")
-                    put("expires_in", 600); put("interval", 5)
-                }
-                req.url.endsWith("/auth/device/token") -> buildJsonObject {
-                    put("access_token", "a".repeat(64)); put("token_type", "Bearer"); put("expires_in", 3600)
+                req.url.endsWith("/v1/app/sign-in") -> buildJsonObject {
+                    put("token", "a".repeat(64)); put("expires_at", System.currentTimeMillis() / 1000 + 3600)
                 }
                 req.url.endsWith("/v1/me") -> buildJsonObject { put("id", owner); put("handle", "review-user") }
                 req.url.endsWith("/v1/computers") -> buildJsonArray { add(buildJsonObject {
@@ -67,7 +62,7 @@ class AccountHostInstrumentedTest {
                 })
             }
             withTimeout(10_000) { controller.state.filter { it.ready }.first() }
-            withContext(Dispatchers.Main) { controller.signIn() }
+            withContext(Dispatchers.Main) { controller.signIn("review@example.com", "correct horse") }
             val signedIn = withTimeout(15_000) { controller.state.filter { it.user != null && it.computers.isNotEmpty() }.first() }
             val opened = CompletableDeferred<String>()
             withContext(Dispatchers.Main) { controller.connect(signedIn.computers.single()) { opened.complete(it) } }
