@@ -346,7 +346,15 @@ impl Video {
         let err = |code: &str, msg: &str| ServerMsg::StreamError { code: code.into(), msg: msg.into() };
         crate::win::desk::wake_display(); // a display asleep from inactivity has nothing to capture
         let cap = SharedCapture::open(&p.display).ok_or_else(|| err("capture_failed", "the desktop can't be captured right now (locked?)"))?;
-        let (dev, ctx, luid, shown) = cap.device();
+        let (capture_dev, capture_ctx, luid, shown) = cap.device();
+        let (dev, ctx) = if capture::isolated_gpu() {
+            // Sunshine gives conversion/encoding their own device, avoiding DXGI
+            // capture's immediate-context lock while the encoder waits for output.
+            let (dev, ctx, _, adapter) = capture::device(&shown.id)
+                .ok_or_else(|| err("no_encoder", "the encoder GPU device could not be opened"))?;
+            if adapter != luid { return Err(err("no_encoder", "capture and encoder GPUs do not match")); }
+            (dev, ctx)
+        } else { (capture_dev, capture_ctx) };
         let avail = codecs_available(luid);
         let codec = p
             .codecs
@@ -481,7 +489,7 @@ impl Video {
                         conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
                     }
                     let timing = secpar_stream::timing::begin();
-                    if let Some(nv12) = conv.as_mut().and_then(|c| c.convert(src).ok()) {
+                    if let Some(nv12) = conv.as_mut().and_then(|c| c.convert_frame(src).ok()) {
                         secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
                         let timing = secpar_stream::timing::begin();
                         let force = sh.idr.swap(false, Ordering::Relaxed);
@@ -525,7 +533,7 @@ impl Video {
                     conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
                 }
                 let timing = secpar_stream::timing::begin();
-                let Some(nv12) = conv.as_mut().and_then(|c| c.convert(src).ok()) else { continue };
+                let Some(nv12) = conv.as_mut().and_then(|c| c.convert_frame(src).ok()) else { continue };
                 secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
                 let timing = secpar_stream::timing::begin();
                 let force = sh.idr.swap(false, Ordering::Relaxed);

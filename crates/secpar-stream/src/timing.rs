@@ -3,7 +3,7 @@
 use std::{cell::RefCell, sync::{Mutex, OnceLock}, time::{Duration, Instant}};
 
 #[derive(Clone, Copy)]
-pub enum Stage { Arrive, Submit, Decode, Decoded, Upload, Draw, Capture, Selected, Convert, Encode, Encoded, Packetize, Send, Sent }
+pub enum Stage { Arrive, Submit, Decode, Decoded, Upload, Draw, Capture, Selected, Convert, Encode, Encoded, Packetize, Send, Sent, CaptureTextureWait, EncoderTextureWait }
 impl Stage {
     fn label(self) -> &'static str {
         match self {
@@ -15,6 +15,7 @@ impl Stage {
             Self::Encoded=>"host.encoded.interval",
             Self::Packetize=>"host.packetize.duration", Self::Send=>"host.send.duration",
             Self::Sent=>"host.sent.interval",
+            Self::CaptureTextureWait=>"host.capture_texture.wait", Self::EncoderTextureWait=>"host.encoder_texture.wait",
         }
     }
 }
@@ -45,7 +46,7 @@ impl Series {
 static ENABLED: OnceLock<bool> = OnceLock::new();
 // A network task can migrate between Tokio threads. Its arrival clock must not.
 static ARRIVAL: OnceLock<Mutex<Series>> = OnceLock::new();
-const STAGES: usize = Stage::Sent as usize + 1;
+const STAGES: usize = Stage::EncoderTextureWait as usize + 1;
 thread_local! {static SERIES: RefCell<[Series;STAGES]> = RefCell::new(std::array::from_fn(|_|Series::default()));}
 pub fn enabled()->bool {*ENABLED.get_or_init(|| std::env::var("SECPAR_FRAME_TIMING").is_ok_and(|v|v=="1"))}
 /// The first event establishes the origin; it is not a zero-length sample.

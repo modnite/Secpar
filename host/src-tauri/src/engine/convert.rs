@@ -58,6 +58,8 @@ pub struct Convert {
     out: Vec<(ID3D11Texture2D, ID3D11VideoProcessorOutputView)>,
     next: usize,
     input: Option<(usize, ID3D11VideoProcessorInputView)>,
+    /// Per-encoder imports of immutable, leased capture textures.
+    imports: Vec<(usize, ID3D11Texture2D)>,
 }
 
 impl Convert {
@@ -111,8 +113,29 @@ impl Convert {
                 let textures: Vec<_> = out.iter().map(|(t, _)| t.clone()).collect();
                 super::convert_ps::Passes::new(dev, ctx, (iw, ih), (ow, oh), &textures).ok()
             };
-            Ok(Convert { dev: dev.clone(), ps, vdev, vctx, en, vp, out, next: 0, input: None })
+            Ok(Convert { dev: dev.clone(), ps, vdev, vctx, en, vp, out, next: 0, input: None, imports: Vec::new() })
         }
+    }
+
+    pub fn convert_frame(&mut self, src: &super::capture::FrameTexture) -> windows::core::Result<ID3D11Texture2D> {
+        let Some(handle) = src.shared_handle() else { return self.convert(&src.0) };
+        let key = src.0.as_raw() as usize;
+        let texture = match self.imports.iter().find(|(id, _)| *id == key) {
+            Some((_, texture)) => texture.clone(),
+            None => {
+                let device: ID3D11Device1 = self.dev.cast()?;
+                // SAFETY: source owns the NT handle throughout this call. The imported
+                // resource stays valid independently of the transport handle.
+                let texture: ID3D11Texture2D = unsafe { device.OpenSharedResource1(handle)? };
+                if self.imports.len() == 8 { self.imports.remove(0); }
+                self.imports.push((key, texture.clone()));
+                texture
+            }
+        };
+        // Keep GPU reads ordered against capture writes, independently of the
+        // immediate-context locks on the two D3D devices.
+        let _access = super::capture::TextureAccess::lock(&texture)?;
+        self.convert(&texture)
     }
 
     /// Converts `src` (BGRA, the input size) into the next NV12 texture of the ring.

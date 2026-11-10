@@ -87,7 +87,63 @@ pub struct GpuFrame {
     pub pointer: Option<Pointer>,
     pub shape: Option<Shape>,
 }
-pub struct FrameTexture(pub ID3D11Texture2D);
+pub struct FrameTexture(pub ID3D11Texture2D, Option<SharedHandle>);
+struct SharedHandle(windows::Win32::Foundation::HANDLE);
+impl Drop for SharedHandle {
+    fn drop(&mut self) {
+        // SAFETY: the NT handle is owned once; imported resources hold their own references.
+        let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+pub(crate) fn isolated_gpu() -> bool {
+    std::env::var("SECPAR_GPU_ISOLATION").as_deref() == Ok("1")
+}
+impl FrameTexture {
+    fn new(texture: ID3D11Texture2D) -> windows::core::Result<Self> {
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        // SAFETY: live texture, writable descriptor.
+        unsafe { texture.GetDesc(&mut desc) };
+        let handle = if desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 as u32 != 0 {
+            let resource: IDXGIResource1 = texture.cast()?;
+            // SAFETY: unnamed handle, local process only; closed by SharedHandle.
+            Some(SharedHandle(unsafe { resource.CreateSharedHandle(None,
+                DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0, windows::core::PCWSTR::null())? }))
+        } else { None };
+        Ok(Self(texture, handle))
+    }
+    pub(crate) fn shared_handle(&self) -> Option<windows::Win32::Foundation::HANDLE> {
+        self.1.as_ref().map(|handle| handle.0)
+    }
+    fn access(&self) -> windows::core::Result<Option<TextureAccess>> {
+        if self.1.is_some() { TextureAccess::acquire(&self.0, secpar_stream::timing::Stage::CaptureTextureWait).map(Some) } else { Ok(None) }
+    }
+}
+/// Sunshine's shared capture/encoder texture mutex uses key zero on both devices.
+pub(crate) struct TextureAccess(IDXGIKeyedMutex);
+impl TextureAccess {
+    pub(crate) fn lock(texture: &ID3D11Texture2D) -> windows::core::Result<Self> {
+        Self::acquire(texture, secpar_stream::timing::Stage::EncoderTextureWait)
+    }
+    fn acquire(texture: &ID3D11Texture2D, stage: secpar_stream::timing::Stage) -> windows::core::Result<Self> {
+        let mutex: IDXGIKeyedMutex = texture.cast()?;
+        // SAFETY: live keyed mutex. Inspect S_OK explicitly: WAIT_TIMEOUT is positive
+        // and must not be mistaken for ownership by HRESULT::ok().
+        let timing = secpar_stream::timing::begin();
+        let status = unsafe { (Interface::vtable(&mutex).AcquireSync)(mutex.as_raw(), 0, 500) };
+        secpar_stream::timing::elapsed(stage, timing);
+        if status.0 != 0 {
+            return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32),
+                format!("Shared capture texture wait failed ({status:?})")));
+        }
+        Ok(Self(mutex))
+    }
+}
+impl Drop for TextureAccess {
+    fn drop(&mut self) {
+        // SAFETY: constructed only after S_OK; balances acquisition on this device.
+        let _ = unsafe { self.0.ReleaseSync(0) };
+    }
+}
 impl std::ops::Deref for FrameTexture {
     type Target = ID3D11Texture2D;
     fn deref(&self) -> &Self::Target { &self.0 }
@@ -208,16 +264,28 @@ impl Duplicator for Dxgi {
                         desc.Usage = D3D11_USAGE_DEFAULT;
                         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE.0 as u32 | D3D11_BIND_RENDER_TARGET.0 as u32;
                         desc.CPUAccessFlags = 0;
-                        desc.MiscFlags = 0;
+                        desc.MiscFlags = if isolated_gpu() {
+                            (D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0) as u32
+                        } else { 0 };
                         let mut t = None;
                         if self.dev.CreateTexture2D(&desc, None, Some(&mut t)).is_err() {
                             let _ = self.dup.ReleaseFrame();
                             return Err(Lost);
                         }
-                        self.copy = t.map(|texture| Arc::new(FrameTexture(texture)));
+                        self.copy = t.and_then(|texture| FrameTexture::new(texture).ok()).map(Arc::new);
+                        if self.copy.is_none() {
+                            let _ = self.dup.ReleaseFrame();
+                            return Err(Lost);
+                        }
                     }
                     let copy = self.copy.clone().expect("created above");
-                    self.ctx.CopyResource(&copy.0, &src);
+                    {
+                        let _access = match copy.access() {
+                            Ok(access) => access,
+                            Err(_) => { let _ = self.dup.ReleaseFrame(); return Err(Lost); }
+                        };
+                        self.ctx.CopyResource(&copy.0, &src);
+                    }
                     f.tex = Some(copy);
                     f.capture_us = qpc_to_us(info.LastPresentTime);
                 }
@@ -305,4 +373,67 @@ mod tests {
         assert!(cap.next(Duration::ZERO).is_none());
         assert_eq!(opens.load(Ordering::SeqCst), 2);
     }
+
+    fn shared_test_texture(dev: &ID3D11Device) -> FrameTexture {
+        use windows::Win32::Graphics::Dxgi::Common::*;
+        let pixels: Vec<u8> = (0..64*64).flat_map(|_| [40,60,200,255]).collect();
+        let desc = D3D11_TEXTURE2D_DESC { Width:64, Height:64, MipLevels:1, ArraySize:1,
+            Format:DXGI_FORMAT_B8G8R8A8_UNORM, SampleDesc:DXGI_SAMPLE_DESC {Count:1,Quality:0},
+            Usage:D3D11_USAGE_DEFAULT, BindFlags:(D3D11_BIND_RENDER_TARGET.0|D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            MiscFlags:(D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0) as u32,
+            ..Default::default() };
+        let data = D3D11_SUBRESOURCE_DATA {pSysMem:pixels.as_ptr().cast(),SysMemPitch:256,..Default::default()};
+        let mut texture=None;
+        // SAFETY: initialized pixels outlive CreateTexture2D; GPU owns its copy.
+        unsafe {dev.CreateTexture2D(&desc,Some(&data),Some(&mut texture)).unwrap()};
+        FrameTexture::new(texture.unwrap()).unwrap()
+    }
+
+    #[test]
+    fn shared_texture_timeout_does_not_grant_foreign_device_ownership() {
+        let (a,_,_,_) = device("").expect("D3D11 device for shared texture test");
+        let (b,_,_,_) = device("").expect("second D3D11 device");
+        let source=shared_test_texture(&a);
+        let other:ID3D11Device1=b.cast().unwrap();
+        // SAFETY: source retains the NT handle and texture.
+        let imported:ID3D11Texture2D=unsafe {other.OpenSharedResource1(source.shared_handle().unwrap()).unwrap()};
+        let held=TextureAccess::lock(&source.0).unwrap();
+        assert!(TextureAccess::lock(&imported).is_err(),"timeout is not successful ownership");
+        drop(held);
+        drop(TextureAccess::lock(&imported).expect("acquires after producer releases"));
+        drop(TextureAccess::lock(&source.0).expect("producer can reuse after consumer releases"));
+    }
+
+    #[test]
+    fn shared_capture_converts_correctly_on_an_independent_encoder_device() {
+        let (a,source_ctx,_,_) = device("").expect("capture D3D11 device");
+        let (b,ctx,_,_) = device("").expect("encoder D3D11 device");
+        let source=shared_test_texture(&a);
+        {
+            let _write=TextureAccess::lock(&source.0).unwrap();
+            // SAFETY: submit initialization before handing off the shared resource.
+            unsafe {source_ctx.Flush()};
+        }
+        let mut converter=crate::engine::convert::Convert::new(&b,&ctx,(64,64),(64,64)).unwrap();
+        let nv12=converter.convert_frame(&source).unwrap();
+        // SAFETY: staging copy and paired map/unmap on the encoder device.
+        let sample=unsafe {
+            let mut desc=D3D11_TEXTURE2D_DESC::default();nv12.GetDesc(&mut desc);
+            desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;
+            desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ.0 as u32;desc.MiscFlags=0;
+            let mut staging=None;b.CreateTexture2D(&desc,None,Some(&mut staging)).unwrap();
+            let staging=staging.unwrap();ctx.CopyResource(&staging,&nv12);
+            let mut map=D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&staging,0,D3D11_MAP_READ,0,Some(&mut map)).unwrap();
+            let pixels=map.pData.cast::<u8>();let pitch=map.RowPitch as usize;
+            let sample=(*pixels.add(32*pitch+32),*pixels.add(80*pitch+32),*pixels.add(80*pitch+33));
+            ctx.Unmap(&staging,0);sample
+        };
+        assert!((sample.0 as i32-92).abs()<=3,"BT709 luma: {sample:?}");
+        assert!((sample.1 as i32-105).abs()<=3,"BT709 blue chroma: {sample:?}");
+        assert!((sample.2 as i32-190).abs()<=3,"BT709 red chroma: {sample:?}");
+        // Source remains reusable after the encoder's GPU reads.
+        drop(TextureAccess::lock(&source.0).unwrap());
+    }
+
 }
