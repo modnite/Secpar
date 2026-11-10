@@ -926,8 +926,15 @@ impl eframe::App for App {
         }
         if self.command.is_none() {
             if let Some(grant)=self.account.guest_grant.take() {
-                self.computer_account=None;self.owned_connecting=None;
-                self.connect_with(ctx,None,Some(grant));
+                if grant.permissions == ["files".to_string()] {
+                    // A request made from the card's Files entry: open the Files page, not a stream.
+                    let (id, name) = (grant.pc.clone(), grant.name.clone());
+                    self.files.open(&id, &name, None, files::Source::Guest(grant));
+                    self.page = Page::Files;
+                } else {
+                    self.computer_account=None;self.owned_connecting=None;
+                    self.connect_with(ctx,None,Some(grant));
+                }
             }
         } else { self.account.guest_grant=None; }
         if self.command.is_none() {

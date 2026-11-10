@@ -81,6 +81,8 @@ pub fn owned_source(connection: OwnedConnection) -> (String, String, Source) {
 pub enum Source {
     Saved(Computer),
     Pair(Pairing),
+    /// A friend's computer, with a grant for the files permission. It works once.
+    Guest(crate::account::Grant),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -536,6 +538,7 @@ impl Panel {
                         }
                     }
                     Source::Pair(pairing) => Connected::pair_lan_first(pairing, &device).await,
+                    Source::Guest(grant) => Connected::guest(&grant.relay, &grant.pc, &grant.grant, &grant.name).await,
                 };
                 match connected {
                     Ok(connected) => {

@@ -510,8 +510,23 @@ impl Panel {
             let status = format!("@{} · {}", computer.owner_handle, computer.access());
             let enabled = !self.busy && !self.session_open;
             let preview = self.textures.get(&computer.id).cloned();
-            let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: preview.as_ref(), connect: Some(enabled), menu: None });
-            if clicked {
+            let mut files = false;
+            let mut menu = |ui: &mut eframe::egui::Ui| {
+                ui.menu_button("…", |ui| {
+                    if ui.add_enabled(enabled, eframe::egui::Button::new("Send files")).clicked() {
+                        files = true;
+                        ui.close();
+                    }
+                });
+            };
+            let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: preview.as_ref(), connect: Some(enabled), menu: Some(&mut menu) });
+            if files {
+                // Browsing a friend's disks is never allowed. Sending files to them is, with the files permission.
+                let owner = computer.owner_handle.clone();
+                if self.tx.try_send(Command::RequestGuest { computer, permissions: vec!["files".to_string()] }).is_ok() {
+                    self.guest_waiting = Some(owner);
+                }
+            } else if clicked {
                 self.guest_choice = Some((computer, PERMISSION_DEFAULTS));
             }
         }
