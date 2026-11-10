@@ -7,6 +7,8 @@ use eframe::egui::{self, Color32, RichText};
 const BUTTON: f32 = 144.;
 /// Width kept for a trailing menu button.
 const MENU: f32 = 40.;
+/// The menu button as drawn, measured in a screenshot. A card without a menu leaves this much room.
+const MENU_DRAWN: f32 = 38.;
 const MARGIN: f32 = 8.;
 const NAME: f32 = 14.;
 const SMALL: f32 = 12.;
@@ -35,7 +37,8 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
         } else {
             ui.fonts_mut(|f| f.layout_no_wrap(card.platform.into(), egui::FontId::proportional(SMALL), design::MUTED).size().x) + gap
         };
-        let right = platform_w + if card.connect.is_some() { BUTTON + gap } else { 0. } + if card.menu.is_some() { MENU + gap } else { 0. };
+        // Every card keeps the slot of the menu button, used or not, so Connect sits in the same place on all of them.
+        let right = platform_w + if card.connect.is_some() { BUTTON + gap } else { 0. } + MENU + gap;
         let thumb = if card.preview.is_some() { previews::WIDTH + gap } else { 0. };
         let text_w = (ui.available_width() - thumb - 8. - gap - right).max(MIN_TEXT);
         let name_h = ui
@@ -62,6 +65,8 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(menu) = card.menu {
                     menu(ui);
+                } else {
+                    ui.add_space(MENU_DRAWN + ui.spacing().item_spacing.x);
                 }
                 if let Some(enabled) = card.connect {
                     clicked = ui.add_enabled(enabled, design::primary("Connect")).clicked();
