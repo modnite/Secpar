@@ -70,6 +70,8 @@ pub struct Options {
     pub audio: bool,
     /// Optional nonblocking audio delivery independent of UI event consumption.
     pub audio_sink: Option<Arc<dyn Fn(Vec<u8>)+Send+Sync>>,
+    /// Optional nonblocking decoder delivery independent of UI event consumption.
+    pub video_sink: Option<Arc<dyn Fn(VideoFrame)+Send+Sync>>,
     pub clipboard: bool,
 }
 impl Default for Options {
@@ -82,6 +84,7 @@ impl Default for Options {
             discover_public: true,
             audio: true,
             audio_sink: None,
+            video_sink: None,
             clipboard: true,
         }
     }
@@ -402,7 +405,7 @@ pub async fn run(
                 if high_seq.is_none() && matches!(h.typ,Type::Video|Type::Fec){report_base=h.seq;high_seq=Some(h.seq);}
                 if let Some(high)=high_seq.as_mut(){*high=(*high).max(h.seq);received=received.saturating_add(1);}
                 match h.typ{
-                    Type::Video|Type::Fec=>if let Some(frame)=r.assembler.push(h,plain,Instant::now()){last_frame=frame.id;stats_frames+=1;events.emit(Event::Video(frame))?;},
+                    Type::Video|Type::Fec=>if let Some(frame)=r.assembler.push(h,plain,Instant::now()){last_frame=frame.id;stats_frames+=1;secpar_stream::timing::mark(secpar_stream::timing::Stage::Arrive);if let Some(sink)=&options.video_sink {sink(frame);}else{events.emit(Event::Video(frame))?;}},
                     Type::Audio if plain.len()>8 => {
                         let packet=plain[8..].to_vec();
                         if let Some(sink)=&options.audio_sink{sink(packet);}

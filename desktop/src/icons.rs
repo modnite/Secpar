@@ -2,7 +2,7 @@
 //! assets/icons/lucide. Rasterized from SVG; tinted after DPI-aware downsampling.
 use eframe::egui::{self,Color32,Rect,TextureHandle,TextureOptions};
 #[derive(Clone,Copy,Debug)]
-pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back,Check,Chevron}
+pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back,Check,Chevron,Keyboard,Mouse}
 impl Icon {
     fn png(self)->&'static [u8] {match self {
         Self::Window=>include_bytes!("../../assets/icons/lucide/png/maximize.png"),
@@ -17,6 +17,8 @@ impl Icon {
         Self::Back=>include_bytes!("../../assets/icons/lucide/png/arrow-left.png"),
         Self::Check=>include_bytes!("../../assets/icons/lucide/png/check.png"),
         Self::Chevron=>include_bytes!("../../assets/icons/lucide/png/chevron-right.png"),
+        Self::Keyboard=>include_bytes!("../../assets/icons/lucide/png/keyboard.png"),
+        Self::Mouse=>include_bytes!("../../assets/icons/lucide/png/mouse.png"),
     }}
 }
 pub fn paint(ui:&egui::Ui,kind:Icon,rect:Rect,tint:Color32) {
@@ -31,4 +33,11 @@ pub fn paint(ui:&egui::Ui,kind:Icon,rect:Rect,tint:Color32) {
         ui.ctx().data_mut(|d|d.insert_temp(id,texture.clone()));texture
     });
     ui.painter().image(texture.id(),rect,Rect::from_min_max(egui::pos2(0.,0.),egui::pos2(1.,1.)),tint);
+}
+
+pub fn status(ui:&mut egui::Ui,kind:Icon,label:&str,allowed:bool) {
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(18.,18.),egui::Sense::hover());
+    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Label,true,label));
+    response.on_hover_text(label);
+    paint(ui,kind,rect,if allowed{crate::design::ACCENT}else{crate::design::MUTED});
 }

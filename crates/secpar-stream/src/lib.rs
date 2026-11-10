@@ -4,6 +4,7 @@ pub mod crypt;
 pub mod fec;
 pub mod frame;
 pub mod header;
+pub mod timing;
 
 pub use crypt::{Crypt, Dir};
 pub use header::{Header, Type};

@@ -59,3 +59,19 @@ its own layout. Auto-repeat is not resent, as before: the host keeps the key dow
 - A per-session "keyboard disabled" state does not exist in the protocol yet. The hook
   and the window path read one function (`App::keyboard_allowed`) so it has a single place
   to change.
+
+
+## System shortcuts on Wayland
+
+On a supported compositor, Send system shortcuts to the host uses the standard
+keyboard-shortcuts-inhibit protocol for this app's surface. Native key ordering
+preserves Meta, Meta+E and Alt+Tab. The host's existing physical-key mapping is used
+in reverse, including left and right modifiers. This does not grab a global keyboard.
+
+Inhibition applies only to a focused stream with keyboard permission. Local menus,
+focus loss and disconnect return shortcuts to the local desktop. The configured
+Secpar escape chord stays local. X11 forwarding is unchanged.
+
+The private KDE test verifies native messages, both fullscreen escape directions
+and returning shortcuts to the local menu. It uses synthetic input in its own
+virtual session. Physical desktop/laptop acceptance is a separate check.

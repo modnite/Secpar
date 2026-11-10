@@ -73,3 +73,21 @@ Android has no push service here. Turning on Notify me of requests starts a fore
 A friend with the view permission may subscribe to thumbnails (`thumb.sub`, listed as `thumb` in `welcome.caps`). A session that holds only `view` and never starts a stream is a preview. Clients use one for the card of a friend set to connect at any time. The host does not tell its owner about a preview. It announces the friend when they start a stream. A preview gives way to a real connection, from the same friend or from another when all three seats are taken, and the host frees one seat.
 
 Browsing the host's disks (`fs.list`, `fs.get`) is never allowed for a friend. A friend with the `files` permission can send files to the host and receive files the host offers. The Files page of a friend's computer is therefore an upload page.
+
+
+## Friends page controls
+
+Sign in and sign out on Computers. Friends keeps Refresh. Android separates friend
+requests, connection requests and accepted friends. Search has its own expandable
+section. Visibility and notification switches are in Friend settings.
+
+The glyphs beside an accepted friend's name show keyboard access, mouse access and
+connection policy. Accent means allowed; muted means blocked or approval required.
+A check means connect any time. A question mark means ask first. Hover or long-press
+for a label. The permission menu keeps the existing controls and server checks.
+
+Windows, Linux and Android read the same `/v1/friend-computers` directory. Desktop
+refreshes it every20 seconds and Android every30 seconds while the home UI is active.
+A host must send the sharing, relay and computer identity fields introduced after
+3.16.8. Pairing by link does not create that account directory entry. Discovery still
+requires an accepted friendship, an online host and sharing enabled.

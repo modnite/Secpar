@@ -92,7 +92,10 @@ fn draw(shared: &mut Shared, gl: &Arc<glow::Context>) -> Result<(), String> {
         }
         let resources = shared.gl.as_mut().unwrap();
         if let Some(picture) = shared.pending.take() {
+            let began=secpar_stream::timing::begin();
             upload(gl, resources, &picture);
+            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Upload,began);
+            secpar_stream::timing::mark(secpar_stream::timing::Stage::Draw);
         }
         if resources.size == [0, 0] {
             return Ok(());

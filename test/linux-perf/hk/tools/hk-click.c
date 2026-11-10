@@ -22,11 +22,13 @@ static void global_remove(void *data, struct wl_registry *reg, uint32_t name) {}
 static const struct wl_registry_listener listener = {global, global_remove};
 
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: hk-click X Y\n");
+    int chord_mode = argc >= 3 && strcmp(argv[1], "chord") == 0;
+    int key_mode = argc == 4 && strcmp(argv[1], "key") == 0;
+    if (argc != 3 && !key_mode && !chord_mode) {
+        fprintf(stderr, "usage: hk-click X Y | hk-click key EVDEV_CODE DOWN\n");
         return 2;
     }
-    double x = atof(argv[1]), y = atof(argv[2]);
+    double x = key_mode ? 0 : atof(argv[1]), y = key_mode ? 0 : atof(argv[2]);
     struct wl_display *display = wl_display_connect(NULL);
     if (!display) {
         fprintf(stderr, "no wayland display\n");
@@ -40,6 +42,23 @@ int main(int argc, char **argv) {
         return 1;
     }
     org_kde_kwin_fake_input_authenticate(fake, "hk-click", "headless test harness");
+    if (chord_mode) {
+        for (int i=2; i<argc; i++) {
+            org_kde_kwin_fake_input_keyboard_key(fake, (uint32_t)strtoul(argv[i], NULL, 10), WL_KEYBOARD_KEY_STATE_PRESSED);
+            wl_display_roundtrip(display); usleep(100000);
+        }
+        for (int i=argc-1; i>=2; i--) {
+            org_kde_kwin_fake_input_keyboard_key(fake, (uint32_t)strtoul(argv[i], NULL, 10), WL_KEYBOARD_KEY_STATE_RELEASED);
+            wl_display_roundtrip(display); usleep(100000);
+        }
+        return 0;
+    }
+    if (key_mode) {
+        org_kde_kwin_fake_input_keyboard_key(fake, (uint32_t)strtoul(argv[2], NULL, 10),
+            atoi(argv[3]) ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+        wl_display_roundtrip(display);
+        return 0;
+    }
     org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(x), wl_fixed_from_double(y));
     wl_display_roundtrip(display);
     usleep(150000);

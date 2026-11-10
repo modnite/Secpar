@@ -2,6 +2,33 @@
 
 Development tools. Not part of the product.
 
+## Client and Windows-host frame timing
+
+Set `SECPAR_FRAME_TIMING=1` before starting a local review build. It is off by default.
+Every 300 samples it writes interval or duration histograms to stderr. No video,
+clipboard text, account identity or connection credentials are logged.
+
+Stages: host capture, selected encoder input, colour conversion, encoding and
+encoded output; client complete-frame arrival, decoder submission, decode time,
+decoded output, texture upload time and fresh-frame draw interval. Arrival uses one
+process clock even when Tokio changes threads. Host counters are per capture/encoder
+thread. Measure one client stream at a time. Histograms use 0.5 ms bins; reported
+percentiles are bin lower bounds. The final bin includes intervals of 255.5 ms or
+longer. `max_us` preserves the longest hitch.
+
+The draw measurement is when the GL callback consumes a new texture. It is not a
+swap-completion or display-scanout timestamp. A virtual display cannot establish
+physical Wayland refresh pacing. Compare host and client interval distributions;
+do not subtract timestamps between unsynchronised computers.
+
+`sh test/linux-perf/frame-pacing.sh /absolute/secpar-desktop-review output.log`
+generates 720p60 H.264, opens the real software decoder/GL path in Xvfb for 16 seconds
+and checks that measurements exist. It uses a temporary profile and never connects
+to a host. The binary needs `--features ui-review`. This fixture checks the timing
+path; it does not prove the user's laptop or NVIDIA hardware performs correctly.
+
+## Linux-host measurements
+
 They run the real Linux host against a headless KDE Plasma session in a container on a machine with an Intel GPU.
 `hk/` builds the session image (KWin on a virtual output, PipeWire, the KDE portal, an auto approver for the consent
 dialog, a click helper). `sync.sh` copies the sources to the build machine.

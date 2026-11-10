@@ -281,9 +281,25 @@ pub(crate) fn evdev_key(vk: u32) -> Option<i32> {
         _ => return None,
     })
 }
+/// Inverse of the host's physical-key mapping, shared with the Wayland client.
+/// Prefer left/right modifier identities over their generic Windows aliases.
+pub fn virtual_key(code:u32)->Option<u16> {
+    [0xA0u32,0xA1,0xA2,0xA3,0xA4,0xA5].into_iter().chain(1..=255)
+        .find(|vk|evdev_key(*vk)==Some(code as i32)).map(|vk|vk as u16)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inverse_key_mapping_preserves_physical_keys_and_modifier_sides() {
+        for (code,vk) in [(125,0x5B),(126,0x5C),(29,0xA2),(97,0xA3),(56,0xA4),(100,0xA5),(42,0xA0),(54,0xA1),(18,0x45),(15,0x09)] {
+            assert_eq!(virtual_key(code),Some(vk));
+        }
+        for vk in 1..=255 {if let Some(code)=evdev_key(vk) {let inverse=virtual_key(code as u32).unwrap();assert_eq!(evdev_key(inverse as u32),Some(code));}}
+        assert_eq!(virtual_key(u32::MAX),None);
+    }
+
     #[test]
     fn physical_modifiers_arrows_and_oem_keys_translate() {
         assert_eq!(evdev_key(0xa3), Some(97));

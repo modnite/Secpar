@@ -56,8 +56,7 @@ Distribution: keep debug/test builds local; publish only optimized release-profi
 packages with no debug binaries or test fixtures. Use x.x.x versions: first number
 for major milestones, second for features and bug fixes, third for minor fixes and
 visual polish. Preserve updater compatibility from the old preview versions.
-The user explicitly permits root to install and launch new Windows releases on
-this PC. Preserve PC Remote/Sunshine and other independent connections; subagents
+Ask before installing or launching a new Windows release on this PC. Preserve PC Remote/Sunshine and other independent connections; subagents
 must not modify running installations. Conserve agent usage; no more spawning
 without a new explicit need/authorization.
 
@@ -119,39 +118,18 @@ as the source for UI symbols. Prefer original library assets with a pinned versi
 and license; never improvise icons from text characters or ad hoc painter strokes.
 Use a consistent family/weight/size across menus. Secpar triangle is approved brand
 art, not a generic UI glyph. User rejects current hand-drawn desktop menu symbols.
-Linux hardware playback remains below Moonlight after3.11.0. Software is the known
-smooth workaround; fallback is NOT proof that hardware rendering is fixed.
 
-Streaming architecture correction,2026-11-07: user reports720p also hitches with
-BOTH decoders; never mark it smooth60fps or imply hardware choice solves this.
-User explicitly requests using mature Artemis/Apollo/Moonlight/Sunshine code
-DIRECTLY instead of continuing the custom PRS streaming engine. Prioritize an
-upstream engine migration while retaining Secpar accounts, ownership, UI, automatic
-updates and one-app-per-OS packaging (Android client-only). Park the bespoke
-VA/EGL renderer work; do not spend more building a parallel custom media stack.
-Preserve the installed working connection while developing/testing replacements.
 
-2026-11-07: choose the better upstream streaming implementation based on code,
-platform support and validation; no requirement to prefer Artemis/Apollo by name.
-Selected migration baseline Moonlight Qt6.2.0, Moonlight Android12.2 and Sunshine
-2026.914.233613; keep Artemis/Apollo as feature references. Selection is not a
-claim of measured parity on X250/S23. Keep client devices awake throughout active
-remote sessions on ALL OSes and release sleep inhibition on disconnect. Android
-PiP belongs only to the active stream; launcher, computer list and settings must
-not enter PiP, even via desktop-window controls. Current MainActivity declares
-PiP support; use a separate stream activity in migration rather than merely
-switching auto-enter off on the launcher. This restriction is not yet shipped.
+Current engineering baseline,2026-11-10: the desktop product is one integrated
+Rust application. Desktop UI/client code is in desktop/ and hosting code is in
+host/src-tauri and crates/secpar-host-linux. The earlier separate upstream-worker
+prototype is not the production integration path. Use the latest released source
+and docs/delivery-status.md when resuming; older migration notes are historical.
+Keep desktop layout aligned with the Android client: three main tabs, narrow
+vertical cards and full-width settings groups. Android is a portrait list and a
+landscape grid. Linux Wayland system shortcuts belong to the focused stream and
+return to the local desktop for local menus or focus loss. Preserve the existing
+escape chord and host-side guest permission enforcement.
 
-Usage handover instruction,2026-11-07: user requests FULL-project Claude handover
-near10% remaining in the current five-hour window. Use get_usage_limits primary
-usedPercent, not goal/context budget. Around90% used, checkpoint/push code and
-update docs/claude-handover.md with exact current state and a startup prompt.
-Keep that handover current at milestones; do not burn agents or repeat completed
-work. At latest check71% was used (29% remaining), threshold not yet reached.
-
-2026-11-07 usage handover: user requests FULL-project Claude handover near10%
-remaining in the five-hour window. Read docs/claude-handover.md FIRST. Active
-implementation is sibling secpar-upstream-engine, branch feat/upstream-streaming-migration.
-Latest usage87% used /13% remaining. Checkpoint pushed at2cd50eb. Do not restart
-completed investigations or resume the parked bespoke renderer. Preserve all
-installed hosts/connections and keep debug builds local.
+Keep personal handovers, operational notes and machine-specific continuation
+instructions local and untracked. Publish code, licenses and product documentation.

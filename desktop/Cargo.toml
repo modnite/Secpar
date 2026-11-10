@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "3.17.1"
+version = "3.18.0"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
@@ -76,6 +76,9 @@ path = "src/review.rs"
 required-features = ["ui-review"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "0.6.2"
+wayland-client = { version = "=0.31.15", features = ["system", "dlopen"] }
+wayland-protocols = { version = "=0.32.13", features = ["client", "unstable"] }
 secpar-host-linux = { path = "../crates/secpar-host-linux" }
 dbus = "0.9"
 libc = "0.2"

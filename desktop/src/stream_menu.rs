@@ -123,7 +123,7 @@ impl App {
                             for preference in [video::Preference::Automatic,video::Preference::Software,video::Preference::HARDWARE] {
                                 if preference==video::Preference::HARDWARE && video::hardware_available(ctx)!=Some(true){continue;}
                                 if row(ui,Icon::Decoder,preference.label(),"",false,self.client.decoder==preference,false).clicked(){
-                                    if self.client.decoder!=preference {self.client.decoder=preference;self.client.save();self.decoder=None;self.client.active_decoder=None;self.send(Command::Keyframe);}
+                                    if self.client.decoder!=preference {self.client.decoder=preference;self.client.save();self.decoder=None;self.ensure_video_decoder(ctx);self.client.active_decoder=None;self.send(Command::Keyframe);}
                                     self.menu_page=0;
                                 }
                             }

@@ -62,6 +62,10 @@ enum DecodeError { Invalid, Dimensions, Device }
 struct DecodeBudget { limit:Duration, slow:u8 }
 impl DecodeBudget {
     fn new(fps:u32)->Self {Self {limit:Duration::from_secs_f64(1.5/fps.clamp(1,240) as f64),slow:0}}
+    fn set_rate(&mut self,fps:u32) {
+        let limit=Self::new(fps).limit;
+        if self.limit!=limit {self.limit=limit;self.slow=0;}
+    }
     fn exceeded(&mut self,elapsed:Duration)->bool {
         self.slow=if elapsed>self.limit {self.slow.saturating_add(1)}else{0};
         self.slow>=3
@@ -129,11 +133,13 @@ struct State {
     stopped: bool,
     /// The decoder is still being created (a hardware decoder takes tens of milliseconds).
     warming: bool,
+    fps:u32,
 }
 /// Frames kept while the decoder starts: about two seconds, the newest keyframe onward.
 const WARMING_LIMIT: usize = 120;
 impl State {
     fn submit(&mut self, frame: VideoFrame) {
+        if self.stopped {return;}
         if self.warming {
             // Everything before the newest keyframe is useless to a decoder that has seen nothing.
             if frame.header.keyframe {
@@ -167,6 +173,25 @@ pub struct Output {
     pub error: Option<String>,
     pub backend: Option<&'static str>,
 }
+#[derive(Clone)]
+struct Submitter {state:Arc<(Mutex<State>,Condvar)>}
+impl Submitter {
+    fn submit(&self,frame:VideoFrame) {
+        secpar_stream::timing::mark(secpar_stream::timing::Stage::Submit);
+        let (lock,ready)=&*self.state;lock.lock().unwrap().submit(frame);ready.notify_one();
+    }
+}
+#[derive(Clone,Default)]
+pub struct Route(Arc<Mutex<Option<Submitter>>>);
+impl Route {
+    pub fn output(&self,worker:Option<&Worker>) {*self.0.lock().unwrap()=worker.map(|worker|Submitter{state:worker.state.clone()});}
+    pub fn sink(&self)->Arc<dyn Fn(VideoFrame)+Send+Sync> {
+        let route=self.clone();Arc::new(move|frame| {
+            let target=route.0.lock().unwrap().clone();
+            if let Some(target)=target {target.submit(frame);}
+        })
+    }
+}
 pub struct Worker {
     state: Arc<(Mutex<State>, Condvar)>,
     thread: Option<JoinHandle<()>>,
@@ -184,7 +209,7 @@ impl Worker {
         Self::spawn_at_rate(ctx,60,create)
     }
     fn spawn_at_rate(ctx:Context,fps:u32,create:impl FnOnce()->Result<Backend,()>+Send+'static)->Self {
-        let state = Arc::new((Mutex::new(State { waiting_key: true, warming: true, ..Default::default() }), Condvar::new()));
+        let state = Arc::new((Mutex::new(State { waiting_key: true, warming: true, fps, ..Default::default() }), Condvar::new()));
         let shared = state.clone();
         let thread = std::thread::spawn(move || {
             let (lock, ready) = &*shared;
@@ -210,17 +235,21 @@ impl Worker {
             // Until the decoder produced a picture it can only start on parameter sets.
             let mut started=false;
             loop {
-                let (frame, generation) = {
+                let (frame, generation, rate) = {
                     let state = lock.lock().unwrap();
                     let mut state = ready.wait_while(state, |s| s.queue.is_empty() && !s.stopped).unwrap();
                     if state.stopped { break; }
-                    (state.queue.pop_front().unwrap(), state.generation)
+                    (state.queue.pop_front().unwrap(), state.generation, state.fps)
                 };
+                budget.set_rate(rate);
                 let began=Instant::now();
+                let timing=secpar_stream::timing::begin();
                 let codec=frame.header.codec;
                 let mut decoded = if cfg!(windows) && decoder.is_hardware() && !started && !nal::has_parameter_sets(codec,&frame.data) {
                     Err(DecodeError::Invalid)
                 } else {decoder.decode(&frame.data,codec)};
+                secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Decode,timing);
+                if matches!(decoded,Ok(Some(_))) {secpar_stream::timing::mark(secpar_stream::timing::Stage::Decoded);}
                 if decoder.is_hardware() && budget.exceeded(began.elapsed()) {
                     // A small capability sample proves compatibility, not real
                     // stream throughput. Include native decode and GPU readback.
@@ -270,11 +299,8 @@ impl Worker {
         });
         Self { state, thread: Some(thread) }
     }
-    pub fn submit(&self, frame: VideoFrame) {
-        let (lock, ready) = &*self.state;
-        lock.lock().unwrap().submit(frame);
-        ready.notify_one();
-    }
+    pub fn submit(&self, frame: VideoFrame) {Submitter{state:self.state.clone()}.submit(frame);}
+    pub fn set_frame_rate(&self,fps:u32) {self.state.0.lock().unwrap().fps=fps;}
     pub fn output(&self) -> Output {
         let mut state = self.state.0.lock().unwrap();
         let request_key = state.request_key && state.key_requested.is_none_or(|at| at.elapsed() >= Duration::from_millis(250));
@@ -295,6 +321,41 @@ impl Drop for Worker {
 mod tests {
     use super::*;
     use secpar_stream::frame::{Codec, FrameHeader};
+    #[test]
+    fn decoder_route_runs_without_ui_polling_and_keeps_sessions_separate() {
+        use openh264::{encoder::Encoder,formats::{RgbSliceU8,YUVBuffer}};
+        let rgb:Vec<u8>=(0..128*128).flat_map(|_|[40,200,20]).collect();
+        let yuv=YUVBuffer::from_rgb_source(RgbSliceU8::new(&rgb,(128,128)));
+        let bytes=Encoder::new().unwrap().encode(&yuv).unwrap().to_vec();
+        let make_frame=|id|VideoFrame{id,header:FrameHeader{len:bytes.len() as u32,capture_us:0,keyframe:true,codec:Codec::H264},data:bytes.clone()};
+        let read=|worker:&Worker| {
+            let deadline=Instant::now()+Duration::from_secs(2);
+            loop {if let Some(image)=worker.output().image {break image;}
+                assert!(Instant::now()<deadline,"The sink did not deliver to the real decoder");std::thread::sleep(Duration::from_millis(2));}
+        };
+        let first=Worker::new(Context::default(),Preference::Software);
+        let first_route=Route::default();first_route.output(Some(&first));let old_sink=first_route.sink();
+        old_sink(make_frame(1));
+        assert_eq!(read(&first).size,[128,128]);
+        let second=Worker::new(Context::default(),Preference::Software);
+        let second_route=Route::default();second_route.output(Some(&second));
+        first_route.output(None);old_sink(make_frame(2));
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(second.output().image.is_none(),"An old session fed the new connection");
+        let sink=second_route.sink();sink(make_frame(3));
+        assert_eq!(read(&second).size,[128,128]);
+        drop(second);sink(make_frame(4)); // A stale callback must not keep the worker thread alive.
+    }
+    #[test]
+    fn rate_negotiation_changes_the_budget_without_preserving_an_old_slow_run() {
+        let mut budget=DecodeBudget::new(60);
+        for _ in 0..2 {assert!(!budget.exceeded(Duration::from_millis(35)));}
+        budget.set_rate(30);
+        for _ in 0..10 {assert!(!budget.exceeded(Duration::from_millis(35)));}
+        budget.set_rate(60);
+        for _ in 0..2 {assert!(!budget.exceeded(Duration::from_millis(35)));}
+        assert!(budget.exceeded(Duration::from_millis(35)));
+    }
     #[test]
     fn hardware_budget_ignores_a_single_spike_but_rejects_sustained_slow_decode() {
         let mut budget=DecodeBudget::new(60);

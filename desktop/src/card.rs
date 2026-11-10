@@ -28,6 +28,7 @@ pub struct Card<'a> {
 
 /// Draws the card. Returns true when Connect was clicked.
 pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
+    if ui.available_width()<520. {return vertical(ui,card);}
     let mut clicked = false;
     design::surface().inner_margin(MARGIN as i8).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -76,6 +77,36 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
                 }
             });
         });
+    });
+    clicked
+}
+
+/// Android's card order: identity, preview, then the connection action.
+fn vertical(ui:&mut egui::Ui,mut card:Card)->bool {
+    let mut clicked=false;
+    design::surface().inner_margin(12).show(ui,|ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y=8.;
+        ui.horizontal_top(|ui| {
+            design::dot(ui,card.status.map_or(design::ACCENT,|(_,color)|color));
+            let platform=ui.fonts_mut(|fonts|fonts.layout_no_wrap(card.platform.into(),egui::FontId::proportional(SMALL),design::MUTED).size().x);
+            let right=platform+if card.menu.is_some(){MENU}else{0.}+ui.spacing().item_spacing.x;
+            let width=(ui.available_width()-right).max(MIN_TEXT);
+            ui.allocate_ui_with_layout(egui::vec2(width,36.),egui::Layout::top_down(egui::Align::Min),|ui| {
+                ui.set_width(width);
+                ui.add(egui::Label::new(RichText::new(card.name).size(NAME).strong()).wrap());
+                if let Some((status,_))=card.status {ui.add(egui::Label::new(RichText::new(status).size(SMALL).color(design::MUTED)).wrap());}
+            });
+            if !card.platform.is_empty(){ui.label(RichText::new(card.platform).size(SMALL).color(design::MUTED));}
+            if let Some(menu)=card.menu.as_mut(){menu(ui);}
+        });
+        if let Some(texture)=card.preview {
+            let width=ui.available_width().min(360.);
+            ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(width,width*9./16.)));
+        }
+        if let Some(enabled)=card.connect {
+            clicked=ui.add_enabled_ui(enabled,|ui|ui.add_sized([ui.available_width(),design::CONTROL],design::primary("Connect"))).inner.clicked();
+        }
     });
     clicked
 }

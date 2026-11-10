@@ -433,6 +433,7 @@ impl Video {
                 }
             }
             // Due: the newest image, or the last one again (keeps the phone's decoder flowing).
+            secpar_stream::timing::mark(secpar_stream::timing::Stage::Selected);
             let repeat = !pending;
             pending = false;
             last_enc = Instant::now();
@@ -443,12 +444,17 @@ impl Video {
             if conv.is_none() {
                 conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
             }
+            let timing=secpar_stream::timing::begin();
             let Some(nv12) = conv.as_mut().and_then(|c| c.convert(src).ok()) else { continue };
+            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert,timing);
+            let timing=secpar_stream::timing::begin();
             #[cfg(test)] let trace_convert = trace_start.elapsed();
             let force = sh.idr.swap(false, Ordering::Relaxed);
             let Ok(outs) = self.enc.encode(&nv12, if repeat { now_us() } else { cap_us }, force) else { break };
+            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode,timing);
             #[cfg(test)] let trace_encode = trace_start.elapsed();
             for e in outs {
+                secpar_stream::timing::mark(secpar_stream::timing::Stage::Encoded);
                 let fh = FrameHeader { len: e.data.len() as u32, capture_us: e.capture_us, keyframe: e.key, codec: self.enc.codec() };
                 sh.send_paced(&packetize(frame_id, &fh, &e.data, t.fec as usize));
                 frame_id = frame_id.wrapping_add(1);

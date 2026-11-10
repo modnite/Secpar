@@ -20,6 +20,8 @@ pub mod gamepad;
 mod hosting;
 mod input;
 mod keys;
+#[cfg(target_os="linux")]
+mod wayland_keys;
 #[cfg(windows)]
 mod keyhook;
 mod stream_menu;
@@ -133,7 +135,7 @@ pub fn run() -> eframe::Result {
             .with_visible(!std::env::args().any(|arg| arg == "--hidden"))
             .with_app_id("com.secpar.desktop")
             .with_inner_size(review_size())
-            .with_min_inner_size([480., 360.])
+            .with_min_inner_size([360., 400.])
             .with_clamp_size_to_monitor_size(true)
             .with_icon(Arc::new(icon)),
         ..Default::default()
@@ -158,7 +160,7 @@ fn review_size() -> [f32; 2] {
     if let Ok(size) = std::env::var("SECPAR_REVIEW_SIZE") {
         if let Some((w, h)) = size.split_once('x') {
             if let (Ok(w), Ok(h)) = (w.parse::<f32>(), h.parse::<f32>()) {
-                if (480.0..=1920.0).contains(&w) && (360.0..=1200.0).contains(&h) {
+                if (360.0..=1920.0).contains(&w) && (360.0..=1200.0).contains(&h) {
                     return [w, h];
                 }
             }
@@ -166,8 +168,8 @@ fn review_size() -> [f32; 2] {
     }
     [DEFAULT_SIZE.0, DEFAULT_SIZE.1]
 }
-/// Big enough for six other computers, some with previews, without a scrollbar.
-const DEFAULT_SIZE: (f32, f32) = (720., 660.);
+/// Compact vertical desktop layout. Streaming still uses the full viewport.
+const DEFAULT_SIZE: (f32, f32) = (420., 680.);
 fn initial_status() -> String {
     #[cfg(feature = "ui-review")]
     if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.ends_with("-sample")) {
@@ -185,9 +187,11 @@ fn initial_page() -> Page {
         return Page::Friends;
     }
     #[cfg(feature="ui-review")]
-    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("client-settings")) {return Page::Settings;}
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("client-settings")) {return Page::ClientSettings;}
     #[cfg(feature="ui-review")]
     if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("files")) {return Page::Files;}
+    #[cfg(feature="ui-review")]
+    if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("settings")) {return Page::Settings;}
     Page::Computers
 }
 #[derive(PartialEq)]
@@ -197,6 +201,7 @@ enum Page {
     Hosting,
     Friends,
     Settings,
+    ClientSettings,
 }
 struct App {
     #[cfg(feature = "ui-review")]
@@ -223,10 +228,12 @@ struct App {
     owned_connecting: Option<(String,String)>,
     /// A friend's computer is open. Nothing about it is remembered.
     guest_session: bool,
+    session_keyboard:bool,
     guest_error: bool,
     decoder: Option<video::Worker>,
     audio: Option<audio_worker::Worker>,
     audio_route:audio_worker::Route,
+    video_route:video::Route,
     audio_error: Option<String>,
     clipboard: Option<secpar_clipboard::Bridge>,
     notice: Option<String>,
@@ -259,6 +266,10 @@ struct App {
     cursor_shape: Option<(TextureHandle, [i32; 2])>,
     fs: keys::Fullscreen,
     focused: bool,
+    #[cfg(target_os="linux")]
+    wayland: Option<wayland_keys::Keyboard>,
+    #[cfg(target_os="linux")]
+    wayland_hooked: bool,
     pads: gamepad::Runner,
     /// A pairing link being typed, and whether its box is open. Only used without an account.
     pair_link: String,
@@ -316,7 +327,7 @@ impl App {
             review_commands: None,
             #[cfg(windows)]
             tray: tray::Tray::new(cc),
-            updates: updates::Panel::new(),
+            updates: updates::Panel::new(cc.egui_ctx.clone()),
             hosting: hosting::Panel::new(cc.egui_ctx.clone()),
             account: account::Panel::new(cc.egui_ctx.clone()),
             files: new_files(cc.egui_ctx.clone(), &client_files_dir),
@@ -329,10 +340,12 @@ impl App {
             session_account: None,
             owned_connecting: None,
             guest_session: false,
+            session_keyboard:true,
             guest_error: false,
             decoder: None,
             audio: None,
             audio_route:audio_worker::Route::default(),
+            video_route:video::Route::default(),
             audio_error: None,
             clipboard: None,
             notice: None,
@@ -363,6 +376,10 @@ impl App {
             cursor_shape: None,
             fs: Default::default(),
             focused: true,
+            #[cfg(target_os="linux")]
+            wayland: wayland_keys::Keyboard::new(cc),
+            #[cfg(target_os="linux")]
+            wayland_hooked: false,
             pads: Default::default(),
             pair_link: String::new(),
             pair_open: false,
@@ -413,6 +430,11 @@ impl App {
                 });
             }
         }
+        #[cfg(all(feature="ui-review",target_os="linux"))]
+        if std::env::var_os("SECPAR_REVIEW_KEYS").is_some() {
+            eprintln!("review_wayland available={}",app.wayland.is_some());
+            if std::env::var_os("SECPAR_REVIEW_START_FULLSCREEN").is_some(){app.remote_keyboard=true;app.set_fullscreen(&cc.egui_ctx,true);}
+        }
         app
     }
     /// Reconnects to the computer this device remembers. Account computers pair themselves.
@@ -462,12 +484,15 @@ impl App {
         if self.command.is_some() { return; }
         self.session_account=self.computer_account.clone();
         self.guest_session=guest.is_some();
+        self.session_keyboard=guest.as_ref().is_none_or(|grant|grant.allows("keyboard"));
         self.guest_error=false;
         if guest.is_some() { self.session_account=self.account.user.as_ref().map(|u|u.id.clone()); }
         let lan_first = self.computer_account.is_some();
         let computer = self.computer.clone();
         self.audio_route.output(None);
         self.audio_route=audio_worker::Route::default();
+        self.video_route.output(None);
+        self.video_route=video::Route::default();
         self.open_audio();
         let clipboard=self.client.clipboard && guest.as_ref().is_none_or(|g|g.allows("clipboard"));
         self.clipboard=clipboard.then(secpar_clipboard::Bridge::start);
@@ -476,6 +501,7 @@ impl App {
         let options = Options {
             audio: self.client.audio && guest.as_ref().is_none_or(|g|g.allows("audio")),
             audio_sink:Some(self.audio_route.sink()),
+            video_sink:Some(self.video_route.sink()),
             clipboard,
             ..self.options.clone()
         };
@@ -489,6 +515,8 @@ impl App {
         self.remote_keyboard = true;
         self.video_rect = None;
         self.decoder = None;
+        self.stream_fps=options.fps;
+        self.ensure_video_decoder(&ctx);
         self.client.active_decoder = None;
         self.texture = None;
         self.displays.clear();
@@ -566,11 +594,8 @@ impl App {
     fn stream_active(&self) -> bool {
         self.command.is_some() && self.texture.is_some()
     }
-    /// Per-session keyboard permission. The protocol has no view-only state yet, so this is
-    /// always true. When it grows one, this is the single place to read it.
-    fn keyboard_allowed(&self) -> bool {
-        true
-    }
+    /// Owner sessions allow input; guest sessions follow the claimed keyboard permission.
+    fn keyboard_allowed(&self) -> bool {self.session_keyboard}
     fn window_geometry(ctx: &egui::Context) -> Option<keys::Geometry> {
         ctx.input(|i| {
             let v = i.viewport();
@@ -619,6 +644,8 @@ impl App {
     }
     /// What the escape chord does. It is the same from the window path and from the hook.
     fn escape(&mut self, ctx: &egui::Context, action: keys::Escape) {
+        #[cfg(feature="ui-review")]
+        if std::env::var_os("SECPAR_REVIEW_KEYS").is_some() {eprintln!("review_escape {action:?}");}
         match action {
             keys::Escape::Fullscreen => self.set_fullscreen(ctx, !self.fs.on),
             keys::Escape::Disconnect => {
@@ -635,6 +662,29 @@ impl App {
                 }
             }
         }
+    }
+    #[cfg(target_os="linux")]
+    fn manage_wayland_keys(&mut self,ctx:&egui::Context) {
+        let wanted=keys::HookWanted {setting:self.client.system_keys,stream_on_screen:self.stream_active(),
+            window_focused:self.focused,keys_go_to_host:self.remote_keyboard && !self.stream_menu_open,
+            keyboard_allowed:self.keyboard_allowed()}.yes();
+        #[cfg(feature="ui-review")]
+        let wanted=wanted && std::env::var_os("SECPAR_REVIEW_HOOK").is_some();
+        let Some(keyboard)=&mut self.wayland else {return};
+        let (active,events)=keyboard.update(wanted,self.client.escape);
+        if active!=self.wayland_hooked {
+            #[cfg(feature="ui-review")]
+            if std::env::var_os("SECPAR_REVIEW_KEYS").is_some() {eprintln!("review_shortcuts active={active}");}
+            self.wayland_hooked=active;
+            for message in self.input.keys_to_hook(active){self.send(Command::Input(message));}
+        }
+        for event in events {
+            match event {
+                wayland_keys::Output::Key(vk,down)=>self.send(Command::Input(serde_json::json!({"t":"key","vk":vk,"down":down}))),
+                wayland_keys::Output::Escape(action)=>self.escape(ctx,action),
+            }
+        }
+        if wanted {ctx.request_repaint_after(Duration::from_millis(8));}
     }
     /// Keeps the Windows keyboard hook up exactly while the host should get every key.
     #[cfg(windows)]
@@ -681,7 +731,14 @@ impl App {
             }
         }
     }
+    fn ensure_video_decoder(&mut self,ctx:&egui::Context) {
+        let preference=self.client.decoder;let fps=self.stream_fps;
+        let worker=self.decoder.get_or_insert_with(||video::Worker::with_frame_rate(ctx.clone(),preference,fps));
+        worker.set_frame_rate(fps);
+        self.video_route.output(Some(worker));
+    }
     fn poll(&mut self, ctx: &egui::Context) {
+        if self.command.is_some(){self.ensure_video_decoder(ctx);}
         if let Some(bridge)=&self.clipboard {
             match bridge.poll() {
                 Some(secpar_clipboard::Event::Text(text))=>self.send(Command::Clipboard(text)),
@@ -789,6 +846,7 @@ impl App {
                     self.command = None;
                     self.events = None;
                     self.status = s;
+                    self.video_route.output(None);
                     self.decoder = None;
                     self.audio_route.output(None);
                     self.audio = None;
@@ -807,6 +865,7 @@ impl App {
             }
         }
         if let Some(decoder) = &self.decoder {
+            decoder.set_frame_rate(self.stream_fps);
             let output = decoder.output();
             if let Some(backend)=output.backend {
                 if self.client.active_decoder.as_deref()!=Some(backend) {self.client.active_decoder=Some(backend.into());}
@@ -844,6 +903,16 @@ impl App {
 }
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        #[cfg(target_os="linux")]
+        {
+            self.focused=raw.focused;
+            self.manage_wayland_keys(ctx);
+            // The native stream has the exact key order, including Meta. Do not send
+            // egui's duplicate keyboard events or trigger the escape chord twice.
+            if self.wayland_hooked {
+                raw.events.retain(|event|!matches!(event,UiEvent::Key{..}|UiEvent::Copy|UiEvent::Cut|UiEvent::Paste(_)|UiEvent::Text(_)));
+            }
+        }
         self.focused = raw.focused;
         #[cfg(windows)]
         {
@@ -969,6 +1038,21 @@ impl eframe::App for App {
         raw.events=local;
     }
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        #[cfg(feature="ui-review")]
+        if std::env::var_os("SECPAR_REVIEW_KEYS").is_some() && self.review_frames<6 {
+            eprintln!("review_tick focused={} stream={} keyboard={}",self.focused,self.stream_active(),self.remote_keyboard);
+            self.review_frames+=1;
+        }
+        #[cfg(feature="ui-review")]
+        if std::env::var_os("SECPAR_REVIEW_KEYS").is_some() {
+            if let Some(rx)=&mut self.review_commands {
+                while let Ok(command)=rx.try_recv() {
+                    if let Command::Input(message)=command {
+                        if message["t"]=="key" {eprintln!("review_key vk={} down={}",message["vk"],message["down"]);}
+                    }
+                }
+            }
+        }
         self.leave_fullscreen_if_idle(ctx);
         #[cfg(windows)]
         self.manage_key_hook(ctx);
@@ -1100,7 +1184,7 @@ impl eframe::App for App {
             egui::TopBottomPanel::top("toolbar")
                 .frame(
                     egui::Frame::new()
-                        .fill(Color32::from_rgb(22, 27, 35))
+                        .fill(design::BG)
                         .inner_margin(egui::Margin::symmetric(20, 8)),
                 )
                 .show(ctx, |ui| {
@@ -1112,12 +1196,7 @@ impl eframe::App for App {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     self.updates.button(ui);
-                                    ui.label(
-                                        egui::RichText::new(&self.status)
-                                            .size(12.)
-                                            .color(design::MUTED),
-                                    );
-                                    design::dot(ui, design::ACCENT);
+
                                 },
                             );
                         } else {
@@ -1163,27 +1242,25 @@ impl eframe::App for App {
             egui::TopBottomPanel::top("navigation")
                 .frame(
                     egui::Frame::new()
-                        .fill(Color32::from_rgb(22, 27, 35))
+                        .fill(design::BG)
                         .inner_margin(egui::Margin::symmetric(20, 0)),
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        // Five tabs still fit the smallest window.
-                        let tab = ((ui.available_width() - 4. * ui.spacing().item_spacing.x) / 5.).clamp(60., 100.);
+                        // Match Android's three primary tabs. Hosting and Files live in Settings.
+                        let tab = ((ui.available_width() - 2. * ui.spacing().item_spacing.x) / 3.).clamp(60., 100.);
                         for (page, label) in [
                             (Page::Computers, "Computers"),
-                            (Page::Files, "Files"),
-                            (Page::Hosting, "Hosting"),
                             (Page::Friends, "Friends"),
                             (Page::Settings, "Settings"),
                         ] {
                             if page == Page::Hosting && !cfg!(any(windows, target_os = "linux")) {
                                 continue;
                             }
-                            let selected = self.page == page;
+                            let selected = self.page == page || page==Page::Settings && matches!(self.page,Page::Hosting|Page::Files|Page::ClientSettings);
                             let response = ui.add_sized(
                                 [tab, 36.],
-                                egui::Button::new(egui::RichText::new(label).color(if selected {
+                                egui::Button::new(egui::RichText::new(label).size(14.).color(if selected {
                                     Color32::WHITE
                                 } else {
                                     design::MUTED
@@ -1197,6 +1274,7 @@ impl eframe::App for App {
                                     egui::Stroke::new(2_f32, design::ACCENT),
                                 );
                             }
+                            if selected {ui.painter().hline(response.rect.x_range(),response.rect.bottom()-1.,egui::Stroke::new(2.,design::ACCENT));}
                             if response.clicked() {
                                 self.page = page;
                             }
@@ -1284,8 +1362,12 @@ impl eframe::App for App {
                         }
                     }
                 } else if self.command.is_none() {
+                    if self.page==Page::Files {
+                        if ui.button("Back").clicked(){self.page=Page::Settings;}
+                        ui.add_space(8.);
+                    }
                     if self.page == Page::Hosting {
-                        self.hosting.ui(ui, ctx, &mut self.account);
+                        if self.hosting.ui(ui, ctx, &mut self.account){self.page=Page::Settings;}
                     } else if self.page == Page::Files {
                         let manual = self.computer.clone().filter(|_| self.computer_account.is_none());
                         let picks = self.account.picks(manual.as_ref());
@@ -1299,12 +1381,28 @@ impl eframe::App for App {
                         }
                     } else if self.page == Page::Friends {
                         self.account.ui(ui);
-                    } else if self.page == Page::Settings {
+                    } else if self.page == Page::ClientSettings {
+                        ui.horizontal(|ui| {if design::back_button(ui){self.page=Page::Settings;}ui.heading("Client settings");});
+                        ui.add_space(8.);
                         egui::ScrollArea::vertical().show(ui,|ui| {
                             if self.client.ui(ui) {self.options=self.client.options();self.client.save();}
                         });
+                    } else if self.page == Page::Settings {
+                        ui.heading("Settings");ui.add_space(8.);
+                        design::surface().inner_margin(0).show(ui,|ui| {
+                            ui.set_width(ui.available_width());
+                            for (page,label) in [(Page::ClientSettings,"Client settings"),(Page::Hosting,"Host settings"),(Page::Files,"Files")] {
+                                if page==Page::Hosting && !cfg!(any(windows,target_os="linux")){continue;}
+                                let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),44.),egui::Sense::click());
+                                response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,true,label));
+                                if response.hovered(){ui.painter().rect_filled(rect,0.,ui.visuals().widgets.hovered.bg_fill);}
+                                ui.painter().text(rect.left_center()+egui::vec2(12.,0.),egui::Align2::LEFT_CENTER,label,egui::FontId::proportional(14.),design::TEXT);
+                                icons::paint(ui,icons::Icon::Chevron,egui::Rect::from_center_size(rect.right_center()-egui::vec2(20.,0.),egui::vec2(16.,16.)),design::MUTED);
+                                if response.clicked(){if page==Page::Hosting {self.hosting.open_settings();}self.page=page;}
+                            }
+                        });
                     } else {
-                        // Everything fits at the default size. Only a smaller window scrolls, as a whole.
+                        // Narrow windows keep the Android-style card order and scroll as one list.
                         let shown = egui::ScrollArea::vertical().id_salt("computers-page").auto_shrink([false, false]).show(ui, |ui| {
                             self.account.computers_ui(ui);
                             if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none()) {

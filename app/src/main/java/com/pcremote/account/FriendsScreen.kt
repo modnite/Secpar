@@ -3,15 +3,13 @@ package com.pcremote.account
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,84 +26,108 @@ import com.pcremote.ui.theme.LocalMidnight
 
 private val AvatarFill = Color(0xFF203036)
 
-/** The Friends tab. Same strings and calls as the desktop client. */
+/** Friends use the same account and permissions; this page only arranges their controls. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FriendsPage(state: AccountUi, acts: AccountActions, modifier: Modifier = Modifier, alertsOn: Boolean = false) {
     val c = LocalMidnight.current
     val ctx = LocalContext.current
     var query by remember { mutableStateOf("") }
     var findOpen by remember { mutableStateOf(false) }
+    var preferencesOpen by remember { mutableStateOf(false) }
     val permission = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { granted -> acts.setAlerts(granted) }
     LaunchedEffect(query, findOpen, state.user?.id) {
-        if (findOpen && state.user != null) {
-            kotlinx.coroutines.delay(300)
-            acts.search(query)
-        }
+        if (findOpen && state.user != null) { kotlinx.coroutines.delay(300); acts.search(query) }
     }
     val user = state.user
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         PageHeader("Friends") {
-            if (user != null) {
-                Text(user.handle, color = c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 120.dp))
-                GhostButton("Sign out", acts.signOut, compact = true, enabled = !state.busy)
-            }
+            GhostButton("Refresh", acts.refresh, compact = true, enabled = user != null && !state.working)
         }
         if (user == null) {
-            Text(FriendsModel.SIGN_IN_PROMPT, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-            SignInForm(acts, state.busy)
+            Text("Sign in on Computers.", color = c.textDim, style = MaterialTheme.typography.bodyMedium)
             return@Column
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(FriendsModel.youAre(user.handle), color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            GhostButton("Refresh", acts.refresh, compact = true, enabled = !state.working)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PrimaryButton(if (findOpen) "Close search" else FriendsModel.FIND_PEOPLE, { findOpen = !findOpen },
+                modifier = Modifier.weight(1f), compact = true)
+            GhostButton("Settings", { preferencesOpen = true }, compact = true)
         }
-        FlatCheckbox(user.visible, FriendsModel.SHOW_ME, { acts.setVisible(it) })
-        FlatCheckbox(alertsOn, FriendsModel.NOTIFY, { on ->
-            if (!on) acts.setAlerts(false)
-            else if (android.os.Build.VERSION.SDK_INT >= 33 &&
-                androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) !=
-                android.content.pm.PackageManager.PERMISSION_GRANTED) permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            else acts.setAlerts(true)
-        })
-        FriendsModel.waiting(state.requests, user.id).forEach { request ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(FriendsModel.requestText(request), color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 2,
-                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                GhostButton(FriendsModel.DENY, { acts.answer(Answer.DENY_CONNECTION, request.id) }, compact = true, enabled = !state.working)
-                PrimaryButton(FriendsModel.ALLOW, { acts.answer(Answer.ALLOW_CONNECTION, request.id) }, compact = true, enabled = !state.working)
-            }
-        }
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { findOpen = !findOpen }, verticalAlignment = Alignment.CenterVertically) {
-            Icon(painterResource(if (findOpen) R.drawable.lucide_chevron_down else R.drawable.lucide_chevron_right), null, tint = c.textDim,
-                modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(FriendsModel.FIND_PEOPLE, color = c.text, style = MaterialTheme.typography.titleSmall)
-        }
-        if (findOpen) {
+        if (findOpen) FriendSection {
             FlatField(query, { query = it }, FriendsModel.SEARCH_HINT, Modifier.fillMaxWidth())
             if (state.people.isEmpty()) Text(FriendsModel.NO_ONE, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
             state.people.forEach { person ->
                 Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("@${person.handle}", color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f))
+                    Text("@${person.handle}", color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     val label = FriendsModel.personLabel(person)
                     if (label == null) PrimaryButton(FriendsModel.ADD, { acts.friend(FriendAction.INVITE, person.handle) }, compact = true, enabled = !state.working)
                     else Text(label, color = c.textDim, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
-        FriendComputersList(state, acts)
-        if (state.friends.isEmpty()) Text(FriendsModel.EMPTY, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-        state.friends.forEachIndexed { index, friend ->
-            if (index > 0) HorizontalDivider(color = c.border)
-            FriendRow(friend, user.id, state.working, acts)
+        val waiting = FriendsModel.waiting(state.requests, user.id)
+        if (waiting.isNotEmpty()) FriendSection {
+            Text("Connection requests", color = c.text, style = MaterialTheme.typography.titleSmall)
+            waiting.forEach { request ->
+                Text(FriendsModel.requestText(request), color = c.text, style = MaterialTheme.typography.bodyMedium)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GhostButton(FriendsModel.DENY, { acts.answer(Answer.DENY_CONNECTION, request.id) }, modifier = Modifier.weight(1f), compact = true, enabled = !state.working)
+                    PrimaryButton(FriendsModel.ALLOW, { acts.answer(Answer.ALLOW_CONNECTION, request.id) }, modifier = Modifier.weight(1f), compact = true, enabled = !state.working)
+                }
+            }
         }
-        if (state.blocked.isNotEmpty()) BlockedList(state.blocked, state.working, acts)
+        val requests = state.friends.filterNot { it.accepted }
+        if (requests.isNotEmpty()) FriendSection {
+            Text("Friend requests", color = c.text, style = MaterialTheme.typography.titleSmall)
+            requests.forEach { FriendRow(it, user.id, state.working, acts) }
+        }
+        val friends = state.friends.filter { it.accepted }
+        if (friends.isEmpty()) Text(FriendsModel.EMPTY, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
+        else FriendSection {
+            friends.forEachIndexed { index, friend ->
+                if (index > 0) HorizontalDivider(color = c.border)
+                FriendRow(friend, user.id, state.working, acts)
+            }
+        }
+        if (state.friendComputers.isNotEmpty()) FriendSection { FriendComputersList(state, acts) }
+        if (state.blocked.isNotEmpty()) FriendSection { BlockedList(state.blocked, state.working, acts) }
         state.note?.let { Text(it, color = c.textDim, style = MaterialTheme.typography.bodySmall) }
+    }
+    if (preferencesOpen && user != null) ModalBottomSheet(onDismissRequest = { preferencesOpen = false },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = c.surface) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Friend settings", color = c.text, style = MaterialTheme.typography.titleMedium)
+            FlatCheckbox(user.visible, FriendsModel.SHOW_ME, { acts.setVisible(it) })
+            FlatCheckbox(alertsOn, FriendsModel.NOTIFY, { on ->
+                if (!on) acts.setAlerts(false)
+                else if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                    androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) !=
+                    android.content.pm.PackageManager.PERMISSION_GRANTED) permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                else acts.setAlerts(true)
+            })
+            GhostButton("Done", { preferencesOpen = false }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun FriendSection(content: @Composable ColumnScope.() -> Unit) {
+    val c = LocalMidnight.current
+    val shape = RoundedCornerShape(8.dp)
+    Column(Modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, c.border, shape).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FriendGlyph(@androidx.annotation.DrawableRes icon: Int, label: String, allowed: Boolean = true) {
+    val c = LocalMidnight.current
+    TooltipBox(positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label) } }, state = rememberTooltipState()) {
+        Icon(painterResource(icon), label, tint = if (allowed) c.accent else c.textDim, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -158,8 +180,13 @@ private fun FriendRow(friend: Friend, ownId: String, working: Boolean, acts: Acc
             modifier = Modifier.weight(1f))
         when (label) {
             FriendLabel.ACCEPT -> PrimaryButton(FriendsModel.ACCEPT, { acts.friend(FriendAction.ACCEPT, friend.id) }, compact = true, enabled = !working)
-            FriendLabel.FRIEND -> Text(FriendsModel.summary(friend), color = c.textDim, style = MaterialTheme.typography.bodySmall)
-            else -> Text(FriendsModel.labelText(label), color = c.textDim, style = MaterialTheme.typography.bodySmall)
+            FriendLabel.FRIEND -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FriendGlyph(R.drawable.lucide_keyboard, if (friend.keyboard) "Keyboard allowed" else "Keyboard blocked", friend.keyboard)
+                FriendGlyph(R.drawable.lucide_mouse, if (friend.mouse) "Mouse allowed" else "Mouse blocked", friend.mouse)
+                FriendGlyph(if (friend.connect == "always") R.drawable.lucide_circle_check else R.drawable.lucide_circle_help,
+                    if (friend.connect == "always") "Connect any time" else "Ask first", friend.connect == "always")
+            }
+            else -> FriendGlyph(R.drawable.lucide_circle_help, FriendsModel.labelText(label), false)
         }
         val settings = if (friend.accepted) listOf(
             MenuItem(R.drawable.lucide_keyboard, if (friend.keyboard) "Block keyboard" else "Allow keyboard") {

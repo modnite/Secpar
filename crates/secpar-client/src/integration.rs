@@ -74,7 +74,10 @@ async fn streams_with_packet_loss_and_sends_authenticated_input() {
 
 /// A minimized/covered UI must not stop reports/probes or strand compressed video.
 #[tokio::test(flavor="multi_thread",worker_threads=2)]
-async fn paused_ui_keeps_network_alive_and_recovers_video_at_a_keyframe() {
+async fn paused_ui_keeps_network_alive_and_recovers_video_at_a_keyframe() {paused_ui(false).await;}
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn paused_ui_delivers_video_and_audio_without_waiting_for_a_repaint() {paused_ui(true).await;}
+async fn paused_ui(direct:bool) {
     use std::sync::atomic::{AtomicUsize,Ordering};
     tokio::time::timeout(Duration::from_secs(12),async {
         let _=rustls::crypto::ring::default_provider().install_default();
@@ -133,10 +136,16 @@ async fn paused_ui_keeps_network_alive_and_recovers_video_at_a_keyframe() {
         let pairing=Pairing{name:"Fixture".into(),hosts:vec!["127.0.0.1".into()],port,fingerprint:pin,otp:"once".into(),relay_url:None,pc_id:Some("pc1".into())};
         let connection=Connected::pair(pairing,"Secpar test").await.unwrap();
         let(tx,rx)=mpsc::channel(8);let(events,mut ui)=mpsc::channel(8);
+        let video_packets=Arc::new(AtomicUsize::new(0));let decoded=video_packets.clone();
+        let video_sink:Option<Arc<dyn Fn(crate::receiver::VideoFrame)+Send+Sync>>=direct.then(||Arc::new(move|frame:crate::receiver::VideoFrame| {
+            assert_eq!(frame.data,vec![93;128]);decoded.fetch_add(1,Ordering::Relaxed);
+        }) as Arc<dyn Fn(crate::receiver::VideoFrame)+Send+Sync>);
         let client=tokio::spawn(session::run(connection,Options{discover_public:false,clipboard:false,audio:true,audio_sink:Some(Arc::new(move|packet|{
             assert_eq!(packet,vec![1,2,3]);heard.fetch_add(1,Ordering::Relaxed);
-        })),..Default::default()},rx,events));
-        loop {if matches!(ui.recv().await,Some(Event::Video(_))){break;}}
+        })),video_sink,..Default::default()},rx,events));
+        if direct {while video_packets.load(Ordering::Relaxed)==0 {tokio::task::yield_now().await;}}
+        else {loop {if matches!(ui.recv().await,Some(Event::Video(_))){break;}}}
+        let video_before=video_packets.load(Ordering::Relaxed);
         let before=probes.load(Ordering::Relaxed);let audio_before=audio_packets.load(Ordering::Relaxed);
         // Leave a full UI queue alone for longer than the Windows host silence timeout.
         tokio::time::sleep(Duration::from_millis(6300)).await;
@@ -146,9 +155,12 @@ async fn paused_ui_keeps_network_alive_and_recovers_video_at_a_keyframe() {
             panic!("A paused UI blocked authenticated network keepalives");
         }
         assert!(audio_packets.load(Ordering::Relaxed)>audio_before+100,"Audio delivery must continue while UI is paused");
-        loop {if let Some(Event::Video(frame))=ui.recv().await {
+        if direct {
+            assert!(video_packets.load(Ordering::Relaxed)>video_before+100,"Video must reach the decoder while UI is paused");
+            while let Ok(event)=ui.try_recv(){assert!(!matches!(event,Event::Video(_)),"A direct frame must not also queue on the UI");}
+        } else {loop {if let Some(Event::Video(frame))=ui.recv().await {
             if frame.header.keyframe && frame.id>100 {break;}
-        }}
+        }}}
         // A newly advertised path cannot send until the client punches it.
         // Keep the UI paused again while route recovery probes candidates.
         tx.send(Command::Display("rebind-fixture".into())).await.unwrap();

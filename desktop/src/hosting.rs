@@ -38,6 +38,7 @@ enum Command {
     Friend { id: String, keyboard: Option<bool>, mouse: Option<bool>, connect: Option<&'static str> },
 }
 enum Event {
+    Refresh(Result<(State, Value), String>),
     State(Result<(State, Value), String>),
     Friends(Result<Vec<FriendRow>, String>),
     Pair(Result<String, String>),
@@ -52,6 +53,7 @@ pub struct Panel {
     friend_rows: Vec<FriendRow>,
     error: String,
     busy: bool,
+    refreshing: bool,
     pairing: bool,
     settings_open: bool,
     account_open: bool,
@@ -77,7 +79,7 @@ impl Panel {
                 runtime.block_on(async move {
                     while let Some(command) = commands.recv().await {
                         let event = match command {
-                            Command::Refresh => Event::State(snapshot().await),
+                            Command::Refresh => Event::Refresh(snapshot().await),
                             Command::Pair => Event::Pair(
                                 local_host::call("new_qr", Value::Null).await.and_then(|v| {
                                     let link = v["link"]
@@ -151,6 +153,7 @@ impl Panel {
             settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"friends":true,"anywhere":false},"displays":[],"pad":{"ok":true,"text":"Gamepad ready"}}),
             error: String::new(),
             busy: false,
+            refreshing: false,
             pairing: sample
                 && std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("pair")),
             settings_open: sample
@@ -164,12 +167,14 @@ impl Panel {
             sample,
         }
     }
+    pub fn open_settings(&mut self) {self.settings_open=true;}
     fn send(&mut self, command: Command) {
         if self.sample {
             return;
         }
+        let refresh=matches!(&command,Command::Refresh);
         if self.tx.try_send(command).is_ok() {
-            self.busy = true;
+            if refresh {self.refreshing=true;} else {self.busy=true;}
         }
     }
     pub fn ui(
@@ -177,11 +182,13 @@ impl Panel {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         account: &mut crate::account::Panel,
-    ) {
+    ) -> bool {
+        let mut back=false;
         while let Ok(event) = self.events.try_recv() {
-            self.busy = false;
+            let refresh=matches!(&event,Event::Refresh(_));
+            if refresh {self.refreshing=false;} else {self.busy=false;}
             match event {
-                Event::State(Ok((state, config))) => {
+                Event::State(Ok((state, config))) | Event::Refresh(Ok((state, config))) => {
                     // A friend who just connected gets a notice. The first read after launch does not.
                     if let Some(old) = &self.state {
                         for f in state.friends.iter().filter(|f| !old.friends.iter().any(|o| o.id == f.id)) {
@@ -193,8 +200,7 @@ impl Panel {
                     self.settings = config;
                     self.error.clear();
                 }
-                Event::State(Err(e)) => {
-                    self.state = None;
+                Event::State(Err(e)) | Event::Refresh(Err(e)) => {
                     self.error = e;
                 }
                 Event::Friends(Ok(rows)) => self.friend_rows = rows,
@@ -216,12 +222,26 @@ impl Panel {
                 Event::Pair(Err(e)) | Event::Error(e) => self.error = e,
             }
         }
-        if !self.busy && self.last_refresh.elapsed() > Duration::from_secs(5) {
+        if !self.busy && !self.refreshing && self.last_refresh.elapsed() > Duration::from_secs(5) {
             self.last_refresh = Instant::now();
             self.send(Command::Refresh);
         }
+        if account.user.is_some() {
+            self.pairing=false;
+            self.link.clear();
+            self.qr=None;
+        }
         ctx.request_repaint_after(Duration::from_secs(1));
-        ui.heading("Hosting");
+        ui.horizontal(|ui| {
+            back=design::back_button(ui);
+            ui.heading(if self.settings_open {"Host settings"}else{"Paired devices"});
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                ui.menu_button("Manage",|ui| {
+                    if ui.button(if self.settings_open {"Paired devices"}else{"Host settings"}).clicked(){self.settings_open=!self.settings_open;ui.close();}
+                    if ui.button("Account").clicked(){self.account_open=true;ui.close();}
+                });
+            });
+        });
         ui.add_space(if self.settings_open { 0. } else { 8. });
         if !self.settings_open {
             design::surface().show(ui, |ui| {
@@ -244,20 +264,22 @@ impl Panel {
                         )
                         .strong(),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                self.state.is_some() && !self.busy,
-                                design::primary("Pair a device"),
-                            )
-                            .clicked()
-                        {
-                            self.pairing = true;
-                            self.link.clear();
-                            self.qr = None;
-                            self.send(Command::Pair);
-                        }
-                    });
+                    if account.user.is_none() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add_enabled(
+                                    self.state.is_some() && !self.busy,
+                                    design::primary("Pair a device"),
+                                )
+                                .clicked()
+                            {
+                                self.pairing = true;
+                                self.link.clear();
+                                self.qr = None;
+                                self.send(Command::Pair);
+                            }
+                        });
+                    }
                 });
                 if let Some(state) = &self.state {
                     ui.label(
@@ -279,16 +301,6 @@ impl Panel {
             ui.colored_label(Color32::from_rgb(255, 170, 120), &self.error);
         }
         ui.add_space(if self.settings_open { 0. } else { 10. });
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.settings_open, false, "Paired devices");
-            ui.selectable_value(&mut self.settings_open, true, "Settings");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Account").clicked() {
-                    self.account_open = true;
-                }
-            });
-        });
-        ui.add_space(2.);
         egui::ScrollArea::vertical().show(ui, |ui| {
             if self.settings_open {
                 self.settings_ui(ui);
@@ -438,6 +450,7 @@ impl Panel {
                 });
             });
         }
+        back
     }
     /// Linux hosting settings: what paired devices may do, and whether a gamepad can be offered.
     /// Display choice, quality limit, router ports and tray start are not available on Linux yet.
@@ -455,10 +468,10 @@ impl Panel {
                 self.setting_toggle(ui, &config, "friends", "Let friends connect", "Friends you added still need your approval unless you set them to connect at any time.");
                 ui.add_space(4.);
                 self.friends_ui(ui, config["friends"].as_bool().unwrap_or(true));
-                ui.horizontal(|ui| {
-                    design::dot(ui, if pad_ok { design::ACCENT } else { design::MUTED });
+                if !pad_ok {ui.horizontal(|ui| {
+                    design::dot(ui,design::MUTED);
                     ui.label(egui::RichText::new(pad_text).size(12.).color(design::MUTED));
-                });
+                });}
             });
         });
     }
@@ -471,18 +484,16 @@ impl Panel {
         ui.label(egui::RichText::new("Friends").strong());
         let mut change = None;
         for f in &self.friend_rows {
-            ui.horizontal_wrapped(|ui| {
-                ui.add(egui::Label::new(format!("@{}", f.handle)).truncate());
-                let (mut keyboard, mut mouse, mut always) = (f.keyboard, f.mouse, f.connect == "always");
-                if ui.checkbox(&mut keyboard, "Keyboard").changed() {
-                    change = Some(Command::Friend { id: f.id.clone(), keyboard: Some(keyboard), mouse: None, connect: None });
-                }
-                if ui.checkbox(&mut mouse, "Mouse").changed() {
-                    change = Some(Command::Friend { id: f.id.clone(), keyboard: None, mouse: Some(mouse), connect: None });
-                }
-                if ui.checkbox(&mut always, "Connect without asking").changed() {
-                    change = Some(Command::Friend { id: f.id.clone(), keyboard: None, mouse: None, connect: Some(if always { "always" } else { "ask" }) });
-                }
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),28.),egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                ui.menu_button("Permissions",|ui| {
+                    let (mut keyboard,mut mouse,mut always)=(f.keyboard,f.mouse,f.connect=="always");
+                    if ui.checkbox(&mut keyboard,"Keyboard").changed(){change=Some(Command::Friend{id:f.id.clone(),keyboard:Some(keyboard),mouse:None,connect:None});}
+                    if ui.checkbox(&mut mouse,"Mouse").changed(){change=Some(Command::Friend{id:f.id.clone(),keyboard:None,mouse:Some(mouse),connect:None});}
+                    if ui.checkbox(&mut always,"Connect without asking").changed(){change=Some(Command::Friend{id:f.id.clone(),keyboard:None,mouse:None,connect:Some(if always {"always"}else{"ask"})});}
+                });
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),28.),egui::Layout::left_to_right(egui::Align::Center),|ui| {
+                    ui.add(egui::Label::new(format!("@{}",f.handle)).truncate());
+                });
             });
         }
         if let Some(command) = change {
@@ -501,8 +512,8 @@ impl Panel {
                 ui.set_width(ui.available_width());
                 ui.label(egui::RichText::new("Streaming").strong());
                 ui.add_space(6.);
-                ui.columns(2, |columns| {
-                    let left = &mut columns[0];
+                ui.vertical(|ui| {
+                    let left = &mut *ui;
                     left.label(egui::RichText::new("Display").size(12.).color(design::MUTED));
                     let mut display = config["display"].as_str().unwrap_or("").to_string();
                     let old = display.clone();
@@ -521,7 +532,7 @@ impl Panel {
                             }
                         });
                     if display != old { self.send(Command::Patch(json!({"display":display}))); }
-                    let right = &mut columns[1];
+                    let right = &mut *ui;
                     right.label(egui::RichText::new("Quality limit").size(12.).color(design::MUTED));
                     let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
                     let old = quality.clone();
@@ -535,14 +546,14 @@ impl Panel {
                 });
             });
             ui.add_space(4.);
-            ui.columns(2, |columns| {
-                design::surface().inner_margin(10).show(&mut columns[0], |ui| {
+            ui.vertical(|ui| {
+                design::surface().inner_margin(10).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.label(egui::RichText::new("Device access").strong());
                     self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
                     self.setting_toggle(ui,&config,"allow_clip","Allow clipboard sharing","Allow clipboard exchange with paired devices.");
                     self.setting_toggle(ui,&config,"friends","Let friends connect","Friends you added still need your approval unless you set them to connect at any time.");
-                    if let Some(ok) = self.settings["pad"]["ok"].as_bool() {
+                    if let Some(ok @ false) = self.settings["pad"]["ok"].as_bool() {
                         ui.horizontal(|ui| {
                             design::dot(ui, if ok { design::ACCENT } else { design::MUTED });
                             ui.label(egui::RichText::new(self.settings["pad"]["text"].as_str().unwrap_or("")).size(12.).color(design::MUTED));
@@ -550,7 +561,8 @@ impl Panel {
                     }
                     self.friends_ui(ui, config["friends"].as_bool().unwrap_or(true));
                 });
-                design::surface().inner_margin(10).show(&mut columns[1], |ui| {
+                ui.add_space(4.);
+                design::surface().inner_margin(10).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.label(egui::RichText::new("Connections & startup").strong());
                     self.setting_toggle(ui,&config,"anywhere","Router ports","Use UPnP to request a router port for direct remote connections. Relay connections are separate.");

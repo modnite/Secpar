@@ -76,3 +76,11 @@ pub fn page_header(ui: &mut egui::Ui, title: &str, actions: impl FnOnce(&mut egu
         },
     );
 }
+
+/// Back navigation uses the same pinned Lucide artwork as the stream menu.
+pub fn back_button(ui:&mut egui::Ui)->bool {
+    let response=ui.add_sized([28.,28.],egui::Button::new("").frame(false)).on_hover_text("Back to settings");
+    response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,true,"Back to settings"));
+    crate::icons::paint(ui,crate::icons::Icon::Back,response.rect.shrink(6.),TEXT);
+    response.clicked()
+}

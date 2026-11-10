@@ -5,8 +5,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import android.content.res.Configuration
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -161,16 +165,17 @@ private fun ComputersPage(
 ) {
     val c = LocalMidnight.current
     val rows = remember(cards, account.computers, account.friendComputers) { ComputerList.rows(cards, account.computers, account.friendComputers) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = PageMargin, end = PageMargin, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item("title") {
+    val landscape=LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    LazyVerticalGrid(columns = GridCells.Fixed(if (landscape) 2 else 1), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(start = PageMargin, end = PageMargin, top = 8.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item("title", span = { GridItemSpan(maxLineSpan) }) {
             PageHeader(stringResource(R.string.pcr_tab_computers)) {
                 // Signed in, computers come from the account. Pairing by link is only for use without one.
                 if (account.user == null) GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
             }
         }
         account.user?.let { user ->
-            item("account") {
+            item("account", span = { GridItemSpan(maxLineSpan) }) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(user.handle, color = c.textDim, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f))
@@ -179,8 +184,8 @@ private fun ComputersPage(
                 }
             }
         }
-        if (account.user == null) item("sign-in") { com.pcremote.account.SignInForm(acts, account.busy) }
-        if (rows.isEmpty()) item("empty") { EmptyState(a.addPc.takeIf { account.user == null }) }
+        if (account.user == null) item("sign-in", span = { GridItemSpan(maxLineSpan) }) { com.pcremote.account.SignInForm(acts, account.busy) }
+        if (rows.isEmpty()) item("empty", span = { GridItemSpan(maxLineSpan) }) { EmptyState(a.addPc.takeIf { account.user == null }) }
         items(rows, key = { it.key }) { row ->
             when (row) {
                 is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)

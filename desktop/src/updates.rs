@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use std::{
     io::Write,
     path::PathBuf,
-    time::{Duration, Instant},
+    time::Duration,
+    sync::{Arc,Mutex,Condvar},
 };
 use tokio::sync::mpsc;
 pub(crate) const INSTALL_WARNING: &str = "Installing restarts Secpar and ends any active stream.";
@@ -240,6 +241,7 @@ fn reopen_after(tag: &str) -> Option<std::process::Child> {
 }
 enum ResultEvent {
     Checked(Result<Option<Release>, String>),
+    BackgroundChecked(Result<Option<Release>,String>),
     Downloaded(Result<PathBuf, String>),
     Installed(Result<String, String>),
 }
@@ -247,27 +249,41 @@ pub struct Panel {
     tx: mpsc::UnboundedSender<ResultEvent>,
     rx: mpsc::UnboundedReceiver<ResultEvent>,
     release: Option<Release>,
+    notified: Arc<Mutex<Option<String>>>,
+    stop:Arc<(Mutex<bool>,Condvar)>,
     ready: Option<PathBuf>,
     busy: bool,
     /// The silent install failed, so the downloaded installer is offered instead.
     fallback: bool,
     message: String,
     pub open: bool,
-    last_check: Option<Instant>,
+}
+fn notify_once(notified:&Arc<Mutex<Option<String>>>,release:&Option<Release>) {
+    if let Some(release)=release {
+        let mut previous=notified.lock().unwrap();
+        if previous.as_deref()!=Some(release.tag.as_str()) {
+            *previous=Some(release.tag.clone());
+            crate::alerts::update_notice("Secpar update available",&format!("{} is ready. Open Secpar Updates to download it.",release.tag));
+        }
+    }
+}
+impl Drop for Panel {
+    fn drop(&mut self) {*self.stop.0.lock().unwrap()=true;self.stop.1.notify_all();}
 }
 impl Panel {
-    pub fn new() -> Self {
+    pub fn new(ctx:egui::Context) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut panel = Self {
             tx,
             rx,
             release: None,
+            notified: Arc::default(),
+            stop:Arc::default(),
             ready: None,
             busy: false,
             fallback: false,
             message: "Automatic checks every six hours.".into(),
             open: false,
-            last_check: None,
         };
         if cfg!(feature = "ui-review")
             && std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.starts_with("updates-"))
@@ -285,6 +301,22 @@ impl Panel {
                 });
             }
         }
+        if !cfg!(feature="ui-review") {
+            let tx=panel.tx.clone();let stop=panel.stop.clone();let notified=panel.notified.clone();
+            std::thread::spawn(move|| {
+                let Ok(runtime)=tokio::runtime::Builder::new_current_thread().enable_all().build() else {return};
+                loop {
+                    if *stop.0.lock().unwrap(){break;}
+                    let result=runtime.block_on(check());
+                    if *stop.0.lock().unwrap(){break;}
+                    if let Ok(release)=&result {notify_once(&notified,release);}
+                    if tx.send(ResultEvent::BackgroundChecked(result)).is_err(){break;}
+                    ctx.request_repaint();
+                    let (stopped,_)=stop.1.wait_timeout_while(stop.0.lock().unwrap(),Duration::from_secs(6*3600),|stopped|!*stopped).unwrap();
+                    if *stopped {break;}
+                }
+            });
+        }
         panel
     }
     fn start_check(&mut self, ctx: &egui::Context) {
@@ -293,15 +325,16 @@ impl Panel {
         }
         self.busy = true;
         self.message = "Checking for updates…".into();
-        self.last_check = Some(Instant::now());
         let tx = self.tx.clone();
         let ctx = ctx.clone();
+        let notified=self.notified.clone();let stop=self.stop.clone();
         std::thread::spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|_| "Could not start updater".into())
                 .and_then(|rt| rt.block_on(check()));
+            if !*stop.0.lock().unwrap() {if let Ok(release)=&result {notify_once(&notified,release);}}
             let _ = tx.send(ResultEvent::Checked(result));
             ctx.request_repaint();
         });
@@ -332,9 +365,11 @@ impl Panel {
     }
     pub fn tick(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
-            self.busy = false;
+            let background=matches!(&event,ResultEvent::BackgroundChecked(_));
+            if background && self.busy {continue;}
+            if !background {self.busy=false;}
             match event {
-                ResultEvent::Checked(Ok(release)) => {
+                ResultEvent::Checked(Ok(release)) | ResultEvent::BackgroundChecked(Ok(release)) => {
                     self.message = release
                         .as_ref()
                         .map(|r| format!("{} is available.", r.tag))
@@ -357,17 +392,10 @@ impl Panel {
                     self.fallback = true;
                     self.message = e;
                 }
-                ResultEvent::Checked(Err(e)) | ResultEvent::Downloaded(Err(e)) => self.message = e,
+                ResultEvent::Checked(Err(e)) | ResultEvent::BackgroundChecked(Err(e)) | ResultEvent::Downloaded(Err(e)) => self.message = e,
             }
         }
         ctx.request_repaint_after(Duration::from_secs(60));
-        if !cfg!(feature = "ui-review")
-            && self
-                .last_check
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(6 * 3600))
-        {
-            self.start_check(ctx);
-        }
     }
     pub fn button(&mut self, ui: &mut egui::Ui) {
         if ui

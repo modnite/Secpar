@@ -59,7 +59,7 @@ impl Settings {
     }
     pub fn ui(&mut self,ui:&mut egui::Ui)->bool {
         let old=self.clone();
-        design::page_header(ui,"Settings",|_|{});ui.add_space(8.);
+
         design::surface().inner_margin(10).show(ui,|ui| {
             ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
             ui.label(egui::RichText::new("Video").strong());
@@ -104,7 +104,7 @@ impl Settings {
         design::surface().inner_margin(10).show(ui,|ui| {
             ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
             ui.label(egui::RichText::new("Keyboard").strong());
-            #[cfg(windows)]
+            #[cfg(any(windows,target_os="linux"))]
             ui.checkbox(&mut self.system_keys,"Send system shortcuts to the host");
             ui.columns(2,|c| {
                 let height=c[1].spacing().interact_size.y;

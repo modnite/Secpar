@@ -543,14 +543,18 @@ impl Panel {
     pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
         use crate::design;
         use eframe::egui;
-        design::page_header(ui,"Computers",|ui| {
-            if let Some(user) = self.user.clone() {
-                if ui.add_enabled(!self.busy,egui::Button::new("Sign out")).clicked() { self.send(Command::SignOut); }
-                if ui.add_enabled(!self.busy,egui::Button::new("Refresh")).clicked() { self.send(Command::Refresh); }
+        ui.heading("Computers");
+        ui.add_space(8.);
+        if let Some(user)=self.user.clone() {
+            ui.horizontal(|ui| {
                 ui.add(egui::Label::new(user.handle).truncate());
-            }
-        });
-        ui.add_space(6.);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                    if ui.add_enabled(!self.busy,egui::Button::new("Sign out")).clicked(){self.send(Command::SignOut);}
+                    if ui.add_enabled(!self.busy,egui::Button::new("Refresh")).clicked(){self.send(Command::Refresh);}
+                });
+            });
+            ui.add_space(8.);
+        }
         if self.user.is_none() {
             self.sign_in_ui(ui);
         }
@@ -715,7 +719,7 @@ impl Panel {
                                     !self.busy && self.user.is_some(),
                                     egui::Button::new("Link my account"),
                                 )
-                                .on_disabled_hover_text("Sign in under Friends to link this host.")
+                                .on_disabled_hover_text("Sign in on Computers to link this host.")
                                 .clicked()
                             {
                                 self.send(Command::LinkHost);
@@ -877,7 +881,7 @@ impl Panel {
                             }
                         }
                         "friend" => { ui.label(egui::RichText::new("Friend").size(12.).color(crate::design::MUTED)); }
-                        "requested" => { ui.label(egui::RichText::new("Request sent").size(12.).color(crate::design::MUTED)); }
+                        "requested" => { crate::icons::status(ui,crate::icons::Icon::Help,"Request sent",false); }
                         _ => { ui.label(egui::RichText::new("Sent you a request").size(12.).color(crate::design::MUTED)); }
                     });
                 });
@@ -886,33 +890,13 @@ impl Panel {
     }
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
         use eframe::egui;
-        crate::design::page_header(ui, "Friends", |ui| {
-            if let Some(user) = &self.user {
-                let handle = user.handle.clone();
-                if ui
-                    .add_enabled(!self.busy, egui::Button::new("Sign out"))
-                    .clicked()
-                {
-                    self.send(Command::SignOut);
-                }
-                ui.add(egui::Label::new(handle).truncate());
-            }
+        crate::design::page_header(ui,"Friends",|ui| {
+            if ui.add_enabled(self.user.is_some() && !self.busy,egui::Button::new("Refresh")).clicked(){self.send(Command::Refresh);}
         });
         ui.add_space(8.);
         if self.user.is_none() {
-            self.sign_in_ui(ui);
+            ui.weak("Sign in on Computers.");
         } else {
-            ui.horizontal_wrapped(|ui| {
-                let handle = self.user.as_ref().map(|u| u.handle.clone()).unwrap_or_default();
-                ui.add(egui::Label::new(you_are(&handle)).truncate());
-                if ui
-                    .add_enabled(!self.busy, egui::Button::new("Refresh"))
-                    .clicked()
-                {
-                    self.send(Command::Refresh);
-                }
-            });
-            ui.add_space(8.);
             let mut visible = self.user.as_ref().is_some_and(|u| u.visible);
             if ui.add_enabled(!self.busy, egui::Checkbox::new(&mut visible, "Show me in search")).changed() {
                 self.send(Command::SetVisible(visible));
@@ -966,7 +950,9 @@ impl Panel {
                                 egui::FontId::proportional(14.),
                                 crate::design::ACCENT,
                             );
-                            ui.add(egui::Label::new(&friend.handle).truncate());
+                            ui.allocate_ui_with_layout(egui::vec2((ui.available_width()-128.).max(48.),32.),egui::Layout::left_to_right(egui::Align::Center),|ui| {
+                                ui.add(egui::Label::new(&friend.handle).truncate());
+                            });
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
@@ -1013,11 +999,9 @@ impl Panel {
                                         }
                                     });
                                     if friend.state == "accepted" {
-                                        ui.label(
-                                            egui::RichText::new(friend_summary(&friend))
-                                                .size(12.)
-                                                .color(crate::design::MUTED),
-                                        );
+                                        crate::icons::status(ui,if friend.connect=="always" {crate::icons::Icon::Check}else{crate::icons::Icon::Help},if friend.connect=="always" {"Connect any time"}else{"Ask first"},friend.connect=="always");
+                                        crate::icons::status(ui,crate::icons::Icon::Mouse,if friend.mouse(){"Mouse allowed"}else{"Mouse blocked"},friend.mouse());
+                                        crate::icons::status(ui,crate::icons::Icon::Keyboard,if friend.keyboard(){"Keyboard allowed"}else{"Keyboard blocked"},friend.keyboard());
                                     }
                                     if friend.state == "pending" {
                                         if friend.requester != own {
@@ -1161,7 +1145,7 @@ impl Api {
         if self.token.is_none() {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Sign in under Friends first".into(),
+                "Sign in on Computers first".into(),
             ));
         }
         let state = host("host_account_state", Value::Null)

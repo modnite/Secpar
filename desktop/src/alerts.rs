@@ -130,15 +130,9 @@ pub fn show(alert: Alert, _answers: tokio::sync::mpsc::Sender<crate::account::Co
         reg(&[&root, "/ve", "/d", "URL:Secpar answer"]);
         reg(&[&root, "/v", "URL Protocol", "/d", ""]);
         reg(&[&format!("{root}\\shell\\open\\command"), "/ve", "/d", &format!("\"{exe}\" \"%1\"")]);
-        reg(&["HKCU\\Software\\Classes\\AppUserModelId\\Secpar", "/v", "DisplayName", "/d", "Secpar"]);
+        reg(&["HKCU\\Software\\Classes\\AppUserModelId\\com.secpar.host", "/v", "DisplayName", "/d", "Secpar"]);
     });
-    let script = "$ErrorActionPreference='Stop';\
-        [void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
-        [void][Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime];\
-        $d=New-Object Windows.Data.Xml.Dom.XmlDocument;$d.LoadXml($env:SECPAR_TOAST);\
-        $t=New-Object Windows.UI.Notifications.ToastNotification $d;\
-        $t.ExpirationTime=[DateTimeOffset]::Now.AddMinutes(5);\
-        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Secpar').Show($t)";
+    let script = TOAST_SCRIPT;
     let xml = toast_xml(&alert, &key);
     std::thread::spawn(move || {
         let _ = Command::new("powershell.exe")
@@ -200,8 +194,38 @@ pub fn info(title: &str, body: &str) {
             .status();
     });
 }
-#[cfg(not(target_os = "linux"))]
-pub fn info(_title: &str, _body: &str) {}
+#[cfg(windows)]
+const TOAST_SCRIPT:&str = "$ErrorActionPreference='Stop';\
+        [void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
+        [void][Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime];\
+        $d=New-Object Windows.Data.Xml.Dom.XmlDocument;$d.LoadXml($env:SECPAR_TOAST);\
+        $t=New-Object Windows.UI.Notifications.ToastNotification $d;\
+        $t.ExpirationTime=[DateTimeOffset]::Now.AddMinutes(5);\
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('com.secpar.host').Show($t)";
+
+#[cfg(any(windows,test))]
+fn notice_xml(title:&str,body:&str)->String {
+    format!("<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",xml_escape(title),xml_escape(body))
+}
+#[cfg(windows)]
+pub fn update_notice(title:&str,body:&str) {
+    use std::os::windows::process::CommandExt;
+    let xml=notice_xml(title,body);
+    std::thread::spawn(move|| {
+        let _=std::process::Command::new("reg")
+            .args(["add","HKCU\\Software\\Classes\\AppUserModelId\\com.secpar.host","/v","DisplayName","/d","Secpar","/f"])
+            .creation_flags(0x0800_0000).output();
+        let _=std::process::Command::new("powershell.exe")
+            .args(["-NoProfile","-NonInteractive","-WindowStyle","Hidden","-Command",TOAST_SCRIPT])
+            .env("SECPAR_TOAST",xml).creation_flags(0x0800_0000).output();
+    });
+}
+#[cfg(not(target_os="linux"))]
+pub fn info(_title:&str,_body:&str) {}
+#[cfg(target_os="linux")]
+pub fn update_notice(title:&str,body:&str) {info(title,body);}
+#[cfg(not(any(windows,target_os="linux")))]
+pub fn update_notice(_title:&str,_body:&str) {}
 
 #[cfg(test)]
 mod tests {
@@ -218,6 +242,12 @@ mod tests {
             yes: Answer::AllowConnection,
             no: Answer::DenyConnection,
         }
+    }
+    #[test]
+    fn a_plain_notice_escapes_text_without_actions() {
+        let xml=notice_xml("Secpar <update>","1 & 2");
+        assert!(xml.contains("Secpar &lt;update&gt;"));
+        assert!(xml.contains("1 &amp; 2"));assert!(!xml.contains("<actions"));
     }
     #[test]
     fn a_signed_link_round_trips() {

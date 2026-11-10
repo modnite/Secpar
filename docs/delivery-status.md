@@ -1,5 +1,39 @@
 # Secpar delivery record
 
+## 3.18.0 release preparation
+
+Desktop follows Android's three main tabs and a narrow vertical window. Settings
+opens separate client, host and file pages. Host forms are full-width, names and
+controls share edges, and background refresh no longer disables the form.
+Friends drops duplicate account controls and uses labelled permission/policy glyphs.
+Android separates search, requests and friend rows.
+Android uses one column in portrait and two in landscape. Both orientations were
+reviewed in the owned emulator using the debug-only fixture.
+
+Wayland clients use compositor shortcut inhibition and native key ordering while
+a focused stream accepts input. Meta, Meta+E, Alt+Tab, two fullscreen escape chords
+and returning shortcuts to the local menu pass in an isolated GPU-backed KDE
+session. Physical laptop acceptance remains pending. Windows retains D3D11.
+
+Desktop video now travels directly from authenticated frame assembly to the
+decoder worker. Repaints consume the latest decoded image. Per-connection routes
+keep old callbacks separate. UI-event delivery remains as a fallback. Real TLS,
+WebSocket and authenticated UDP tests preserve video/audio delivery, keepalives
+and route recovery through a6.3-second UI pause. Real H.264 route isolation and
+negotiated-rate budget tests pass. Audio algorithms and host encoding settings
+are unchanged. Physical frame pacing still needs comparison on the laptop.
+
+Update discovery and OS notices run independently of painting, including tray use.
+Each release is notified once per process. Installation still requires the user.
+Friend discovery needs sharing/relay heartbeat data absent from3.16.8 hosts.
+
+Windows desktop tests:190 passed,7 ignored. Linux desktop tests:173 passed,8 ignored.
+Android release signing and manifest checks pass; debug review screens are excluded.
+The Windows notifier now uses the installed shortcut identity. Windows reports
+notifications disabled for this app on the test PC; its setting was left unchanged.
+Packages are being verified. The installed host is unchanged.
+
+
 ## WINDOWS HARDWARE DECODE (branch claude/hwdecode, based on 3.16.7, not released)
 
 - The Windows client decoded with OpenH264 only: 17.4 ms median per 1080p frame and a

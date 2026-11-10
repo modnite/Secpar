@@ -150,6 +150,7 @@ impl SharedCapture {
                             }
                             latest.texture = Some(texture);
                             latest.capture_us = frame.capture_us;
+                            secpar_stream::timing::mark(secpar_stream::timing::Stage::Capture);
                             latest.image += 1;
                         }
                         if frame.pointer.is_some() {
