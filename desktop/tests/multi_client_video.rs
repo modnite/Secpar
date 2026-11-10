@@ -64,7 +64,7 @@ type Grid = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
 const GRID: usize = 64;
 
 fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -> Viewer {
-    let p = Params { w, h, fps: 60, codecs: vec!["h264".into()], max_kbps: 8000, audio: false, cands: vec![], public: None, display: String::new() };
+    let p = Params { w, h, fps: 60, codecs: vec!["h264".into()], max_kbps: 8000, audio: false, cands: vec![], public: None, display: String::new(), gate: None };
     let (ready, session) = StreamSession::start(p, IpAddr::from([127, 0, 0, 1]), Arc::new(|_| {}), Box::new(|_| {})).expect("stream must start");
     let ServerMsg::StreamReady { port, session: sid, key, .. } = ready else { panic!("no stream.ready") };
     let key: [u8; 32] = b64(&key).try_into().unwrap();

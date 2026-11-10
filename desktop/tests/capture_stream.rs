@@ -38,7 +38,7 @@ fn b64(s: &str) -> Vec<u8> {
 
 
 fn record(codec: &str, w: u32, h: u32, seconds: u64) -> Vec<(bool, Vec<u8>)> {
-    let p = Params { w, h, fps: 60, codecs: vec![codec.into()], max_kbps: 30000, audio: false, cands: vec![], public: None, display: String::new() };
+    let p = Params { w, h, fps: 60, codecs: vec![codec.into()], max_kbps: 30000, audio: false, cands: vec![], public: None, display: String::new(), gate: None };
     let (ready, session) = StreamSession::start(p, IpAddr::from([127, 0, 0, 1]), Arc::new(|_| {}), Box::new(|_| {})).expect("stream must start");
     let ServerMsg::StreamReady { port, session: sid, key, .. } = ready else { panic!("no stream.ready") };
     let key: [u8; 32] = b64(&key).try_into().unwrap();
