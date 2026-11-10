@@ -3882,6 +3882,7 @@ name = "secpar-host"
 version = "3.18.0"
 dependencies = [
  "base64",
+ "cc",
  "futures-util",
  "igd-next",
  "image",

@@ -197,3 +197,8 @@ end the ongoing task. Record the result and continue the remaining authorized wo
 Do not stop with an acknowledgement-only reply while implementation remains.
 Pause dependent work only for required approval/input or a real blocker, and
 continue independent work meanwhile. Preserve accepted fixes during follow-up work.
+
+Hard release gate, 2026-11-10: the next public release must fix frame pacing on
+Android and Linux. No UI-only or audio-only release while it remains unresolved.
+Preserve the physically accepted Android audio fix and validate actual presentation,
+not just received FPS. Include the shared host encoder/capture path in the diagnosis.

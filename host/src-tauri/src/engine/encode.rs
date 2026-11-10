@@ -1,4 +1,4 @@
-//! Hardware video encoding on a Media Foundation async MFT (the GPU vendor's encoder), fed
+//! Hardware video encoding via Media Foundation, with opt-in direct NVENC, fed
 //! NV12 D3D11 textures: low-latency, CBR, no B-frames, keyframes only on request.
 
 use crate::prs::frame::Codec;
@@ -11,6 +11,31 @@ use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::VARIANT;
+
+mod nvenc;
+
+enum Backend { MediaFoundation(MfEncoder), Nvenc(nvenc::Encoder) }
+
+/// Media Foundation remains the default while direct NVENC is benchmarked.
+pub struct Encoder { backend: Backend, codec: Codec, pub size: (u32, u32) }
+impl Encoder {
+    pub fn new(dev: &ID3D11Device, luid: i64, codec: Codec, size: (u32,u32), fps: u32, kbps: u32) -> windows::core::Result<Self> {
+        // Explicit selection must fail rather than silently benchmark the fallback.
+        let backend = if std::env::var("SECPAR_WINDOWS_ENCODER").as_deref() == Ok("nvenc") {
+            Backend::Nvenc(nvenc::Encoder::new(dev,codec,size,fps,kbps)?)
+        } else { Backend::MediaFoundation(MfEncoder::new(dev,luid,codec,size,fps,kbps)?) };
+        if secpar_stream::timing::enabled() {
+            eprintln!("frame_timing stage=host.encoder backend={}",match &backend {Backend::Nvenc(_)=>"nvenc",Backend::MediaFoundation(_)=>"media-foundation"});
+        }
+        Ok(Self {backend,codec,size})
+    }
+    pub fn codec(&self)->Codec {self.codec}
+    pub fn set_bitrate(&self,kbps:u32)->windows::core::Result<()> {match &self.backend {Backend::Nvenc(e)=>e.set_bitrate(kbps),Backend::MediaFoundation(e)=>e.set_bitrate(kbps)}}
+    pub fn bitrate(&self)->Option<u32> {match &self.backend {Backend::Nvenc(e)=>Some(e.bitrate()),Backend::MediaFoundation(e)=>e.bitrate()}}
+    pub fn encode(&mut self,tex:&ID3D11Texture2D,capture_us:u64,force_idr:bool)->windows::core::Result<Vec<Encoded>> {
+        match &mut self.backend {Backend::Nvenc(e)=>e.encode(tex,capture_us,force_idr),Backend::MediaFoundation(e)=>e.encode(tex,capture_us,force_idr)}
+    }
+}
 
 pub struct Encoded {
     pub data: Vec<u8>,
@@ -105,7 +130,7 @@ struct SendGen(IMFMediaEventGenerator);
 // SAFETY: MF event generators are free-threaded (GetEvent may be called from any thread).
 unsafe impl Send for SendGen {}
 
-pub struct Encoder {
+struct MfEncoder {
     mft: IMFTransform,
     api: ICodecAPI,
     _mgr: IMFDXGIDeviceManager,
@@ -132,8 +157,8 @@ fn set(api: &ICodecAPI, key: &GUID, v: VARIANT) -> windows::core::Result<()> {
     unsafe { api.SetValue(key, &v) }
 }
 
-impl Encoder {
-    pub fn new(dev: &ID3D11Device, luid: i64, codec: Codec, (w, h): (u32, u32), fps: u32, kbps: u32) -> windows::core::Result<Encoder> {
+impl MfEncoder {
+    pub fn new(dev: &ID3D11Device, luid: i64, codec: Codec, (w, h): (u32, u32), fps: u32, kbps: u32) -> windows::core::Result<MfEncoder> {
         let mf = Mf::start()?;
         let mft = find(codec, luid).ok_or_else(|| windows::core::Error::from(MF_E_TOPO_CODEC_NOT_FOUND))?;
         // SAFETY: MF/COM calls on live objects; the device manager outlives the MFT's use of it.
@@ -197,7 +222,7 @@ impl Encoder {
             });
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-            Ok(Encoder {
+            Ok(MfEncoder {
                 mft,
                 api,
                 _mgr: mgr,
@@ -359,7 +384,7 @@ pub fn has_param_sets(codec: Codec, d: &[u8]) -> bool {
     codec == Codec::Av1 || d.windows(4).any(|w| w[..3] == [0, 0, 1] && want(w[3]))
 }
 
-impl Drop for Encoder {
+impl Drop for MfEncoder {
     fn drop(&mut self) {
         // SAFETY: shutting the MFT down ends its event queue, which ends the pump thread.
         unsafe {
@@ -411,7 +436,7 @@ mod tests {
     /// (device, luid, a converter + NV12 source) or None when this PC has no hardware encoder.
     fn rig(codec: Codec) -> Option<(ID3D11Device, i64, Convert, ID3D11Texture2D)> {
         let (dev, ctx, _, luid) = capture::device("")?;
-        if !codecs_available(luid).contains(&codec) {
+        if std::env::var("SECPAR_WINDOWS_ENCODER").as_deref() != Ok("nvenc") && !codecs_available(luid).contains(&codec) {
             eprintln!("no hardware {codec:?} encoder on this PC");
             return None;
         }
