@@ -1,6 +1,16 @@
 # Secpar delivery record
 
-## 3.18.0 release preparation
+## 3.18.1 release preparation
+
+Common header actions use Lucide glyphs with labels. Refresh and sign-in/sign-out
+sit beside updates. Android no longer repeats its selected tab title. Desktop
+host settings no longer duplicates the friend permission list; use Friends.
+This release changes UI only. It excludes the separate host-pacing experiment.
+Android release signing and unit tests pass. Linux desktop173 tests pass.
+Windows installer, Linux AppImage and signed Android APK are built. Uploaded
+checksums will be verified before publication.
+
+## 3.18.0 delivery
 
 Desktop follows Android's three main tabs and a narrow vertical window. Settings
 opens separate client, host and file pages. Host forms are full-width, names and
@@ -34,7 +44,7 @@ notifications disabled for this app on the test PC; its setting was left unchang
 Release draft packages have matching local and uploaded SHA-256 checksums.
 Windows installer:3,844,664 bytes. Linux AppImage:8,677,880 bytes.
 Android APK:8,655,454 bytes, existing signing certificate, version code544.
-Publication and the Windows installation await approval. The installed host is unchanged.
+Published with verified website downloads. Windows installation was deferred while devices were connected.
 
 
 ## WINDOWS HARDWARE DECODE (branch claude/hwdecode, based on 3.16.7, not released)

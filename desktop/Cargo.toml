@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "3.18.0"
+version = "3.18.1"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
