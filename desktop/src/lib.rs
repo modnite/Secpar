@@ -1,5 +1,6 @@
 mod account;
 mod signin;
+mod friend_previews;
 mod alerts;
 pub use account::answer_link;
 mod card;

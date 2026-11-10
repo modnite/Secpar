@@ -239,6 +239,8 @@ pub enum Event {
     Directory(Result<Vec<Person>, String>),
     Live { friends: Vec<Friend>, requests: Vec<Incoming> },
     FriendComputers(Vec<FriendComputer>),
+    /// A new picture for a friend computer card, or `None` when the preview ended.
+    FriendPreview { id: String, image: Option<eframe::egui::ColorImage> },
     Guest(Guest),
 }
 
@@ -259,6 +261,8 @@ pub struct Panel {
     friends: Vec<Friend>,
     blocked: Vec<User>,
     form: crate::signin::Form,
+    /// Pictures from friends' previews waiting to become textures.
+    friend_frames: Vec<(String, Option<eframe::egui::ColorImage>)>,
     note: String,
     query: String,
     asked: Option<String>,
@@ -363,6 +367,7 @@ impl Panel {
                     },
                     blocked: vec![],
                     form: Default::default(),
+                    friend_frames: Vec::new(),
                     note: String::new(),
                     query: String::new(),
                     asked: None,
@@ -404,6 +409,7 @@ impl Panel {
             friends: vec![],
             blocked: vec![],
             form: Default::default(),
+            friend_frames: Vec::new(),
             note: String::new(),
             query: String::new(),
             asked: None,
@@ -480,10 +486,13 @@ impl Panel {
             targets.push(previews::Target { id: c.id.clone(), key: "paired-computer".into(), fingerprint: c.fingerprint });
         }
         self.previews.set(previews::Wanted { targets });
-        self.textures.apply(self.previews.take(), |id, image| ctx.load_texture(format!("preview {id}"), image, eframe::egui::TextureOptions::LINEAR));
+        let mut updates = self.previews.take();
+        updates.extend(std::mem::take(&mut self.friend_frames));
+        self.textures.apply(updates, |id, image| ctx.load_texture(format!("preview {id}"), image, eframe::egui::TextureOptions::LINEAR));
         let computers = &self.computers;
         let manual_id = manual.map(|c| c.id.as_str());
-        self.textures.retain(|id| manual_id == Some(id) || computers.iter().any(|c| c.id == id && shown(c)));
+        let friends = &self.friend_computers;
+        self.textures.retain(|id| manual_id == Some(id) || computers.iter().any(|c| c.id == id && shown(c)) || friends.iter().any(|c| c.id == id));
     }
     /// The newest preview picture of a computer, if it gave one.
     pub fn preview(&self, id: &str) -> Option<&eframe::egui::TextureHandle> {
@@ -500,7 +509,8 @@ impl Panel {
             let platform = match computer.platform.as_str() { "windows" => "Windows", "linux" => "Linux", "macos" => "macOS", _ => "" };
             let status = format!("@{} · {}", computer.owner_handle, computer.access());
             let enabled = !self.busy && !self.session_open;
-            let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: None, connect: Some(enabled), menu: None });
+            let preview = self.textures.get(&computer.id).cloned();
+            let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: preview.as_ref(), connect: Some(enabled), menu: None });
             if clicked {
                 self.guest_choice = Some((computer, PERMISSION_DEFAULTS));
             }
@@ -596,6 +606,7 @@ impl Panel {
                 Event::Directory(Err(note)) => { self.people.clear(); self.note = note; }
                 Event::Live { friends, requests } => { self.friends = friends; self.requests = requests; }
                 Event::FriendComputers(list) => self.friend_computers = list,
+                Event::FriendPreview { id, image } => self.friend_frames.push((id, image)),
                 Event::Guest(Guest::Waiting(owner)) => { self.guest_waiting = Some(owner); self.note.clear(); }
                 Event::Guest(Guest::Refused(note)) => { self.guest_waiting = None; self.note = note; }
                 Event::Guest(Guest::Grant(grant)) => { self.guest_waiting = None; self.note.clear(); self.guest_grant = Some(grant); }
@@ -1203,7 +1214,7 @@ impl Api {
         Ok(list)
     }
     /// Ask a friend for access. Answers the request id, its state and the permissions the service kept.
-    async fn request_access(&self, computer: &str, permissions: &[String]) -> Result<(String, String, u64, Vec<String>), (StatusCode, String)> {
+    pub(crate) async fn request_access(&self, computer: &str, permissions: &[String]) -> Result<(String, String, u64, Vec<String>), (StatusCode, String)> {
         let computer = path_id(computer).map_err(|note| (StatusCode::BAD_REQUEST, note))?;
         if permissions.is_empty() || permissions.iter().any(|p| !PERMISSIONS.contains(&p.as_str())) {
             return Err((StatusCode::BAD_REQUEST, "Choose what you want to do first.".into()));
@@ -1222,7 +1233,7 @@ impl Api {
         let state = row["state"].as_str().ok_or((StatusCode::BAD_GATEWAY, "Invalid request response".to_string()))?.to_string();
         Ok((state, permission_list(&row["approved"])))
     }
-    async fn claim(&self, id: &str, computer: &FriendComputer, permissions: Vec<String>) -> Result<Grant, (StatusCode, String)> {
+    pub(crate) async fn claim(&self, id: &str, computer: &FriendComputer, permissions: Vec<String>) -> Result<Grant, (StatusCode, String)> {
         let id = path_id(id).map_err(|note| (StatusCode::BAD_REQUEST, note))?;
         let value = self.call(Method::POST, &format!("/v1/requests/{id}/claim"), None).await?;
         let bad = || (StatusCode::BAD_GATEWAY, "Invalid connection grant".to_string());
@@ -1591,6 +1602,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut api=Api{client,token,base:ORIGIN.into()};
             let mut pending_pair: Option<PendingPair> = None;
             let mut pending_guest: Option<PendingGuest> = None;
+            let mut friend_tasks = crate::friend_previews::Tasks::default();
             let mut next_friend_computers = Instant::now();
             let mut signed_owner: Option<String> = None;
             let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
@@ -1804,11 +1816,11 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     }
                     let _=events.send(Event::Busy(false)).await;ctx.request_repaint();
                 }
-                if api.token.is_none() { pending_pair=None; pending_guest=None; signed_owner=None; next_friend_computers=Instant::now(); sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
+                if api.token.is_none() { friend_tasks.stop(); pending_pair=None; pending_guest=None; signed_owner=None; next_friend_computers=Instant::now(); sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
                 if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
                     next_friend_computers=Instant::now()+Duration::from_secs(20);
                     match api.friend_computers().await {
-                        Ok(list)=>{let _=events.send(Event::FriendComputers(list)).await;}
+                        Ok(list)=>{friend_tasks.sync(&api,&list,&events,&ctx);let _=events.send(Event::FriendComputers(list)).await;}
                         Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;pending_pair=None;pending_guest=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}
                         Err(_)=>{}
                     }
