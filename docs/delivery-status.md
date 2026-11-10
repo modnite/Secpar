@@ -31,7 +31,10 @@ Windows desktop tests:190 passed,7 ignored. Linux desktop tests:173 passed,8 ign
 Android release signing and manifest checks pass; debug review screens are excluded.
 The Windows notifier now uses the installed shortcut identity. Windows reports
 notifications disabled for this app on the test PC; its setting was left unchanged.
-Packages are being verified. The installed host is unchanged.
+Release draft packages have matching local and uploaded SHA-256 checksums.
+Windows installer:3,844,664 bytes. Linux AppImage:8,677,880 bytes.
+Android APK:8,655,454 bytes, existing signing certificate, version code544.
+Publication and the Windows installation await approval. The installed host is unchanged.
 
 
 ## WINDOWS HARDWARE DECODE (branch claude/hwdecode, based on 3.16.7, not released)
