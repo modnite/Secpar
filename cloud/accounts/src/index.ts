@@ -1,14 +1,11 @@
 import { hostRoutes } from "./hosts";
 import { EFFECTIVE, flags, friendSettings, saveSettings } from "./settings";
-import { passwordRoutes, accountPage } from "./passwords";
-import { assetRoute, escapeHtml, heading, renderPage } from "./ui";
+import { passwordRoutes } from "./passwords";
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
 
 export interface Env {
   DB: D1Database;
   PUBLIC_ORIGIN: string;
-  GITHUB_CLIENT_ID: string;
-  GITHUB_CLIENT_SECRET: string;
   GRANT_PRIVATE_JWK: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
@@ -33,7 +30,6 @@ const permissions = new Set([
   "clipboard",
   "files",
 ]);
-const SESSION = "__Host-secpar-session";
 const STATE = "__Host-secpar-oauth";
 const seconds = () => Math.floor(Date.now() / 1000);
 const random = () =>
@@ -63,14 +59,6 @@ class ApiError extends Error {
 const q = (env: Env, sql: string, ...values: (string | number | null)[]) =>
   env.DB.prepare(sql).bind(...values);
 const pair = (a: string, b: string) => (a < b ? [a, b] : [b, a]);
-function cookie(request: Request, name: string): string | undefined {
-  return request.headers
-    .get("cookie")
-    ?.split(";")
-    .map((s) => s.trim())
-    .find((s) => s.startsWith(name + "="))
-    ?.slice(name.length + 1);
-}
 function origin(env: Env): string {
   const url = new URL(env.PUBLIC_ORIGIN);
   if (
@@ -93,11 +81,6 @@ export async function hash(value: string): Promise<string> {
   )
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-}
-const html = (title: string, content: string, status = 200): Response =>
-  renderPage(title, content, status);
-function setCookie(name: string, value: string, age: number): string {
-  return `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
 }
 async function body(request: Request): Promise<Record<string, unknown>> {
   if (Number(request.headers.get("content-length") ?? 0) > 8192)
@@ -124,19 +107,6 @@ async function body(request: Request): Promise<Record<string, unknown>> {
     at += c.length;
   }
   const decoded = new TextDecoder().decode(data);
-  if (
-    new URL(request.url).pathname === "/activate" &&
-    request.headers
-      .get("content-type")
-      ?.startsWith("application/x-www-form-urlencoded")
-  ) {
-    const out: Record<string, string> = Object.create(null);
-    new URLSearchParams(decoded).forEach((v, k) => {
-      if (Object.hasOwn(out, k)) deny(400, "duplicate_form_field");
-      out[k] = v;
-    });
-    return out;
-  }
   try {
     const v: unknown = JSON.parse(decoded);
     if (!v || typeof v !== "object" || Array.isArray(v))
@@ -162,17 +132,10 @@ function perms(value: unknown): string[] {
   return [...new Set(value as string[])].sort();
 }
 async function user(request: Request, env: Env): Promise<Account> {
-  const bearer = request.headers
+  const token = request.headers
     .get("authorization")
     ?.match(/^Bearer ([a-f0-9]{64})$/)?.[1];
-  const token = bearer ?? cookie(request, SESSION);
-  if (!token || !/^[a-f0-9]{64}$/.test(token)) deny(401, "sign_in_required");
-  if (
-    !bearer &&
-    !["GET", "HEAD"].includes(request.method) &&
-    request.headers.get("origin") !== origin(env)
-  )
-    deny(403, "invalid_origin");
+  if (!token) deny(401, "sign_in_required");
   const row = await q(
     env,
     "SELECT a.id,a.handle,a.name,a.visible FROM sessions s JOIN accounts a ON a.id=s.user_id WHERE s.hash=? AND s.expires>?",
@@ -229,56 +192,6 @@ async function signing(env: Env) {
 }
 // Usernames are 3 to 30 letters, digits or underscores and are unique without regard to case.
 const USERNAME = /^[a-z0-9_]{3,30}$/;
-// GitHub logins may contain hyphens. A hyphen becomes an underscore.
-function githubUsername(login: string): string {
-  let name = login.replaceAll(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-  if (name.length < 3) name = name.padEnd(3, "_");
-  return name;
-}
-function withSuffix(name: string, n: number): string {
-  if (n < 2) return name;
-  const tail = "_" + n;
-  return name.slice(0, 30 - tail.length) + tail;
-}
-// The username is chosen once, when the account is created. Later logins keep it.
-async function upsertGithubAccount(
-  env: Env,
-  githubId: string,
-  login: string,
-  fullName: string | undefined,
-) {
-  const name = (fullName || login).slice(0, 80);
-  const changed = await q(
-    env,
-    "UPDATE accounts SET name=? WHERE github_id=?",
-    name,
-    githubId,
-  ).run();
-  if (changed.meta.changes) return;
-  const base = githubUsername(login);
-  for (let n = 1; n <= 40; n++) {
-    const id = crypto.randomUUID();
-    const handle =
-      n < 40 ? withSuffix(base, n) : base.slice(0, 21) + "_" + id.slice(0, 8);
-    try {
-      await q(
-        env,
-        "INSERT INTO accounts(id,github_id,handle,handle_lower,name) VALUES(?,?,?,?,?)",
-        id,
-        githubId,
-        handle,
-        handle.toLowerCase(),
-        name,
-      ).run();
-      return;
-    } catch {
-      // The name is taken, or a parallel login created this account first.
-      if (await q(env, "SELECT 1 FROM accounts WHERE github_id=?", githubId).first())
-        return;
-    }
-  }
-  deny(500, "account_creation_failed");
-}
 async function limit(
   request: Request,
   env: Env,
@@ -312,289 +225,14 @@ export async function handle(
       const key = await signing(env);
       return response({ keys: [key.publicKey] });
     }
-    const asset = assetRoute(request);
-    if (asset) return asset;
     const passwordResponse = await passwordRoutes(request, env, providerFetch);
     if (passwordResponse) return passwordResponse;
-    if (path === "/auth/start" && method === "GET")
-      return new Response(null, {
-        status: 302,
-        headers: {
-          location:
-            base +
-            "/auth/sign-in" +
-            (url.searchParams.has("activate_code")
-              ? "?activate_code=" +
-                encodeURIComponent(url.searchParams.get("activate_code")!)
-              : ""),
-          "cache-control": "no-store",
-        },
-      });
-    if (path === "/auth/github" && method === "GET") {
-      await limit(request, env, "login", 10);
-      if (
-        !env.GITHUB_CLIENT_ID ||
-        !env.GITHUB_CLIENT_SECRET ||
-        env.GITHUB_CLIENT_ID.startsWith("CONFIGURE")
-      )
-        deny(503, "oauth_not_configured");
-      const state = random(),
-        verifier = random();
-      const returnCode = url.searchParams.get("activate_code");
-      await q(
-        env,
-        "INSERT INTO oauth_states(hash,verifier,return_code,expires) VALUES(?,?,?,?)",
-        await hash(state),
-        verifier,
-        returnCode && /^[A-Z2-9]{8}$/.test(returnCode) ? returnCode : null,
-        seconds() + 600,
-      ).run();
-      const challenge = btoa(
-        String.fromCharCode(
-          ...new Uint8Array(
-            await crypto.subtle.digest(
-              "SHA-256",
-              new TextEncoder().encode(verifier),
-            ),
-          ),
-        ),
-      )
-        .replaceAll("+", "-")
-        .replaceAll("/", "_")
-        .replaceAll("=", "");
-      const github = new URL("https://github.com/login/oauth/authorize");
-      for (const [k, v] of Object.entries({
-        client_id: env.GITHUB_CLIENT_ID,
-        redirect_uri: base + "/auth/callback",
-        state,
-        scope: "read:user",
-        code_challenge: challenge,
-        code_challenge_method: "S256",
-      }))
-        github.searchParams.set(k, v);
-      return new Response(null, {
-        status: 302,
-        headers: {
-          location: github.toString(),
-          "set-cookie": setCookie(STATE, state, 600),
-          "cache-control": "no-store",
-        },
-      });
-    }
-    if (path === "/auth/callback" && method === "GET") {
-      await limit(request, env, "callback", 20);
-      const state = url.searchParams.get("state"),
-        code = url.searchParams.get("code");
-      if (
-        !state ||
-        !code ||
-        state.length !== 64 ||
-        state !== cookie(request, STATE) ||
-        code.length > 256
-      )
-        deny(400, "invalid_oauth_state");
-      const row = await q(
-        env,
-        "DELETE FROM oauth_states WHERE hash=? AND expires>? RETURNING verifier,return_code",
-        await hash(state),
-        seconds(),
-      ).first<{ verifier: string; return_code: string | null }>();
-      if (!row) deny(400, "oauth_state_expired_or_used");
-      const tokenResponse = await providerFetch(
-        "https://github.com/login/oauth/access_token",
-        {
-          method: "POST",
-          signal: AbortSignal.timeout(10000),
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            client_id: env.GITHUB_CLIENT_ID,
-            client_secret: env.GITHUB_CLIENT_SECRET,
-            code,
-            redirect_uri: base + "/auth/callback",
-            code_verifier: row.verifier,
-          }),
-        },
-      );
-      if (!tokenResponse.ok) deny(502, "oauth_exchange_failed");
-      const tokenData = (await tokenResponse.json()) as {
-        access_token?: string;
-      };
-      if (!tokenData.access_token) deny(401, "oauth_refused");
-      const profileResponse = await providerFetch(
-        "https://api.github.com/user",
-        {
-          signal: AbortSignal.timeout(10000),
-          headers: {
-            authorization: `Bearer ${tokenData.access_token}`,
-            accept: "application/vnd.github+json",
-            "user-agent": "Secpar",
-          },
-        },
-      );
-      if (!profileResponse.ok) deny(502, "profile_lookup_failed");
-      const profile = (await profileResponse.json()) as {
-        id?: number;
-        login?: string;
-        name?: string;
-      };
-      if (!Number.isSafeInteger(profile.id) || !profile.login)
-        deny(502, "invalid_profile");
-      await upsertGithubAccount(env, String(profile.id), profile.login, profile.name);
-      const account = await q(
-        env,
-        "SELECT id FROM accounts WHERE github_id=?",
-        String(profile.id),
-      ).first<{ id: string }>();
-      if (!account) deny(500, "account_creation_failed");
-      const session = random();
-      await q(
-        env,
-        "INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)",
-        await hash(session),
-        account.id,
-        seconds() + 30 * 86400,
-      ).run();
-      const headers = new Headers({
-        location:
-          base +
-          (row.return_code ? "/activate?code=" + row.return_code : "/v1/me"),
-        "cache-control": "no-store",
-      });
-      headers.append("set-cookie", setCookie(STATE, "", 0));
-      headers.append("set-cookie", setCookie(SESSION, session, 30 * 86400));
-      return new Response(null, { status: 302, headers });
-    }
-    if (path === "/auth/device" && method === "POST") {
-      await limit(request, env, "device", 10);
-      const b = await body(request);
-      const name = text(b.name, 60);
-      const secret = random();
-      const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-      const bytes = crypto.getRandomValues(new Uint8Array(8));
-      const code = Array.from(bytes, (b) => alphabet[b % 32]).join("");
-      await q(
-        env,
-        "INSERT INTO device_auth(hash,code,name,expires) VALUES(?,?,?,?)",
-        await hash(secret),
-        code,
-        name,
-        seconds() + 600,
-      ).run();
-      return response(
-        {
-          device_code: secret,
-          user_code: code,
-          verification_uri: base + "/activate",
-          verification_uri_complete: base + "/activate?code=" + code,
-          expires_in: 600,
-          interval: 5,
-        },
-        201,
-      );
-    }
-    if (path === "/auth/device/token" && method === "POST") {
-      await limit(request, env, "device_poll", 120);
-      const b = await body(request),
-        secret = text(b.device_code, 64);
-      if (!/^[a-f0-9]{64}$/.test(secret)) deny(400, "invalid_device_code");
-      const digest = await hash(secret);
-      const row = await q(
-        env,
-        "SELECT * FROM device_auth WHERE hash=?",
-        digest,
-      ).first<{
-        account: string | null;
-        expires: number;
-        poll_after: number;
-        used: number;
-      }>();
-      if (!row || row.used || row.expires <= seconds())
-        deny(400, "device_code_expired_or_used");
-      if (row.poll_after > seconds()) deny(429, "slow_down");
-      await q(
-        env,
-        "UPDATE device_auth SET poll_after=? WHERE hash=?",
-        seconds() + 5,
-        digest,
-      ).run();
-      if (!row.account) deny(400, "authorization_pending");
-      const consumed = await q(
-        env,
-        "UPDATE device_auth SET used=1 WHERE hash=? AND used=0 AND expires>? RETURNING account",
-        digest,
-        seconds(),
-      ).first<{ account: string }>();
-      if (!consumed) deny(400, "device_code_expired_or_used");
-      const token = random();
-      await q(
-        env,
-        "INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)",
-        await hash(token),
-        consumed.account,
-        seconds() + 30 * 86400,
-      ).run();
-      return response({
-        access_token: token,
-        token_type: "Bearer",
-        expires_in: 30 * 86400,
-      });
-    }
-    if (path === "/activate" && method === "GET") {
-      const code = url.searchParams.get("code") ?? "";
-      if (!/^[A-Z2-9]{8}$/.test(code)) deny(400, "invalid_user_code");
-      let signed: Account;
-      try {
-        signed = await user(request, env);
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401)
-          return new Response(null, {
-            status: 302,
-            headers: {
-              location: base + "/auth/start?activate_code=" + code,
-              "cache-control": "no-store",
-            },
-          });
-        throw error;
-      }
-      const row = await q(
-        env,
-        "SELECT name FROM device_auth WHERE code=? AND expires>? AND account IS NULL AND used=0",
-        code,
-        seconds(),
-      ).first<{ name: string }>();
-      if (!row) deny(400, "device_code_expired_or_used");
-      return html(
-        "Approve a computer",
-        `${heading("Approve " + row.name, "The Secpar app on that device asked to sign in to your app account.")}<p>This browser is signed in as <strong>${escapeHtml(signed.handle)}</strong>.</p><p>The app shows this code. Approve only if the codes match:</p><p class="code" aria-label="Device code">${code}</p><form method="post" action="/activate"><input type="hidden" name="code" value="${code}"><button class="button" type="submit">Approve</button></form><p class="fine">The code works for 10 minutes after the app shows it. If you did not start this, close the page.</p>`,
-      );
-    }
     const hostApi = {body,fail:deny,hash,limit:(r:Request,_env:unknown,operation:string,maximum:number)=>limit(r,env,operation,maximum)};
     const machineResponse=await hostRoutes(request,env,null,hostApi);
     if(machineResponse)return machineResponse;
     const me = await user(request, env);
     const ownerHostResponse=await hostRoutes(request,env,me,hostApi);
     if(ownerHostResponse)return ownerHostResponse;
-    if (path === "/activate" && method === "POST") {
-      const code = text((await body(request)).code, 8);
-      if (!/^[A-Z2-9]{8}$/.test(code)) deny(400, "invalid_user_code");
-      const changed = await q(
-        env,
-        "UPDATE device_auth SET account=? WHERE code=? AND account IS NULL AND used=0 AND expires>?",
-        me.id,
-        code,
-        seconds(),
-      ).run();
-      if (!changed.meta.changes) deny(409, "device_code_expired_or_used");
-      return html(
-        "Device approved",
-        `${heading("Computer approved")}<p>Go back to the Secpar app. It signs in within a few seconds. You can close this page.</p>`,
-      );
-    }
-
-    if (path === "/account" && method === "GET") return accountPage(me.handle);
     if (path === "/v1/me" && method === "GET")
       return response({ ...me, visible: !!me.visible });
     if (path === "/v1/me/visibility" && method === "PUT") {
@@ -633,29 +271,9 @@ export async function handle(
       );
     }
     if (path === "/auth/logout" && method === "POST") {
-      const token =
-        request.headers
-          .get("authorization")
-          ?.match(/^Bearer ([a-f0-9]{64})$/)?.[1] ??
-        cookie(request, SESSION) ??
-        "";
-      await q(
-        env,
-        "DELETE FROM sessions WHERE hash=?",
-        await hash(token),
-      ).run();
-      return new Response(null, {
-        status: request.headers.get("accept")?.includes("text/html")
-          ? 303
-          : 204,
-        headers: {
-          ...(request.headers.get("accept")?.includes("text/html")
-            ? { location: "/auth/sign-in" }
-            : {}),
-          "set-cookie": setCookie(SESSION, "", 0),
-          "cache-control": "no-store",
-        },
-      });
+      const token = request.headers.get("authorization")?.match(/^Bearer ([a-f0-9]{64})$/)?.[1] ?? "";
+      await q(env, "DELETE FROM sessions WHERE hash=?", await hash(token)).run();
+      return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
     }
     if (path === "/v1/friends" && method === "GET") {
       const rows = await q(

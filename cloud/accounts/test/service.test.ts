@@ -137,82 +137,19 @@ beforeEach(async () => {
   }
 });
 describe("authentication", () => {
-  it("requires authentication and origin protection for browser mutations", async () => {
+  it("needs a bearer session, ignores cookies and ends it on sign out", async () => {
     expect((await call("/v1/friends", null)).status).toBe(401);
-    const request = new Request(base + "/v1/friends/bob", {
-      method: "PUT",
-      headers: {
-        cookie: `__Host-secpar-session=${tokens.alice}`,
-        origin: "https://evil.example",
-      },
-    });
-    expect((await handle(request, env)).status).toBe(403);
+    const cookie = new Request(base + "/v1/friends", { headers: { cookie: `__Host-secpar-session=${tokens.alice}` } });
+    expect((await handle(cookie, env)).status).toBe(401);
     expect((await call("/auth/logout", "alice", "POST")).status).toBe(204);
     expect((await call("/v1/me")).status).toBe(401);
   });
-  it("uses browser-bound one-use OAuth state and PKCE and stores only session hashes", async () => {
-    const begin = await handle(new Request(base + "/auth/github"), env);
-    const location = new URL(begin.headers.get("location")!);
-    const state = location.searchParams.get("state")!;
-    expect(location.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(location.searchParams.get("code_challenge")).toHaveLength(43);
-    let verified = false;
-    const provider: typeof fetch = async (input, init) => {
-      if (String(input).includes("access_token")) {
-        const body = JSON.parse(String(init?.body));
-        expect(body.code_verifier).toHaveLength(64);
-        expect(body.redirect_uri).toBe(base + "/auth/callback");
-        verified = true;
-        return Response.json({ access_token: "provider-only-secret" });
-      }
-      return Response.json({
-        id: 12345,
-        login: "newfriend",
-        name: "New Friend",
-      });
-    };
-    const callback = new Request(
-      base + `/auth/callback?code=provider-code&state=${state}`,
-      { headers: { cookie: `__Host-secpar-oauth=${state}` } },
-    );
-    expect(
-      (await handle(new Request(callback.url), env, provider)).status,
-    ).toBe(400);
-    const result = await handle(callback, env, provider);
-    expect(result.status).toBe(302);
-    expect(verified).toBe(true);
-    const cookie = result.headers
-      .getSetCookie()
-      .find((s) => s.startsWith("__Host-secpar-session="))!;
-    expect(cookie).toContain("HttpOnly");
-    expect(cookie).toContain("Secure");
-    const token = cookie.split(";")[0].split("=")[1];
-    expect(
-      await db
-        .prepare("SELECT 1 FROM sessions WHERE hash=?")
-        .bind(token)
-        .first(),
-    ).toBeNull();
-    const me = await handle(
-      new Request(base + "/v1/me", {
-        headers: { cookie: cookie.split(";")[0] },
-      }),
-      env,
-    );
-    expect((await me.json()).handle).toBe("newfriend");
-    expect(
-      (
-        await handle(
-          new Request(callback.url, {
-            headers: { cookie: `__Host-secpar-oauth=${state}` },
-          }),
-          env,
-          provider,
-        )
-      ).status,
-    ).toBe(400);
+  it("has no browser sign-in, GitHub or device flow any more", async () => {
+    for (const path of ["/auth/sign-in", "/auth/register", "/auth/forgot", "/auth/verify", "/auth/github", "/auth/callback", "/auth/device", "/auth/device/token", "/auth/start", "/activate", "/account"])
+      expect([401, 404], path).toContain((await handle(new Request(base + path), env)).status);
   });
 });
+
 describe("friend and guest boundaries", () => {
   it("a friend request grants no access and cannot be self-accepted", async () => {
     const host = await computer();
@@ -338,60 +275,6 @@ describe("friend and guest boundaries", () => {
   });
 });
 
-describe("native device sign-in", () => {
-  it("keeps polling credentials off the browser and exchanges an approved code once", async () => {
-    const start = await call("/auth/device", null, "POST", {
-      name: "Windows desktop",
-    });
-    expect(start.status).toBe(201);
-    const device = await start.json();
-    expect(device.verification_uri_complete).not.toContain(device.device_code);
-    const login = await handle(
-      new Request(device.verification_uri_complete),
-      env,
-    );
-    expect(login.status).toBe(302);
-    expect(login.headers.get("location")).toContain(
-      "/auth/start?activate_code=",
-    );
-    expect(
-      (
-        await call("/auth/device/token", null, "POST", {
-          device_code: device.device_code,
-        })
-      ).status,
-    ).toBe(400);
-    expect(
-      (await call("/activate", "alice", "POST", { code: device.user_code }))
-        .status,
-    ).toBe(200);
-    expect(
-      (await call("/activate", "bob", "POST", { code: device.user_code }))
-        .status,
-    ).toBe(409);
-    await db.prepare("UPDATE device_auth SET poll_after=0").run();
-    const tokenResult = await call("/auth/device/token", null, "POST", {
-      device_code: device.device_code,
-    });
-    expect(tokenResult.status).toBe(200);
-    const token = (await tokenResult.json()).access_token;
-    const me = await handle(
-      new Request(base + "/v1/me", {
-        headers: { authorization: `Bearer ${token}` },
-      }),
-      env,
-    );
-    expect((await me.json()).id).toBe("alice");
-    expect(
-      (
-        await call("/auth/device/token", null, "POST", {
-          device_code: device.device_code,
-        })
-      ).status,
-    ).toBe(400);
-  });
-});
-
 describe("configuration and resource limits", () => {
   it("does not consume an approved claim while signing is unconfigured", async () => {
     await friendship();
@@ -408,317 +291,6 @@ describe("configuration and resource limits", () => {
     env.GRANT_PRIVATE_JWK = key;
     expect((await call(`/v1/requests/${id}/claim`, "bob", "POST")).status).toBe(
       200,
-    );
-  });
-  it("limits unauthenticated login creation and bounds streamed request bodies", async () => {
-    for (let n = 0; n < 10; n++)
-      expect(
-        (await handle(new Request(base + "/auth/github"), env)).status,
-      ).toBe(302);
-    expect((await handle(new Request(base + "/auth/github"), env)).status).toBe(
-      429,
-    );
-    const request = new Request(base + "/v1/computers", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${tokens.alice}`,
-        "content-type": "application/json",
-        "content-length": "1",
-      },
-      body: JSON.stringify({ name: "x".repeat(9000), platform: "windows" }),
-    });
-    expect((await handle(request, env)).status).toBe(413);
-  });
-});
-
-describe("email and password accounts", () => {
-  const pass = "correct horse battery staple";
-  const nextPass = "a different long password phrase";
-  async function form(
-    path: string,
-    fields: Record<string, string>,
-    send?: typeof fetch,
-    requestOrigin = base,
-  ) {
-    return handle(
-      new Request(base + path, {
-        method: "POST",
-        headers: {
-          origin: requestOrigin,
-          "content-type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams(fields),
-      }),
-      env,
-      send,
-    );
-  }
-  function mailCapture(messages: { to: string; text: string }[]): typeof fetch {
-    return async (_input, init) => {
-      const message = JSON.parse(String(init?.body));
-      expect(message.text).not.toContain(pass);
-      messages.push({ to: message.to[0], text: message.text });
-      return Response.json({ id: "email-id" });
-    };
-  }
-  function link(message: { text: string }) {
-    return new URL(message.text.split("\n")[1]);
-  }
-  it("keeps registration and reset closed without configured email delivery", async () => {
-    expect((await call("/auth/register", null)).status).toBe(503);
-    expect(
-      (
-        await form("/auth/register", {
-          email: "friend@example.com",
-          handle: "friend",
-          password: pass,
-        })
-      ).status,
-    ).toBe(503);
-    expect(
-      (await form("/auth/forgot", { email: "friend@example.com" })).status,
-    ).toBe(503);
-    expect(
-      db.db.prepare("SELECT count(*) AS n FROM password_accounts").get()?.n,
-    ).toBe(0);
-  });
-  it("verifies email, signs in, resets once and revokes old sessions", async () => {
-    env.RESEND_API_KEY = "test-mail-key";
-    env.EMAIL_FROM = "Secpar <accounts@secpar.win>";
-    const messages: { to: string; text: string }[] = [];
-    const send = mailCapture(messages);
-    const fields = {
-      email: "Friend@Example.com",
-      handle: "friend",
-      password: pass,
-    };
-    expect((await form("/auth/register", fields, send)).status).toBe(200);
-    expect(messages).toHaveLength(1);
-    expect(messages[0].to).toBe("friend@example.com");
-    const stored = db.db.prepare("SELECT * FROM password_accounts").get()!;
-    expect(stored.password_hash).not.toContain(pass);
-    expect(stored.password_hash).toMatch(/^scrypt-16384-8-5/);
-    expect((await form("/auth/sign-in", fields)).status).toBe(401);
-    const verify = link(messages[0]);
-    const token = verify.searchParams.get("token")!;
-    expect(db.db.prepare("SELECT hash FROM email_tokens").get()?.hash).not.toBe(
-      token,
-    );
-    // Mail scanners cannot consume the link with GET.
-    expect((await handle(new Request(verify), env)).status).toBe(200);
-    expect(
-      (await form("/auth/verify", { token }, send, "https://evil.test")).status,
-    ).toBe(403);
-    expect((await form("/auth/verify", { token })).status).toBe(200);
-    expect((await form("/auth/verify", { token })).status).toBe(400);
-    const login = await form("/auth/sign-in", {
-      ...fields,
-      activate_code: "ABCDEFGH",
-    });
-    expect(login.status).toBe(303);
-    expect(login.headers.get("location")).toBe("/activate?code=ABCDEFGH");
-    const cookie = login.headers.get("set-cookie")!.split(";")[0];
-    expect(login.headers.get("set-cookie")).toContain(
-      "Secure; HttpOnly; SameSite=Lax",
-    );
-    expect(
-      (await call("/v1/me", null, "GET", undefined, { cookie })).status,
-    ).toBe(200);
-    // Existing signup cannot overwrite an account's credentials.
-    expect(
-      (await form("/auth/register", { ...fields, handle: "other_name", password: nextPass }, send))
-        .status,
-    ).toBe(200);
-    expect(messages).toHaveLength(1);
-    expect(
-      (await form("/auth/forgot", { email: fields.email }, send)).status,
-    ).toBe(200);
-    const resetToken = link(messages[1]).searchParams.get("token")!;
-    const results = await Promise.all([
-      form("/auth/reset", { token: resetToken, password: nextPass }),
-      form("/auth/reset", { token: resetToken, password: nextPass }),
-    ]);
-    expect(results.map((r) => r.status).sort()).toEqual([200, 400]);
-    expect(
-      (await call("/v1/me", null, "GET", undefined, { cookie })).status,
-    ).toBe(401);
-    expect((await form("/auth/sign-in", fields)).status).toBe(401);
-    // Use another IP to avoid the intended 5-attempt account bucket in this test.
-    db.db.exec("DELETE FROM rate_limits");
-    expect(
-      (await form("/auth/sign-in", { ...fields, password: nextPass })).status,
-    ).toBe(303);
-  });
-  it("bounds input, requires origin, rejects weak passwords and limits login attempts", async () => {
-    expect(
-      (
-        await form(
-          "/auth/sign-in",
-          { email: "x@example.com", password: pass },
-          undefined,
-          "https://evil.test",
-        )
-      ).status,
-    ).toBe(403);
-    expect(
-      (
-        await form("/auth/sign-in", {
-          email: "x@example.com",
-          password: "short",
-        })
-      ).status,
-    ).toBe(400);
-    for (let i = 0; i < 5; i++)
-      expect(
-        (
-          await form("/auth/sign-in", {
-            email: "missing@example.com",
-            password: pass,
-          })
-        ).status,
-      ).toBe(401);
-    expect(
-      (
-        await form("/auth/sign-in", {
-          email: "missing@example.com",
-          password: pass,
-        })
-      ).status,
-    ).toBe(429);
-    const huge = new Request(base + "/auth/sign-in", {
-      method: "POST",
-      headers: { origin: base, "content-type": "application/json" },
-      body: JSON.stringify({ password: "x".repeat(9000) }),
-    });
-    expect((await handle(huge, env)).status).toBe(413);
-  });
-  it("does not log in after expiry and does not change credentials with expired reset tokens", async () => {
-    env.RESEND_API_KEY = "key";
-    env.EMAIL_FROM = "accounts@secpar.win";
-    const messages: { to: string; text: string }[] = [];
-    await form(
-      "/auth/register",
-      { email: "new@example.com", handle: "friend", password: pass },
-      mailCapture(messages),
-    );
-    const token = link(messages[0]).searchParams.get("token")!;
-    db.db.exec("UPDATE email_tokens SET expires=0");
-    expect((await form("/auth/verify", { token })).status).toBe(400);
-    expect(
-      (
-        await form("/auth/sign-in", {
-          email: "new@example.com",
-          password: pass,
-        })
-      ).status,
-    ).toBe(401);
-  });
-});
-
-describe("browser form regression", () => {
-  it("keeps the origin on form submissions and hides recovery URLs from other sites", async () => {
-    env.RESEND_API_KEY = "test-key";
-    env.EMAIL_FROM = "accounts@mail.secpar.win";
-    for (const path of [
-      "/auth/sign-in",
-      "/auth/register",
-      "/auth/forgot",
-      "/auth/verify?token=" + "a".repeat(64),
-      "/auth/reset?token=" + "b".repeat(64),
-    ]) {
-      const page = await handle(new Request(base + path), env);
-      expect(page.status).toBe(200);
-      // The browser sets Origin:null for form POSTs under no-referrer. Keep the
-      // origin check; fix the policy that made legitimate forms fail it.
-      expect(page.headers.get("referrer-policy")).toBe("same-origin");
-      const markup = await page.text();
-      if (
-        path.includes("sign-in") ||
-        path.includes("register") ||
-        path.includes("reset")
-      )
-        expect(markup).toContain('minlength="8"');
-    }
-  });
-  it("accepts an eight-character signup password and still rejects foreign origins", async () => {
-    env.RESEND_API_KEY = "test-key";
-    env.EMAIL_FROM = "accounts@mail.secpar.win";
-    const form = {
-      email: "eight@example.com",
-      handle: "eight",
-      password: "8char-ok",
-    };
-    const sent: string[] = [];
-    const send: typeof fetch = async (_url, init) => {
-      sent.push(String(init?.body));
-      return Response.json({ id: "test" });
-    };
-    const submit = (origin: string) =>
-      handle(
-        new Request(base + "/auth/register", {
-          method: "POST",
-          headers: {
-            origin,
-            "content-type": "application/x-www-form-urlencoded",
-          },
-          body: new URLSearchParams(form),
-        }),
-        env,
-        send,
-      );
-    expect((await submit("null")).status).toBe(403);
-    expect((await submit("https://foreign.example")).status).toBe(403);
-    expect((await submit(base)).status).toBe(200);
-    expect(sent).toHaveLength(1);
-    expect(
-      db.db.prepare("SELECT count(*) AS n FROM password_accounts").get()?.n,
-    ).toBe(1);
-  });
-});
-
-describe("account pages", () => {
-  const dash = String.fromCharCode(0x2014);
-  it("states the purpose of the app account on the sign-in and sign-up pages", async () => {
-    env.RESEND_API_KEY = "test-key";
-    env.EMAIL_FROM = "accounts@mail.secpar.win";
-    for (const path of ["/auth/sign-in", "/auth/register"]) {
-      const markup = await (await handle(new Request(base + path), env)).text();
-      expect(markup).toContain("only used inside the Secpar app");
-      expect(markup).toContain("nothing to log in to on the website");
-      expect(markup).toContain('rel="stylesheet" href="/assets/account.css"');
-      expect(markup).toContain('<label for="email">');
-      expect(markup).not.toContain(dash);
-    }
-  });
-  it("keeps the native flow URLs and tells the user what the code is for", async () => {
-    const start = await call("/auth/device", null, "POST", { name: "Desk PC" });
-    const device = await start.json();
-    const redirect = await handle(new Request(device.verification_uri_complete), env);
-    const location = redirect.headers.get("location")!;
-    expect(location).toContain("/auth/start?activate_code=");
-    const code = device.user_code as string;
-    const signIn = await handle(new Request(base + "/auth/sign-in?activate_code=" + code), env);
-    const markup = await signIn.text();
-    expect(markup).toContain('name="activate_code" value="' + code + '"');
-    expect(markup).toContain("waiting in the Secpar app");
-  });
-  it("serves the stylesheet, fonts and wordmark from this origin only", async () => {
-    for (const [path, type] of [
-      ["/assets/account.css", "text/css"],
-      ["/assets/rubik-400.woff", "font/woff"],
-      ["/assets/rubik-500.woff", "font/woff"],
-      ["/assets/secpar-wordmark.svg", "image/svg+xml"],
-    ]) {
-      const res = await handle(new Request(base + path), env);
-      expect(res.status).toBe(200);
-      expect(res.headers.get("content-type")).toContain(type);
-      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
-    }
-    expect((await handle(new Request(base + "/assets/other.css"), env)).status).toBe(401);
-    expect((await handle(new Request(base + "/assets/account.css", { method: "POST" }), env)).status).toBe(405);
-    const page = await handle(new Request(base + "/auth/sign-in"), env);
-    expect(page.headers.get("content-security-policy")).toBe(
-      "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     );
   });
 });
@@ -986,100 +558,6 @@ describe("usernames", () => {
     expect((await call("/v1/friends/nobody", "alice", "PUT")).status).toBe(404);
     expect((await call("/v1/friends/alice/accept", "bob", "POST")).status).toBe(200);
     expect((await call("/v1/friends/alice", "bob", "DELETE")).status).toBe(200);
-  });
-
-  describe("sign-up", () => {
-    const pass = "correct horse battery staple";
-    const submit = (email: string, name: string) =>
-      handle(
-        new Request(base + "/auth/register", {
-          method: "POST",
-          headers: {
-            origin: base,
-            "content-type": "application/x-www-form-urlencoded",
-            "cf-connecting-ip": "ip-" + email,
-          },
-          body: new URLSearchParams({ email, handle: name, password: pass }),
-        }),
-        env,
-        async () => Response.json({ id: "mail" }),
-      );
-    beforeEach(() => {
-      env.RESEND_API_KEY = "test-mail-key";
-      env.EMAIL_FROM = "Secpar <accounts@secpar.win>";
-    });
-    it("refuses a taken username in any letter case with 409", async () => {
-      expect((await submit("one@example.com", "Casey_K")).status).toBe(200);
-      for (const name of ["Casey_K", "casey_k", "CASEY_K", "cAsEy_K"]) {
-        const r = await submit("two@example.com", name);
-        expect(r.status, name).toBe(409);
-        const page = await r.text();
-        expect(page).toContain('data-error="username_taken"');
-        expect(page).toContain("That username is taken");
-      }
-      expect(db.db.prepare("SELECT count(*) AS n FROM password_accounts").get()?.n).toBe(1);
-      expect(
-        db.db.prepare("SELECT handle,handle_lower FROM accounts WHERE github_id LIKE 'password:%'").all(),
-      ).toEqual([{ handle: "Casey_K", handle_lower: "casey_k" }]);
-      // Existing accounts count too.
-      expect((await submit("three@example.com", "ALICE")).status).toBe(409);
-    });
-    it("gives a taken username the same answer for a known and an unknown email", async () => {
-      expect((await submit("one@example.com", "Casey_K")).status).toBe(200);
-      const known = await submit("one@example.com", "casey_k");
-      const unknown = await submit("new@example.com", "casey_k");
-      expect(known.status).toBe(409);
-      expect(await known.text()).toBe(await unknown.text());
-    });
-  });
-
-  describe("GitHub sign-in", () => {
-    async function login(id: number, name: string) {
-      const begin = await handle(new Request(base + "/auth/github"), env);
-      const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
-      const provider: typeof fetch = async (input) =>
-        String(input).includes("access_token")
-          ? Response.json({ access_token: "t" })
-          : Response.json({ id, login: name, name: "Name " + name });
-      const result = await handle(
-        new Request(base + `/auth/callback?code=c&state=${state}`, {
-          headers: { cookie: `__Host-secpar-oauth=${state}` },
-        }),
-        env,
-        provider,
-      );
-      expect(result.status).toBe(302);
-      const session = result.headers.getSetCookie().find((c) => c.startsWith("__Host-secpar-session="))!;
-      const me = await handle(
-        new Request(base + "/v1/me", { headers: { cookie: session.split(";")[0] } }),
-        env,
-      );
-      return (await me.json()) as { id: string; handle: string };
-    }
-    it("turns hyphens into underscores and finds the account by either spelling", async () => {
-      const me = await login(1, "Octo-Cat");
-      expect(me.handle).toBe("Octo_Cat");
-      expect((await add("octo_cat")).status).toBe(202);
-      expect(pending(me.id)).toHaveLength(1);
-      expect((await add("OCTO_CAT")).status).toBe(202);
-    });
-    it("picks a free suffix when the name is taken, in any case, and pads short names", async () => {
-      expect((await login(1, "bob-x")).handle).toBe("bob_x");
-      expect((await login(2, "BOB-X")).handle).toBe("BOB_X_2");
-      expect((await login(3, "bob_x")).handle).toBe("bob_x_3");
-      expect((await login(4, "ab")).handle).toBe("ab_");
-      const long = "a".repeat(30);
-      expect((await login(5, long)).handle).toBe(long);
-      expect((await login(6, long)).handle).toBe("a".repeat(28) + "_2");
-    });
-    it("keeps the first username when the GitHub login changes", async () => {
-      const first = await login(7, "first-name");
-      const again = await login(7, "renamed");
-      expect(again.id).toBe(first.id);
-      expect(again.handle).toBe("first_name");
-      expect(db.db.prepare("SELECT name FROM accounts WHERE id=?").get(first.id)?.name).toBe("Name renamed");
-      expect((await add("renamed")).status).toBe(404);
-    });
   });
 
   describe("migration 0005", () => {
@@ -1370,5 +848,117 @@ describe("host presence for friends", () => {
       expect((await beat(bad)).status).toBe(400);
     }
     expect(db.db.prepare("SELECT sharing FROM host_keys").get()!.sharing).toBe(0);
+  });
+});
+
+// In-app sign up, sign in and recovery.
+describe("in-app accounts", () => {
+  const mail: string[] = [];
+  const send = (async (_url: unknown, init: { body: string }) => {
+    mail.push(JSON.parse(init.body).text as string);
+    return new Response("{}");
+  }) as unknown as typeof fetch;
+  let mailEnv: Env;
+  beforeEach(() => {
+    mail.length = 0;
+    mailEnv = { ...env, RESEND_API_KEY: "key", EMAIL_FROM: "Secpar <a@example.test>" };
+  });
+  const app = (route: string, body: unknown, ip = "1.1.1.1") =>
+    handle(new Request(`${base}/v1/app/${route}`, { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": ip }, body: JSON.stringify(body) }), mailEnv, send);
+  const lastCode = () => /\b(\d{6})\b/.exec(mail.at(-1) ?? "")![1];
+  const user = { email: "Friend@Example.com", password: "correct horse battery", handle: "Friend_One" };
+  const me = (token: string) => handle(new Request(base + "/v1/me", { headers: { authorization: `Bearer ${token}` } }), env);
+  async function signUp(ip = "1.1.1.1") {
+    expect((await app("register", user, ip)).status).toBe(202);
+    expect((await app("verify", { email: user.email, code: lastCode() }, ip)).status).toBe(200);
+  }
+
+  it("signs up with an emailed code, signs in and uses the session", async () => {
+    await signUp();
+    expect(mail).toHaveLength(1);
+    expect(mail[0]).toContain("10 minutes");
+    expect(mail[0]).not.toContain("http");
+    const signIn = await app("sign-in", { email: "friend@example.com", password: user.password });
+    expect(signIn.status).toBe(200);
+    const body = await signIn.json();
+    expect(body.token).toMatch(/^[a-f0-9]{64}$/);
+    expect(body.user.handle).toBe("Friend_One");
+    expect((await (await me(body.token)).json()).handle).toBe("Friend_One");
+    expect((await handle(new Request(base + "/auth/logout", { method: "POST", headers: { authorization: `Bearer ${body.token}` } }), env)).status).toBe(204);
+    expect((await me(body.token)).status).toBe(401);
+  });
+  it("does not sign in before the email is confirmed, or with a wrong password", async () => {
+    await app("register", user);
+    expect((await app("sign-in", { email: user.email, password: user.password })).status).toBe(401);
+    expect((await app("verify", { email: user.email, code: lastCode() }, "2.2.2.2")).status).toBe(200);
+    expect((await app("sign-in", { email: user.email, password: "wrong password here" })).status).toBe(401);
+    expect((await app("sign-in", { email: "nobody@example.com", password: user.password })).status).toBe(401);
+  });
+  it("states the password and username rules in plain words", async () => {
+    const short = await app("register", { ...user, password: "short" });
+    expect([short.status, (await short.json()).error]).toEqual([400, "invalid_password"]);
+    const name = await app("register", { ...user, handle: "no spaces" });
+    expect([name.status, (await name.json()).error]).toEqual([400, "invalid_username"]);
+    expect((await app("register", { ...user, email: "nope" })).status).toBe(400);
+    expect(mail).toHaveLength(0);
+  });
+  it("refuses a taken username in any case and says nothing about emails", async () => {
+    await signUp();
+    const taken = await app("register", { email: "other@example.com", password: user.password, handle: "friend_one" });
+    expect([taken.status, (await taken.json()).error]).toEqual([409, "username_taken"]);
+    const again = await app("register", { ...user, handle: "Someone_Else" });
+    expect(again.status).toBe(202);
+    expect(mail).toHaveLength(1);
+  });
+  it("takes a wrong code five times and then stops", async () => {
+    await app("register", user);
+    const real = lastCode();
+    const wrong = real === "000000" ? "111111" : "000000";
+    for (let i = 0; i < 5; i++) expect((await app("verify", { email: user.email, code: wrong })).status).toBe(400);
+    expect((await app("verify", { email: user.email, code: real })).status).toBe(429);
+  });
+  it("lets a code work once, replaces it when a new one is asked for, and expires it", async () => {
+    await app("register", user);
+    const first = lastCode();
+    expect((await app("resend", { email: user.email })).status).toBe(202);
+    const second = lastCode();
+    if (first !== second) expect((await app("verify", { email: user.email, code: first })).status).toBe(400);
+    expect((await app("verify", { email: user.email, code: second })).status).toBe(200);
+    expect((await app("verify", { email: user.email, code: second })).status).toBe(400);
+    db.db.exec("DELETE FROM email_tokens");
+    await app("forgot", { email: user.email }, "4.4.4.4");
+    db.db.exec("UPDATE email_tokens SET expires=1");
+    expect((await app("reset", { email: user.email, code: lastCode(), password: "another long password" }, "4.4.4.5")).status).toBe(400);
+  });
+  it("resets a password with a code, signs every session out and keeps the code single use", async () => {
+    await signUp();
+    const old = (await (await app("sign-in", { email: user.email, password: user.password })).json()).token;
+    expect((await app("forgot", { email: user.email })).status).toBe(202);
+    const code = lastCode();
+    expect((await app("reset", { email: user.email, code, password: "short" })).status).toBe(400);
+    expect((await app("reset", { email: user.email, code, password: "a brand new password" })).status).toBe(200);
+    expect((await app("reset", { email: user.email, code, password: "a brand new password" }, "5.5.5.5")).status).toBe(400);
+    expect((await me(old)).status).toBe(401);
+    expect((await app("sign-in", { email: user.email, password: user.password }, "5.5.5.6")).status).toBe(401);
+    expect((await app("sign-in", { email: user.email, password: "a brand new password" }, "5.5.5.7")).status).toBe(200);
+  });
+  it("answers a forgot request for an unknown email like any other and sends nothing", async () => {
+    const r = await app("forgot", { email: "ghost@example.com" });
+    expect([r.status, await r.json()]).toEqual([202, { sent: true }]);
+    expect(mail).toHaveLength(0);
+  });
+  it("sends at most three emails an hour to one address", async () => {
+    await app("register", user, "3.3.3.1");
+    expect((await app("resend", { email: user.email }, "3.3.3.2")).status).toBe(202);
+    expect((await app("resend", { email: user.email }, "3.3.3.3")).status).toBe(202);
+    expect(mail).toHaveLength(3);
+    expect((await app("resend", { email: user.email }, "3.3.3.4")).status).toBe(429);
+  });
+  it("is closed while email is not set up, and accepts only POST with JSON", async () => {
+    mailEnv = { ...env };
+    expect((await app("register", user)).status).toBe(503);
+    expect((await handle(new Request(`${base}/v1/app/sign-in`), mailEnv, send)).status).toBe(405);
+    const text = await handle(new Request(`${base}/v1/app/sign-in`, { method: "POST", body: "email=a" }), mailEnv, send);
+    expect(text.status).toBe(400);
   });
 });
