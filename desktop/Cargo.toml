@@ -88,6 +88,8 @@ path = "src/tray_review_main.rs"
 required-features = ["tray-review"]
 
 [dev-dependencies]
+tokio = { version = "1.53.3", features = ["test-util"] }
+secpar-stream = { path = "../crates/secpar-stream" }
 base64 = "0.23.1"
 futures-util = { version = "0.3.34", features = ["sink"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }

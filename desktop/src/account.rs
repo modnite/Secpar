@@ -1,10 +1,14 @@
 //! Account credentials remain on this worker; UI events never contain a bearer token.
 use crate::{local_host, previews, vault};
 use reqwest::{Client, Method, StatusCode};
-use secpar_client::control::Computer;
+use secpar_client::control::{Computer, Connected};
 use secpar_client::pairing::Pairing;
-use serde::Deserialize;
+use secpar_client::connlog;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -23,7 +27,7 @@ pub struct Friend {
     pub state: String,
     pub requester: String,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct OwnedComputer {
     pub id: String,
     pub name: String,
@@ -712,6 +716,7 @@ struct Pending {
     next: Instant,
     interval: Duration,
 }
+#[derive(Clone)]
 pub(crate) struct Api {
     client: Client,
     token: Option<String>,
@@ -901,7 +906,7 @@ fn action_request(action: &Action) -> Result<(Method, String), String> {
         Action::Unblock(id) => (Method::DELETE, format!("/v1/blocks/{}", path_id(id)?)),
     })
 }
-fn owned_key(owner: &str, id: &str) -> Result<String,String> {
+pub(crate) fn owned_key(owner: &str, id: &str) -> Result<String,String> {
     path_id(owner)?; path_id(id)?;
     Ok(format!("owned-pairing:{owner}:{id}"))
 }
@@ -910,26 +915,87 @@ fn saved_owned(owner: &str, id: &str) -> Option<Computer> {
     let key = owned_key(owner, id).ok()?;
     serde_json::from_str(&vault::load(&key).ok().flatten()?).ok()
 }
-/// Opens an account computer: reuses a saved credential that still matches the identity the account
-/// has on record, or asks the computer for a new one through the account.
-async fn connect_owned(api: &Api, owner: &str, id: &str, saved: &impl Fn(&str, &str) -> Option<Computer>, pending_pair: &mut Option<PendingPair>, events: &mpsc::Sender<Event>) -> Result<String, (StatusCode, String)> {
+fn fingerprint_of(c: &OwnedComputer) -> Option<[u8; 32]> {
+    c.certificate_fp.as_deref().and_then(|fp| secpar_client::pairing::fingerprint(fp).ok())
+}
+/// How an account computer is opened.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Plan {
+    /// The saved credential goes straight to the connection. Its pinned fingerprint is checked by
+    /// the TLS handshake itself, so the account is not asked first.
+    UseSaved,
+    /// No usable credential: ask the account to have the computer make one.
+    AskAccount,
+}
+/// Chooses between the saved credential and the account. `known` is the computer list from the
+/// last sync (empty before the first one). Only what the account has already said can rule the
+/// credential out: the computer is no longer linked, or has another identity now.
+pub(crate) fn plan_open(known: &[OwnedComputer], id: &str, saved: Option<&[u8; 32]>) -> Plan {
+    let Some(saved) = saved else { return Plan::AskAccount };
+    match known.iter().find(|c| c.id == id) {
+        Some(c) if c.linked != 1 => Plan::AskAccount,
+        Some(c) if fingerprint_of(c).is_some_and(|fp| fp != *saved) => Plan::AskAccount,
+        // A list that exists but lacks the computer: it was removed from the account.
+        None if !known.is_empty() => Plan::AskAccount,
+        _ => Plan::UseSaved,
+    }
+}
+/// How long to wait before asking the account whether the computer has answered a pairing
+/// request. Quick at first, because the computer usually answers within a few seconds.
+pub(crate) fn pair_poll_delay(waited: Duration) -> Duration {
+    if waited < Duration::from_secs(6) { Duration::from_millis(300) }
+    else if waited < Duration::from_secs(20) { Duration::from_millis(800) }
+    else { Duration::from_secs(2) }
+}
+const AUTO_PAIR_LIMIT: Duration = Duration::from_secs(45);
+const AUTO_PAIR_BACKOFF: Duration = Duration::from_secs(300);
+/// The next online computer of the account that has no credential on this device yet. Each one is
+/// tried again only after the backoff, so a computer that cannot answer does not cause a request
+/// every half minute.
+pub(crate) fn plan_auto_pair<'a>(list: &'a [OwnedComputer], local: Option<&str>, saved: &dyn Fn(&str) -> Option<[u8; 32]>, tried: &HashMap<String, Instant>, now: Instant) -> Option<&'a OwnedComputer> {
+    list.iter().find(|c| {
+        c.online == 1
+            && c.linked == 1
+            && Some(c.id.as_str()) != local
+            && fingerprint_of(c).is_some_and(|fp| saved(&c.id) != Some(fp))
+            && tried.get(&c.id).map_or(true, |at| now.saturating_duration_since(*at) >= AUTO_PAIR_BACKOFF)
+    })
+}
+fn ms(since: Instant) -> u64 { since.elapsed().as_millis() as u64 }
+/// Opens an account computer: reuses a saved credential unless the account has said it is out of
+/// date, or asks the computer for a new one through the account.
+async fn connect_owned(api: &Api, owner: &str, id: &str, known: &[OwnedComputer], saved: &impl Fn(&str, &str) -> Option<Computer>, pending_pair: &mut Option<PendingPair>, events: &mpsc::Sender<Event>) -> Result<String, (StatusCode, String)> {
+    let started = Instant::now();
+    let credential = saved(owner, id);
+    if plan_open(known, id, credential.as_ref().map(|c| &c.fingerprint)) == Plan::UseSaved {
+        if let Some(credential) = credential {
+            *pending_pair = None;
+            connlog::note(id, "credential", &format!("saved host={}", connlog::short_label(&credential.id)), ms(started));
+            let _ = events.send(Event::OwnedConnection(OwnedConnection::Cached { owner: owner.into(), id: id.into(), computer: credential })).await;
+            return Ok(String::new());
+        }
+    }
+    let fetched = Instant::now();
     let computers = api.computers().await?;
+    connlog::note(id, "account_fetch", "computers", ms(fetched));
     let Some(computer) = computers.into_iter().find(|c| c.id == id && c.linked == 1) else {
         return Err((StatusCode::NOT_FOUND, "This computer is no longer linked to your account".into()));
     };
-    let Some(fingerprint) = computer.certificate_fp.as_deref().and_then(|fp| secpar_client::pairing::fingerprint(fp).ok()) else {
+    let Some(fingerprint) = fingerprint_of(&computer) else {
         return Err((StatusCode::BAD_GATEWAY, "This computer has no verified host identity".into()));
     };
-    if let Some(credential) = saved(owner, id).filter(|saved| saved.fingerprint == fingerprint) {
+    if let Some(credential) = credential.filter(|saved| saved.fingerprint == fingerprint) {
         *pending_pair = None;
         let _ = events.send(Event::OwnedConnection(OwnedConnection::Cached { owner: owner.into(), id: id.into(), computer: credential })).await;
         return Ok(String::new());
     }
+    let asked = Instant::now();
     let value = api.call(Method::POST, "/v1/owner-pairings", Some(json!({"computer": id, "device": crate::device_name()}))).await?;
+    connlog::note(id, "pair_request", "posted", ms(asked));
     let Some(request) = value["id"].as_str().filter(|id| path_id(id).is_ok()) else {
         return Err((StatusCode::BAD_GATEWAY, "Invalid pairing response".into()));
     };
-    *pending_pair = Some(PendingPair { id: request.into(), owner: owner.into(), computer: id.into(), fingerprint, expires: Instant::now() + Duration::from_secs(120), next: Instant::now() + Duration::from_secs(2) });
+    *pending_pair = Some(PendingPair { id: request.into(), owner: owner.into(), computer: id.into(), fingerprint, expires: Instant::now() + Duration::from_secs(120), next: Instant::now() + pair_poll_delay(Duration::ZERO), since: Instant::now() });
     let _ = events.send(Event::Message(pairing_with(&computer.name))).await;
     Ok(String::new())
 }
@@ -942,21 +1008,91 @@ impl Api {
 }
 /// `connect_owned` with the saved credential given directly, for tests.
 #[cfg(test)]
-pub(crate) async fn connect_owned_for_test(api: &Api, owner: &str, id: &str, saved: Option<Computer>, pending_pair: &mut Option<PendingPair>, events: &mpsc::Sender<Event>) -> Result<String, (StatusCode, String)> {
-    connect_owned(api, owner, id, &|_: &str, _: &str| saved.clone(), pending_pair, events).await
+pub(crate) async fn connect_owned_for_test(api: &Api, owner: &str, id: &str, known: &[OwnedComputer], saved: Option<Computer>, pending_pair: &mut Option<PendingPair>, events: &mpsc::Sender<Event>) -> Result<String, (StatusCode, String)> {
+    connect_owned(api, owner, id, known, &|_: &str, _: &str| saved.clone(), pending_pair, events).await
+}
+/// Pairs with one of the account's computers without anyone asking: the account passes a request to
+/// the computer, the computer answers with a one-use link, and this connects once to spend it.
+/// The device credential that comes out is returned to be saved. Nothing is shown.
+async fn auto_pair(api: Api, id: String, fingerprint: [u8; 32], limit: Duration) -> AutoOut {
+    let begun = Instant::now();
+    let result: Result<Computer, String> = async {
+        let asked = Instant::now();
+        let device = crate::device_name();
+        let value = api.call(Method::POST, "/v1/owner-pairings", Some(json!({"computer": id, "device": device}))).await.map_err(|(_, note)| note)?;
+        connlog::note(&id, "pair_request", "auto", ms(asked));
+        let request = value["id"].as_str().filter(|r| path_id(r).is_ok()).ok_or("Invalid pairing response")?.to_string();
+        let waiting = Instant::now();
+        let answer = loop {
+            tokio::time::sleep(pair_poll_delay(waiting.elapsed())).await;
+            if waiting.elapsed() > limit {
+                let _ = api.call(Method::DELETE, &format!("/v1/owner-pairings/{request}"), None).await;
+                return Err("The computer did not answer".to_string());
+            }
+            match api.call(Method::GET, &format!("/v1/owner-pairings/{request}"), None).await {
+                Ok(value) if value["state"] == "pending" => {}
+                Ok(value) => break value,
+                Err((status, _)) if status.is_server_error() => {}
+                Err((_, note)) => return Err(note),
+            }
+        };
+        connlog::note(&id, "pair_wait", "answered", ms(waiting));
+        let pairing = answer["link"].as_str().and_then(|link| Pairing::parse(link).ok())
+            .filter(|pairing| pairing.fingerprint == fingerprint && answer["certificate_fp"].as_str().and_then(|fp| secpar_client::pairing::fingerprint(fp).ok()) == Some(fingerprint))
+            .ok_or("Computer identity did not match its account registration")?;
+        let mut connected = Connected::pair_lan_first(pairing, &device).await?;
+        let computer = connected.computer.clone();
+        let _ = connected.socket.close(None).await;
+        Ok(computer)
+    }.await;
+    connlog::note(&id, "auto_pair", if result.is_ok() { "saved" } else { "failed" }, ms(begun));
+    AutoOut { id, result }
+}
+pub(crate) struct AutoOut {
+    id: String,
+    result: Result<Computer, String>,
 }
 pub(crate) struct PendingPair {
     id: String, owner: String, computer: String, fingerprint: [u8;32],
-    expires: Instant, next: Instant,
+    expires: Instant, next: Instant, since: Instant,
 }
-async fn synchronize_owned(api: &Api, owner: &str, enroll: bool, events: &mpsc::Sender<Event>) -> bool {
-    let _ = events.send(Event::Host(api.ensure_host_via(owner,enroll,local_host::call).await.map_err(|(_,note)|note))).await;
-    match api.computers().await {
-        Ok(computers) => { let _ = events.send(Event::Owned(computers)).await; }
-        Err((StatusCode::UNAUTHORIZED,note)) => { let _=events.send(Event::SignedOut(note)).await; return false; }
-        Err((_,note)) => { let _ = events.send(Event::Message(note)).await; }
-    }
-    true
+/// What one sync of the account's computers found.
+struct SyncOut {
+    host: Result<local_host::State, String>,
+    computers: Result<Vec<OwnedComputer>, (StatusCode, String)>,
+}
+/// The local host check and the computer list run side by side, so a slow local service does not
+/// hold up the list, and the list does not wait for the host.
+async fn synchronize_owned(api: Api, owner: String, enroll: bool) -> SyncOut {
+    let started = Instant::now();
+    let out = gather(
+        async { api.ensure_host_via(&owner, enroll, local_host::call).await.map_err(|(_, note)| note) },
+        api.computers(),
+    ).await;
+    connlog::note("account", "account_fetch", "sync", ms(started));
+    out
+}
+async fn gather(host: impl Future<Output = Result<local_host::State, String>>, computers: impl Future<Output = Result<Vec<OwnedComputer>, (StatusCode, String)>>) -> SyncOut {
+    let (host, computers) = tokio::join!(host, computers);
+    SyncOut { host, computers }
+}
+type Background<T> = Option<Pin<Box<dyn Future<Output = T>>>>;
+enum Wake {
+    Command(Command),
+    Tick,
+    Sync(SyncOut),
+    Auto(AutoOut),
+}
+/// What the worker does next: a command, the end of a background job, or just the clock. A job in
+/// the background (the sync, an automatic pairing) never holds up a command. None when the app is
+/// closing.
+async fn next_wake(rx: &mut mpsc::Receiver<Command>, tick: Duration, sync_fut: &mut Background<SyncOut>, auto_fut: &mut Background<AutoOut>) -> Option<Wake> {
+    Some(tokio::select! {
+        command = rx.recv() => Wake::Command(command?),
+        _ = tokio::time::sleep(tick) => Wake::Tick,
+        out = async { sync_fut.as_mut().expect("guarded").await }, if sync_fut.is_some() => Wake::Sync(out),
+        out = async { auto_fut.as_mut().expect("guarded").await }, if auto_fut.is_some() => Wake::Auto(out),
+    })
 }
 pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiver<Event>) {
     let (tx, mut rx) = mpsc::channel(16);
@@ -979,16 +1115,34 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             }
             let token=match vault::load(CREDENTIAL) { Ok(t)=>t,Err(note)=>{let _=events.send(Event::Message(note)).await;None} };
             let client=match Client::builder().https_only(true).redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(15)).connect_timeout(Duration::from_secs(8)).build() { Ok(c)=>c,Err(_)=>{let _=events.send(Event::SignedOut("Could not start secure account networking".into())).await;ctx.request_repaint();return} };
-            let _=events.send(Event::Host(local_host::state().await)).await;
+            // The local service may be slow to answer. Nothing else waits for it.
+            { let host_events=events.clone(); let host_ctx=ctx.clone(); tokio::spawn(async move { let _=host_events.send(Event::Host(local_host::state().await)).await; host_ctx.request_repaint(); }); }
             ctx.request_repaint();
             let mut api=Api{client,token,base:ORIGIN.into()}; let mut pending: Option<Pending>=None;
             let mut pending_pair: Option<PendingPair> = None;
             let mut signed_owner: Option<String> = None;
             let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
             let mut next_owned = Instant::now();
+            let mut known: Vec<OwnedComputer> = vec![];
+            let mut local_id: Option<String> = None;
+            // The first sync says which computer is this one. Until then nothing is paired by itself.
+            let mut synced = false;
+            let mut sync_fut: Background<SyncOut> = None;
+            let mut auto_fut: Background<AutoOut> = None;
+            let mut auto_for: Option<String> = None;
+            let mut want_after_auto: Option<String> = None;
+            let mut auto_tried: HashMap<String, Instant> = HashMap::new();
             if api.token.is_some() {
-                match api.snapshot().await {
-                    Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;}
+                // The profile and the computer list are independent: one round trip, not two.
+                let started = Instant::now();
+                let (snapshot, computers) = tokio::join!(api.snapshot(), api.computers());
+                connlog::note("account", "account_fetch", "startup", ms(started));
+                match snapshot {
+                    Ok((user,friends,blocked))=>{
+                        signed_owner=Some(user.id.clone());next_owned=Instant::now();
+                        if let Ok(list)=computers { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
+                        let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;
+                    }
                     Err((status,note))=>{
                         if status==StatusCode::UNAUTHORIZED {api.token=None;let _=vault::forget(CREDENTIAL);}
                         let _=events.send(Event::SignedOut(note)).await;
@@ -996,9 +1150,50 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 }
                 ctx.request_repaint();
             }
-            let mut timer=tokio::time::interval(Duration::from_secs(1));
             loop {
-                let command=tokio::select! { command=rx.recv()=>{let Some(command)=command else {break};Some(command)}, _=timer.tick()=>None };
+                // While a pairing is under way the loop looks at it often. Otherwise once a second is plenty.
+                let tick = if pending_pair.is_some() || auto_fut.is_some() { Duration::from_millis(150) } else { Duration::from_secs(1) };
+                let Some(wake) = next_wake(&mut rx, tick, &mut sync_fut, &mut auto_fut).await else { break };
+                let mut command=None;
+                match wake {
+                    Wake::Command(c)=>command=Some(c),
+                    Wake::Tick=>{}
+                    Wake::Sync(out)=>{
+                        sync_fut=None;
+                        if api.token.is_some() {
+                            synced=true;
+                            if let Ok(state)=&out.host { local_id=state.computer.clone(); }
+                            let _ = events.send(Event::Host(out.host)).await;
+                            match out.computers {
+                                Ok(list)=>{ known=list.clone(); let _ = events.send(Event::Owned(list)).await; }
+                                Err((StatusCode::UNAUTHORIZED,note))=>{
+                                    let _=events.send(Event::SignedOut(note)).await;
+                                    api.token=None; signed_owner=None; pending_pair=None; let _=vault::forget(CREDENTIAL);
+                                }
+                                Err((_,note))=>{ let _ = events.send(Event::Message(note)).await; }
+                            }
+                            ctx.request_repaint();
+                        }
+                    }
+                    Wake::Auto(out)=>{
+                        auto_fut=None; auto_for=None;
+                        let wanted=want_after_auto.take().filter(|id| *id==out.id);
+                        match (out.result, signed_owner.clone()) {
+                            (Ok(computer), Some(owner))=>{
+                                if let Ok(key)=owned_key(&owner,&out.id) {
+                                    match serde_json::to_string(&computer).map_err(|_|"Could not remember this computer".to_string()).and_then(|v| vault::save(&key,&v)) {
+                                        Ok(())=>{}, Err(note)=>{ let _=events.send(Event::StorageNote(note)).await; }
+                                    }
+                                }
+                                if wanted.is_some() { let _=events.send(Event::OwnedConnection(OwnedConnection::Cached{owner,id:out.id,computer})).await; }
+                            }
+                            (Err(note),_)=>{ if wanted.is_some() { let _=events.send(Event::Message(note)).await; } }
+                            (Ok(_),None)=>{}
+                        }
+                        let _=events.send(Event::Busy(false)).await;
+                        ctx.request_repaint();
+                    }
+                }
                 if let Some(command)=command {
                     let _=events.send(Event::Busy(true)).await;
                     let skip_refresh=matches!(&command,Command::Remember(_)|Command::ForgetComputer|Command::HostRefresh|Command::LinkHost|Command::UnlinkHost|Command::ConnectOwned(_)|Command::RememberOwned{..});
@@ -1066,9 +1261,17 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                             Ok(String::new())
                         }
                         Command::ConnectOwned(id)=>{
-                            if let Some(old)=pending_pair.take() { let _=api.call(Method::DELETE,&format!("/v1/owner-pairings/{}",old.id),None).await; }
+                            // Withdrawing an old request is not on the way to the new connection.
+                            if let Some(old)=pending_pair.take() { let api=api.clone(); tokio::spawn(async move { let _=api.call(Method::DELETE,&format!("/v1/owner-pairings/{}",old.id),None).await; }); }
                             match signed_owner.clone().filter(|_| api.token.is_some()) {
-                                Some(owner)=>connect_owned(&api,&owner,&id,&saved_owned,&mut pending_pair,&events).await,
+                                Some(_) if auto_for.as_deref()==Some(id.as_str())=>{
+                                    // The computer is being paired in the background already: wait for that.
+                                    want_after_auto=Some(id.clone());
+                                    let name=known.iter().find(|c| c.id==id).map(|c| c.name.clone()).unwrap_or_default();
+                                    let _=events.send(Event::Message(pairing_with(&name))).await;
+                                    Ok(String::new())
+                                }
+                                Some(owner)=>connect_owned(&api,&owner,&id,&known,&saved_owned,&mut pending_pair,&events).await,
                                 None=>Err((StatusCode::UNAUTHORIZED,"Sign in to connect to your computers".into())),
                             }
                         }
@@ -1112,18 +1315,34 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     }
                     ctx.request_repaint();
                 }
-                if api.token.is_none() { pending_pair=None; signed_owner=None; }
-                if let Some(owner)=signed_owner.as_deref().filter(|_| api.token.is_some() && Instant::now()>=next_owned) {
-                    next_owned=Instant::now()+Duration::from_secs(30);
-                    if !synchronize_owned(&api,owner,suppressed_owner.as_deref()!=Some(owner),&events).await { api.token=None; signed_owner=None; pending_pair=None;let _=vault::forget(CREDENTIAL); }
-                    ctx.request_repaint();
+                if api.token.is_none() { pending_pair=None; signed_owner=None; sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
+                if sync_fut.is_none() {
+                    if let Some(owner)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_owned) {
+                        next_owned=Instant::now()+Duration::from_secs(30);
+                        let enroll=suppressed_owner.as_deref()!=Some(owner.as_str());
+                        sync_fut=Some(Box::pin(synchronize_owned(api.clone(),owner,enroll)));
+                    }
+                }
+                // Computers of the account that this device has no credential for are paired in the
+                // background, so opening one later needs no pairing.
+                if synced && auto_fut.is_none() && pending_pair.is_none() {
+                    if let Some(owner)=signed_owner.as_deref().filter(|_| api.token.is_some()) {
+                        let saved=|id:&str| saved_owned(owner,id).map(|c| c.fingerprint);
+                        if let Some(next)=plan_auto_pair(&known,local_id.as_deref(),&saved,&auto_tried,Instant::now()).cloned() {
+                            if let Some(fingerprint)=fingerprint_of(&next) {
+                                auto_tried.insert(next.id.clone(),Instant::now());
+                                auto_for=Some(next.id.clone());
+                                auto_fut=Some(Box::pin(auto_pair(api.clone(),next.id,fingerprint,AUTO_PAIR_LIMIT)));
+                            }
+                        }
+                    }
                 }
                 if pending_pair.as_ref().is_some_and(|p|Instant::now()>=p.next) {
                     let p=pending_pair.as_mut().unwrap();
                     if Instant::now()>=p.expires {
                         pending_pair=None;let _=events.send(Event::Message("Computer did not respond. Check that Secpar is open there.".into())).await;
                     } else {
-                        p.next=Instant::now()+Duration::from_secs(2);
+                        p.next=Instant::now()+pair_poll_delay(p.since.elapsed());
                         match api.call(Method::GET,&format!("/v1/owner-pairings/{}",p.id),None).await {
                             Ok(value) if value["state"]=="pending"=>{},
                             Ok(value)=>{
@@ -1144,6 +1363,10 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
     });
     (tx, output)
 }
+
+#[cfg(test)]
+#[path = "connect_speed_tests.rs"]
+mod speed_tests;
 
 #[cfg(test)]
 mod tests {

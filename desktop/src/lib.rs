@@ -207,7 +207,6 @@ struct App {
     account: account::Panel,
     files: files::Panel,
     page: Page,
-    pair_link: String,
     status: String,
     command: Option<mpsc::Sender<Command>>,
     events: Option<mpsc::Receiver<Event>>,
@@ -305,7 +304,6 @@ impl App {
             account: account::Panel::new(cc.egui_ctx.clone()),
             files: new_files(cc.egui_ctx.clone(), &client_files_dir),
             page: initial_page(),
-            pair_link: String::new(),
             status: initial_status(),
             command: None,
             events: None,
@@ -392,47 +390,12 @@ impl App {
         }
         app
     }
-    fn pairing_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        design::surface().show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("Pair a computer").size(14.).strong());
-            ui.add_sized(
-                [ui.available_width(), 34.],
-                egui::TextEdit::singleline(&mut self.pair_link)
-                    .hint_text("Paste a Secpar Host pairing link")
-                    .password(true)
-                    .margin(egui::vec2(10., 8.)),
-            );
-            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), design::CONTROL), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        !self.pair_link.trim().is_empty(),
-                        design::primary("Pair and connect"),
-                    )
-                    .clicked()
-                {
-                    self.start(ctx, false);
-                }
-            });
-        });
-    }
-    fn start(&mut self, ctx: &egui::Context, reconnect: bool) {
+    /// Reconnects to the computer this device remembers. Account computers pair themselves.
+    fn start(&mut self, ctx: &egui::Context) {
         if self.command.is_some() {
             return;
         }
-        let pairing = if reconnect {
-            None
-        } else {
-            match Pairing::parse(&self.pair_link) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    self.status = e;
-                    return;
-                }
-            }
-        };
-        if !reconnect { self.computer_account=None; self.owned_connecting=None; }
-        self.connect(ctx,pairing);
+        self.connect(ctx,None);
     }
     fn connect(&mut self, ctx: &egui::Context, pairing: Option<Pairing>) {
         if self.command.is_some() { return; }
@@ -577,7 +540,6 @@ impl App {
                     // Files the computer offers while we stream arrive through a second, quiet connection.
                     self.files.background(&c.id, &c.name, self.session_account.clone(), files::Source::Saved(c.clone()));
                     self.computer = Some(c);
-                    self.pair_link.clear();
                 }
                 Event::Status(s) => { self.status=s; }
                 Event::Audio{packet,received_at} => {
@@ -1050,8 +1012,7 @@ impl eframe::App for App {
                         ui.colored_label(design::BAD,friendly.unwrap_or(&error));
                         if ui.small_button("Retry").clicked() {
                             self.connection_error=None;
-                            if !self.pair_link.trim().is_empty() {self.start(ctx,false);}
-                            else if self.computer.is_some() {self.start(ctx,true);}
+                            if self.computer.is_some() {self.start(ctx);}
                         }
                         if ui.small_button("Copy error").clicked(){ui.ctx().copy_text(error);}
                         if ui.small_button("Dismiss").clicked(){self.connection_error=None;}
@@ -1158,14 +1119,9 @@ impl eframe::App for App {
                                 };
                                 let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: None, connect: Some(true), menu: Some(&mut menu) });
                                 if forget { self.account.forget_computer(); }
-                                if connect { self.start(ctx, true); }
-                                ui.add_space(8.);
-                                egui::CollapsingHeader::new("Add computer")
-                                    .show(ui, |ui| self.pairing_ui(ui, ctx));
-                            } else if self.account.user.is_some() {
-                                egui::CollapsingHeader::new("Add computer").show(ui,|ui|self.pairing_ui(ui,ctx));
-                            } else {
-                                self.pairing_ui(ui, ctx);
+                                if connect { self.start(ctx); }
+                            } else if self.account.user.is_none() {
+                                ui.label(egui::RichText::new("Sign in to see your computers").color(design::MUTED));
                             }
                         });
                         #[cfg(feature = "ui-review")]
