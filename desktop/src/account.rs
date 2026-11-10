@@ -431,7 +431,7 @@ impl Panel {
     }
     /// Takes new preview frames and tells the preview worker which computers to watch. A computer
     /// being streamed, this computer and offline ones get no preview.
-    pub fn sync_previews(&mut self, ctx: &eframe::egui::Context, streaming: Option<&str>) {
+    pub fn sync_previews(&mut self, ctx: &eframe::egui::Context, streaming: Option<&str>, manual: Option<&Computer>) {
         let local = self.host.as_ref().and_then(|state| state.as_ref().ok()).and_then(|state| state.computer.as_deref());
         let owner = self.user.as_ref().map(|user| user.id.as_str());
         let shown = |c: &OwnedComputer| c.online == 1 && c.linked == 1 && Some(c.id.as_str()) != local && Some(c.id.as_str()) != streaming;
@@ -439,12 +439,23 @@ impl Panel {
             self.computers.iter().filter(|c| shown(c)).filter_map(|c| {
                 let fingerprint = secpar_client::pairing::fingerprint(c.certificate_fp.as_deref()?).ok()?;
                 Some(previews::Target { id: c.id.clone(), key: owned_key(owner, &c.id).ok()?, fingerprint })
-            }).collect()
+            }).collect::<Vec<_>>()
         });
-        self.previews.set(previews::Wanted { targets: targets.unwrap_or_default() });
+        let mut targets = targets.unwrap_or_default();
+        // A computer paired by link or QR on this device is watched the same way, from its saved credential.
+        let manual = manual.filter(|c| Some(c.id.as_str()) != streaming && targets.iter().all(|t| t.id != c.id));
+        if let Some(c) = manual {
+            targets.push(previews::Target { id: c.id.clone(), key: "paired-computer".into(), fingerprint: c.fingerprint });
+        }
+        self.previews.set(previews::Wanted { targets });
         self.textures.apply(self.previews.take(), |id, image| ctx.load_texture(format!("preview {id}"), image, eframe::egui::TextureOptions::LINEAR));
         let computers = &self.computers;
-        self.textures.retain(|id| computers.iter().any(|c| c.id == id && shown(c)));
+        let manual_id = manual.map(|c| c.id.as_str());
+        self.textures.retain(|id| manual_id == Some(id) || computers.iter().any(|c| c.id == id && shown(c)));
+    }
+    /// The newest preview picture of a computer, if it gave one.
+    pub fn preview(&self, id: &str) -> Option<&eframe::egui::TextureHandle> {
+        self.textures.get(id)
     }
     /// The computer this app hosts from, when the local host is linked to the account.
     pub fn local_id(&self) -> Option<&str> {

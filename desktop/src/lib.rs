@@ -887,7 +887,8 @@ impl eframe::App for App {
             self.files.account_gone();
         }
         let streaming = if self.command.is_some() { self.owned_connecting.as_ref().map(|(_, id)| id.clone()).or_else(|| self.computer.as_ref().map(|c| c.id.clone())) } else { None };
-        self.account.sync_previews(ctx, streaming.as_deref());
+        let manual = self.computer.clone().filter(|_| self.computer_account.is_none());
+        self.account.sync_previews(ctx, streaming.as_deref(), manual.as_ref());
         let signed_out = std::mem::take(&mut self.account.signed_out);
         if signed_out && self.computer_account.is_some() {
             self.clipboard=None;self.audio_route.output(None);self.audio=None;self.capture(ctx,false); self.send(Command::Stop);
@@ -1166,7 +1167,8 @@ impl eframe::App for App {
                                         }
                                     });
                                 };
-                                let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: None, connect: Some(true), menu: Some(&mut menu) });
+                                let preview = self.account.preview(&computer.id).cloned();
+                                let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: preview.as_ref(), connect: Some(true), menu: Some(&mut menu) });
                                 if forget { self.account.forget_computer(); }
                                 if connect { self.start(ctx, true); }
                                 ui.add_space(8.);
