@@ -44,7 +44,7 @@ struct Stats {
     /// Frames with a visible share of chroma outside the legal 16..240 range (zero chroma = green).
     bad_chroma: u32,
     worst_bad_share: f64,
-    /// Frames far from the other viewer's newest frame (same screen, same size).
+    /// Different decoded pictures for the same capture timestamp and dimensions.
     mismatched: u32,
     worst_diff: f64,
     compared: u32,
@@ -59,7 +59,7 @@ struct Viewer {
     session: StreamSession,
 }
 
-type Grid = Arc<Mutex<Option<(Vec<u8>, Instant)>>>;
+type Grid = Arc<Mutex<BTreeMap<u64, Vec<u8>>>>;
 
 const GRID: usize = 64;
 
@@ -73,6 +73,14 @@ fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -
     let (done, st) = (stop.clone(), stats.clone());
     let thread = std::thread::spawn(move || {
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        // Match the Android receive queue while this thread also decodes video.
+        {
+            use std::os::windows::io::AsRawSocket;
+            use windows::Win32::Networking::WinSock::{setsockopt, SOCKET, SOL_SOCKET, SO_RCVBUF};
+            let bytes=(4i32 << 20).to_ne_bytes();
+            // SAFETY: the socket is live; WinSock copies the option bytes.
+            assert_eq!(unsafe {setsockopt(SOCKET(sock.as_raw_socket() as usize),SOL_SOCKET,SO_RCVBUF,Some(&bytes))},0);
+        }
         sock.set_read_timeout(Some(Duration::from_millis(10))).unwrap();
         let crypt = Crypt::new(&key, sid);
         let host: SocketAddr = ([127, 0, 0, 1], port).into();
@@ -89,7 +97,7 @@ fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -
             shards: Vec<Option<Vec<u8>>>,
             at: Instant,
         }
-        let (mut partial, mut done_frames) = (BTreeMap::<u32, Part>::new(), BTreeMap::<u32, (bool, Vec<u8>)>::new());
+        let (mut partial, mut done_frames) = (BTreeMap::<u32, Part>::new(), BTreeMap::<u32, (bool, u64, Vec<u8>)>::new());
         let (mut next, mut need_key, mut got_video) = (None::<u32>, true, false);
         let (mut last_probe, mut last_idr) = (Instant::now() - Duration::from_secs(1), Instant::now() - Duration::from_secs(1));
         let mut buf = [0u8; 2048];
@@ -109,7 +117,7 @@ fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -
                             f.shards[hd.frag as usize] = Some(plain);
                             if f.shards.iter().flatten().count() >= f.k {
                                 if let Some((fh, data)) = assemble(f.k, f.p, f.shards.clone()) {
-                                    done_frames.insert(hd.frame_id, (fh.keyframe, data));
+                                    done_frames.insert(hd.frame_id, (fh.keyframe, fh.capture_us, data));
                                     partial.remove(&hd.frame_id);
                                 }
                             }
@@ -118,10 +126,10 @@ fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -
                 }
             }
             if next.is_none() {
-                next = done_frames.iter().find(|(_, (k, _))| *k).map(|(id, _)| *id);
+                next = done_frames.iter().find(|(_, (k, _, _))| *k).map(|(id, _)| *id);
             }
             while let Some(id) = next {
-                let Some((key, data)) = done_frames.remove(&id) else { break };
+                let Some((key, capture_us, data)) = done_frames.remove(&id) else { break };
                 next = Some(id.wrapping_add(1));
                 done_frames.retain(|k, _| *k >= id);
                 if need_key && !key {
@@ -157,8 +165,8 @@ fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -
                         }
                         s.worst_bad_share = s.worst_bad_share.max(share);
                         if let Some(o) = &other {
-                            if let Some((og, at)) = o.lock().unwrap().as_ref() {
-                                if at.elapsed() < Duration::from_millis(100) {
+                            if let Some(og) = o.lock().unwrap().get(&capture_us) {
+                                {
                                     let d = grid.iter().zip(og).map(|(a, b)| (*a as i32 - *b as i32).unsigned_abs() as f64).sum::<f64>() / grid.len() as f64;
                                     s.compared += 1;
                                     s.worst_diff = s.worst_diff.max(d);
@@ -169,7 +177,9 @@ fn start(label: &'static str, w: u32, h: u32, mine: Grid, other: Option<Grid>) -
                             }
                         }
                         drop(s);
-                        *mine.lock().unwrap() = Some((grid, Instant::now()));
+                        let mut history = mine.lock().unwrap();
+                        history.insert(capture_us, grid);
+                        while history.len() > 240 { history.pop_first(); }
                     }
                     Ok(None) => {}
                     Err(_) => {
@@ -217,7 +227,7 @@ fn report(label: &str, s: &Stats) {
 fn two_viewers_get_clean_video() {
     let (ga, gb): (Grid, Grid) = (Default::default(), Default::default());
     // Phase 1: one viewer alone.
-    let a = start("a", 1280, 720, ga.clone(), None);
+    let a = start("a", 1280, 720, ga.clone(), Some(gb.clone()));
     std::thread::sleep(Duration::from_secs(4));
     let alone = a.stats.lock().unwrap().clone();
     report("single viewer", &alone);
@@ -247,6 +257,7 @@ fn two_viewers_get_clean_video() {
     );
     assert!(alone.frames > 30 && sb.frames > 30, "both viewers must receive video");
     assert_eq!(sa.bad_chroma + sb.bad_chroma, 0, "corrupt chroma (green) frames");
+    assert!(sa.compared + sb.compared > 30, "must compare matching capture timestamps");
     assert_eq!(sa.mismatched + sb.mismatched, 0, "frames that differ from the other viewer's");
     assert_eq!(sa.decode_errors + sb.decode_errors, 0, "decoder errors");
     assert!(after.frames - at_leave.frames > 10, "the first viewer keeps streaming after the second leaves");

@@ -1,4 +1,48 @@
 use super::*;
+
+#[test]
+fn idle_frames_keep_two_slot_cadence_when_timer_wakeups_vary() {
+    let interval=Duration::from_nanos(16_666_667);
+    let origin=Instant::now();let mut sent=origin;let mut sent_slot=0;
+    let jitter=[700i64,-400,900,-600,300,-700];
+    let mut count=0;
+    for slot in 1..=120 {
+        let due=origin+interval*slot;
+        let us=jitter[(slot as usize-1)%jitter.len()];
+        let woke=if us>=0 {due+Duration::from_micros(us as u64)} else {due-Duration::from_micros((-us) as u64)};
+        if idle_repeat_due(Duration::from_secs(1),woke.duration_since(sent),interval) {
+            assert_eq!(slot-sent_slot,2);sent=woke;sent_slot=slot;count+=1;
+        }
+    }
+    assert_eq!(count,60);
+    assert!(idle_repeat_due(Duration::from_millis(100),Duration::ZERO,interval));
+}
+
+#[test]
+fn packet_schedule_finishes_systematic_data_at_the_same_offset_for_every_size() {
+    for size in [1, 1200, 4800, 8400, 9600, 20_000, 80_000, 160_000, 400_000] {
+        for fec in [5, 20, 50] {
+            let data:Vec<u8>=(0..size).map(|i|(i%251) as u8).collect();
+            let fh=FrameHeader{len:size as u32,capture_us:0,keyframe:true,codec:Codec::H264};
+            let packets=packetize(0,&fh,&data,fec);
+            let (width,offset)=video_packet_schedule(&packets);
+            let mut shards=vec![None;packets.len()];
+            let mut completed=None;
+            for (batch,chunk) in packets.chunks(width).enumerate() {
+                for (h,payload) in chunk {shards[h.frag as usize]=Some(payload.clone());}
+                if let Some(frame)=assemble(packets[0].0.k as usize,fec,shards.clone()) {
+                    completed=Some((offset+batch as u64,frame));break;
+                }
+            }
+            let (at,(header,payload))=completed.expect("a lossless frame must assemble");
+            assert_eq!(at,3,"size={size} fec={fec}");
+            assert_eq!(header,fh);assert_eq!(payload,data);
+            let batches=packets.len().div_ceil(width);
+            assert!(batches<=4);
+            assert!(offset+(batches-1) as u64<=4,"parity must remain within the pacing window");
+        }
+    }
+}
 use crate::prs::frame::assemble;
 use std::collections::BTreeMap;
 use std::sync::mpsc;

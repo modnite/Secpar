@@ -156,17 +156,21 @@ impl Shared {
     /// One frame's packets, spread over at most ~4 ms so a burst doesn't overflow Wi-Fi queues.
     /// Through a TURN relay, at most [`link::RELAY_PPS`] packets a second instead: relays drop bursts
     /// above their packet-rate limit (Cloudflare: 5–10 kpps per allocation), which keyframes hit.
-    fn send_paced(&self, pkts: &[(Header, Vec<u8>)]) {
+    fn send_paced_at(&self, pkts: &[(Header, Vec<u8>)], frame_due: Instant) {
         if self.peer().is_some_and(|p| self.link.is_relayed(&p)) {
+            if let Some(wait)=frame_due.checked_duration_since(Instant::now()) {std::thread::sleep(wait);}
             link::send_relay_paced(pkts, |(h, p)| {
                 self.send(*h, p);
             });
             return;
         }
-        let groups = if pkts.len() <= 8 { 1 } else { 4 };
-        let t0 = Instant::now();
-        for (g, chunk) in pkts.chunks(pkts.len().div_ceil(groups).max(1)).enumerate() {
-            if let Some(wait) = (t0 + Duration::from_millis(g as u64)).checked_duration_since(Instant::now()) {
+        let (width, offset) = video_packet_schedule(pkts);
+        let lead=Duration::from_millis(3-offset);
+        // Finish systematic data at the frame deadline, not several ms after it.
+        // A late encoder still retains packet spacing rather than bursting.
+        let first=frame_due.checked_sub(lead).unwrap_or(frame_due).max(Instant::now());
+        for (g, chunk) in pkts.chunks(width).enumerate() {
+            if let Some(wait) = (first + Duration::from_millis(g as u64)).checked_duration_since(Instant::now()) {
                 std::thread::sleep(wait);
             }
             for (h, p) in chunk {
@@ -174,6 +178,32 @@ impl Shared {
             }
         }
     }
+}
+
+/// Without loss, the last systematic shard completes the frame. Keep its batch
+/// at 3 ms for every frame size; otherwise small frames arrive immediately and
+/// larger ones arrive 2–3 ms later despite identical encoder frame spacing.
+/// Parity after that batch retains its spacing for recovery.
+fn video_packet_schedule(pkts: &[(Header, Vec<u8>)]) -> (usize, u64) {
+    let groups = if pkts.len() <= 8 { 1 } else { 4 };
+    let width = pkts.len().div_ceil(groups).max(1);
+    let last_data = pkts.iter().rposition(|(h, _)| h.typ == Type::Video)
+        .unwrap_or(pkts.len().saturating_sub(1));
+    (width, 3 - (last_data / width) as u64)
+}
+
+fn encoded_packets(id:u32,e:&super::encode::Encoded,codec:Codec,fec:usize)->Vec<(Header,Vec<u8>)> {
+    let fh=FrameHeader{len:e.data.len() as u32,capture_us:e.capture_us,keyframe:e.key,codec};
+    let timing=secpar_stream::timing::begin();
+    let packets=packetize(id,&fh,&e.data,fec);
+    secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Packetize,timing);
+    packets
+}
+
+fn idle_repeat_due(since_real: Duration, since_send: Duration, interval: Duration) -> bool {
+    // Allow half a frame of timer jitter around the two-slot idle cadence.
+    // Comparing to exactly two intervals can skip that slot and produce 20 Hz.
+    since_real <= Duration::from_millis(500) || since_send >= interval + interval / 2
 }
 
 /// REPORT plaintext: (lossPermille, rttMs).
@@ -261,6 +291,7 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
             Type::Idr if last_idr.is_none_or(|t| t.elapsed() >= IDR_EVERY) => {
                 last_idr = Some(Instant::now());
                 sh.idr.store(true, Ordering::Relaxed);
+                if secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_request");}
             }
             Type::Bye => break,
             _ => {}
@@ -337,16 +368,26 @@ impl Video {
     fn run(mut self, sh: &Shared, ready: &ReadyInfo, notify: &Notify, p: &Params) {
         self.shown(notify);
         let interval = Duration::from_secs(1) / self.fps;
-        let (mut last_enc, mut pending) = (Instant::now(), false);
-        // Token bucket: at most `fps` frames per second on average, bursts of 2. A fixed frame
-        // clock would beat against the display's own refresh and hold frames up to a frame.
-        let (mut tokens, mut refill) = (2.0f64, Instant::now());
+        let mut pending = false;
+        // One send per frame interval, sampled from the newest captured image. Sending on DXGI
+        // delivery made arrival spacing follow capture jitter, which a client on a fixed refresh
+        // turns into held and doubled pictures.
+        let mut next_due = Instant::now();
+        let mut started = false;
+        let mut last_real = Instant::now() - interval * 2;
+        let mut last_send = Instant::now() - interval * 2;
+        // Encoded units wait here for their send slot. Encoding never runs at the deadline.
+        let mut prepared: std::collections::VecDeque<super::encode::Encoded> = std::collections::VecDeque::new();
+        let mut prepared_packets: Option<Vec<(Header,Vec<u8>)>> = None;
         let mut img: Option<Arc<capture::FrameTexture>> = None;
         let mut conv: Option<Convert> = None;
         let (mut frame_id, mut cap_us) = (0u32, 0u64);
         let mut applied = *sh.target.lock().unwrap();
         let mut last_cursor = None;
         let mut want = (p.w, p.h);
+        let mut lats: Vec<u64> = Vec::new();
+        let mut warm: Vec<u64> = Vec::new();
+        let mut phase_done = false;
         while !sh.stopped() {
             if let Some(g) = &p.gate {
                 // Checked before every frame: a friend never follows the owner onto the lock screen.
@@ -367,6 +408,8 @@ impl Video {
                 if let Ok(v) = Video::open(&p, t.kbps) {
                     crate::log::line(&format!("stream: switched to {}", v.shown.id));
                     self = v;
+                    prepared.clear();
+                    prepared_packets = None;
                     (img, conv, pending, last_cursor) = (None, None, false, None);
                     applied.notch = 0;
                     sh.idr.store(true, Ordering::Relaxed);
@@ -382,6 +425,8 @@ impl Video {
                 match Encoder::new(&self.dev, self.luid, self.enc.codec(), size, self.fps, t.kbps) {
                     Ok(e) => {
                         self.enc = e;
+                        prepared.clear();
+                        prepared_packets = None;
                         conv = None;
                         notify(ready.msg(size));
                     }
@@ -392,76 +437,153 @@ impl Video {
             }
             applied = t;
 
-            let now = Instant::now();
-            tokens = (tokens + now.duration_since(refill).as_secs_f64() * self.fps as f64).min(2.0);
-            refill = now;
-            let due = if tokens >= 1.0 { now } else { now + interval.mul_f64(1.0 - tokens) };
-            if !(pending && now >= due) {
-                // DXGI's own timeouts run on the coarse system tick: sleep precisely, poll with 0.
-                let got = if pending {
-                    std::thread::sleep(due - now);
-                    self.cap.next(Duration::ZERO) // the newest image at the deadline
-                } else {
-                    // nothing new for two frame times: send the last image again
-                    poll(&mut self.cap, (last_enc + interval * 2).max(due), sh)
-                };
-                if std::mem::take(&mut self.cap.reinit) {
-                    conv = None;
-                    sh.idr.store(true, Ordering::Relaxed);
+            // Pull the newest capture without waiting, then convert and encode it at once. The
+            // send deadline then only pays for packetising, so arrival spacing is the grid.
+            if let Some(f) = self.cap.next(Duration::ZERO) {
+                let desk = self.cap.size().unwrap_or(self.base);
+                if let Some(p) = &f.pointer {
+                    let (sw, sh_) = self.enc.size;
+                    let c = (p.x * sw as i32 / desk.0.max(1) as i32, p.y * sh_ as i32 / desk.1.max(1) as i32, p.visible);
+                    if last_cursor != Some(c) {
+                        last_cursor = Some(c);
+                        sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2));
+                    }
                 }
-                if let Some(f) = &got {
-                    let desk = self.cap.size().unwrap_or(self.base);
-                    if let Some(p) = &f.pointer {
-                        let (sw, sh_) = self.enc.size;
-                        let c = (p.x * sw as i32 / desk.0.max(1) as i32, p.y * sh_ as i32 / desk.1.max(1) as i32, p.visible);
-                        if last_cursor != Some(c) {
-                            last_cursor = Some(c);
-                            sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2));
+                if let Some(png) = f.shape.as_ref().and_then(|s| cursor::png(s).map(|p| (p, s.hx, s.hy))) {
+                    notify(ServerMsg::CursorShape { png: STANDARD.encode(&png.0), hx: png.1, hy: png.2 });
+                }
+                if f.tex.is_some() {
+                    img = f.tex.clone();
+                    cap_us = f.capture_us;
+                    pending = true;
+                    if !started {
+                        // Phase-lock the grid just after the first capture so a vsynced source
+                        // lands in the next slot instead of waiting a whole frame.
+                        started = true;
+                        next_due = Instant::now() + Duration::from_millis(1);
+                    }
+                }
+            }
+            if std::mem::take(&mut self.cap.reinit) {
+                conv = None;
+                sh.idr.store(true, Ordering::Relaxed);
+            }
+            // Encode as soon as a picture arrives, not at the send deadline.
+            // Keep encoded reference pictures in order. If capture is faster than
+            // the negotiated stream, retain only the newest unencoded capture
+            // while the prepared picture waits for its send slot.
+            // Sample the newest unencoded capture near this slot. Encoding immediately
+            // after the previous send can freeze an older image for a whole interval.
+            let encode_due = next_due.checked_sub(Duration::from_millis(6)).unwrap_or(next_due);
+            if pending && prepared.is_empty() && sh.peer().is_some() && Instant::now() >= encode_due {
+                if let (Some(src), Some(size)) = (img.as_ref(), self.cap.size()) {
+                    if conv.is_none() {
+                        conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
+                    }
+                    let timing = secpar_stream::timing::begin();
+                    if let Some(nv12) = conv.as_mut().and_then(|c| c.convert(src).ok()) {
+                        secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
+                        let timing = secpar_stream::timing::begin();
+                        let force = sh.idr.swap(false, Ordering::Relaxed);
+                        if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=false");}
+                        if let Ok(outs) = self.enc.encode(&nv12, cap_us, force) {
+                            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode, timing);
+                            prepared.extend(outs);
+                            pending = false;
                         }
                     }
-                    if let Some(png) = f.shape.as_ref().and_then(|s| cursor::png(s).map(|p| (p, s.hx, s.hy))) {
-                        notify(ServerMsg::CursorShape { png: STANDARD.encode(&png.0), hx: png.1, hy: png.2 });
-                    }
-                    if f.tex.is_some() {
-                        img = f.tex.clone();
-                        cap_us = f.capture_us;
-                        pending = true;
-                    }
-                }
-                if Instant::now() < due || (got.is_some() && !pending) {
-                    continue; // early, or only the pointer moved
                 }
             }
-            // Due: the newest image, or the last one again (keeps the phone's decoder flowing).
+            if prepared_packets.is_none() {
+                if let Some(e)=prepared.front() {prepared_packets=Some(encoded_packets(frame_id,e,self.enc.codec(),t.fec as usize));}
+            }
+            let first_due=prepared_packets.as_deref().map(|packets| {
+                let (_,offset)=video_packet_schedule(packets);
+                next_due.checked_sub(Duration::from_millis(3-offset)).unwrap_or(next_due)
+            }).unwrap_or(next_due);
+            let now = Instant::now();
+            if now < first_due {
+                // DXGI's own timeouts run on the coarse system tick: poll at 1 ms.
+                std::thread::sleep((first_due - now).min(Duration::from_millis(1)));
+                continue;
+            }
+            // Due: one encoded picture. A screen still for half a second repeats at half rate,
+            // so an idle desktop does not spend a full band on identical pictures.
             secpar_stream::timing::mark(secpar_stream::timing::Stage::Selected);
-            let repeat = !pending;
-            pending = false;
-            last_enc = Instant::now();
-            tokens -= 1.0;
-            let Some(src) = img.as_ref().filter(|_| sh.peer().is_some()) else { continue };
-            let Some(size) = self.cap.size() else { continue };
-            #[cfg(test)] let trace_start = Instant::now();
-            if conv.is_none() {
-                conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
+            let frame_due=next_due;
+            next_due += interval;
+            if next_due <= now {
+                next_due = now + interval;
             }
+            let repeat = prepared.is_empty();
+            if repeat && !idle_repeat_due(last_real.elapsed(), last_send.elapsed(), interval) {
+                continue;
+            }
+            if repeat {
+                let (Some(src), Some(size)) = (img.as_ref().filter(|_| sh.peer().is_some()), self.cap.size()) else { continue };
+                if conv.is_none() {
+                    conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
+                }
+                let timing = secpar_stream::timing::begin();
+                let Some(nv12) = conv.as_mut().and_then(|c| c.convert(src).ok()) else { continue };
+                secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
+                let timing = secpar_stream::timing::begin();
+                let force = sh.idr.swap(false, Ordering::Relaxed);
+                if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=true");}
+                let Ok(outs) = self.enc.encode(&nv12, now_us(), force) else { break };
+                secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode, timing);
+                prepared.extend(outs);
+            }
+            let Some(e) = prepared.pop_front() else { continue };
+            if e.key && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_output");}
+            secpar_stream::timing::mark(secpar_stream::timing::Stage::Encoded);
+            let packets=prepared_packets.take().unwrap_or_else(||encoded_packets(frame_id,&e,self.enc.codec(),t.fec as usize));
             let timing=secpar_stream::timing::begin();
-            let Some(nv12) = conv.as_mut().and_then(|c| c.convert(src).ok()) else { continue };
-            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert,timing);
-            let timing=secpar_stream::timing::begin();
-            #[cfg(test)] let trace_convert = trace_start.elapsed();
-            let force = sh.idr.swap(false, Ordering::Relaxed);
-            let Ok(outs) = self.enc.encode(&nv12, if repeat { now_us() } else { cap_us }, force) else { break };
-            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode,timing);
-            #[cfg(test)] let trace_encode = trace_start.elapsed();
-            for e in outs {
-                secpar_stream::timing::mark(secpar_stream::timing::Stage::Encoded);
-                let fh = FrameHeader { len: e.data.len() as u32, capture_us: e.capture_us, keyframe: e.key, codec: self.enc.codec() };
-                sh.send_paced(&packetize(frame_id, &fh, &e.data, t.fec as usize));
-                frame_id = frame_id.wrapping_add(1);
+            sh.send_paced_at(&packets,frame_due);
+            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Send,timing);
+            secpar_stream::timing::mark(secpar_stream::timing::Stage::Sent);
+            last_send = Instant::now();
+            if !repeat {
+                last_real = last_send;
+                let age = now_us().saturating_sub(e.capture_us);
+                // The grid starts a little behind capture, which costs display latency. Measure
+                // the settled phase once after startup, shift the grid, then lock it.
+                if !phase_done {
+                    warm.push(age);
+                    if warm.len() == 120 {
+                        // Ignore the first 30 sends while the encoder warms up.
+                        let settled = &warm[30..];
+                        let mean = settled.iter().sum::<u64>() / settled.len() as u64;
+                        // Preserve half a frame for encoder timing variation, and
+                        // never adjust the startup grid by more than half a slot.
+                        let target = (interval.as_micros() / 2).max(1) as i64;
+                        let delta = (mean as i64 - target).clamp(-target, target);
+                        if secpar_stream::timing::enabled() {
+                            let mut w = settled.to_vec(); w.sort_unstable();
+                            eprintln!("frame_timing stage=host.warm_phase n={} p50_us={} mean_us={} shift_us={delta}", w.len(), w[w.len()/2], mean);
+                        }
+                        if delta > 0 {
+                            next_due = next_due.checked_sub(Duration::from_micros(delta as u64)).unwrap_or(next_due);
+                        } else if delta < 0 {
+                            next_due += Duration::from_micros((-delta) as u64);
+                        }
+                        if next_due <= Instant::now() {
+                            next_due = Instant::now() + interval;
+                        }
+                        phase_done = true;
+                    }
+                }
+                if secpar_stream::timing::enabled() {
+                    lats.push(age);
+                    if lats.len() == 300 {
+                        let mut s = lats.clone(); s.sort_unstable();
+                        let g = |p: f64| s[((s.len() - 1) as f64 * p).round() as usize];
+                        eprintln!("frame_timing stage=host.capture_to_sent n={} p50_us={} p95_us={} max_us={}", s.len(), g(0.5), g(0.95), s.last().copied().unwrap_or(0));
+                        lats.clear();
+                    }
+                }
             }
-            #[cfg(test)] if frame_id.is_multiple_of(60) {
-                eprintln!("video timing frame={frame_id} convert={trace_convert:?} encode={:?} send={:?} repeat={repeat}", trace_encode-trace_convert, trace_start.elapsed()-trace_encode);
-            }
+            frame_id = frame_id.wrapping_add(1);
         }
         sh.stop.store(true, Ordering::Relaxed);
     }
@@ -499,17 +621,6 @@ impl Drop for Realtime {
             }
             timeEndPeriod(1);
         }
-    }
-}
-
-/// The next capture event, or None at `until`.
-fn poll(cap: &mut SharedCapture, until: Instant, sh: &Shared) -> Option<capture::GpuFrame> {
-    loop {
-        let f = cap.next(Duration::ZERO);
-        if f.is_some() || Instant::now() >= until || sh.stopped() {
-            return f;
-        }
-        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
