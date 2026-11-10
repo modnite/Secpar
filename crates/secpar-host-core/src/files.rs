@@ -18,7 +18,10 @@ impl Sending {
         let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let mut workers = self.0.lock().unwrap();
         workers.retain(|_, weak| weak.strong_count() > 0);
-        workers.insert(id.into(), std::sync::Arc::downgrade(&alive));
+        if let Some(previous) = workers.insert(id.into(), std::sync::Arc::downgrade(&alive)).and_then(|weak| weak.upgrade()) {
+            // A repeated accept/resume must not leave an uncancellable older worker.
+            previous.store(false, std::sync::atomic::Ordering::Release);
+        }
         alive
     }
     pub fn cancel(&self, id: &str) {
@@ -347,6 +350,18 @@ pub fn stream(path: &Path, id: &[u8; 16], offset: u64, send: &mut dyn FnMut(Vec<
 mod tests {
     use super::*;
     
+    #[test]
+    fn replacing_an_active_file_worker_keeps_all_workers_cancellable() {
+        use std::sync::atomic::Ordering;
+        let sending = Sending::default();
+        let old = sending.start("same-file");
+        let replacement = sending.start("same-file");
+        assert!(!old.load(Ordering::Acquire));
+        assert!(replacement.load(Ordering::Acquire));
+        sending.cancel("same-file");
+        assert!(!replacement.load(Ordering::Acquire));
+    }
+
     #[test]
     fn cancelling_an_active_file_stops_chunks_and_keeps_other_sessions_and_later_files() {
         use std::sync::atomic::Ordering;
