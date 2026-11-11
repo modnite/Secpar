@@ -247,3 +247,9 @@ against a changed Windows host is not a Linux engine improvement. Prioritize the
 Linux media path next, retain macOS hosting/client work as active scope, and report
 unverified improvements or regressions plainly. The latest Android audio dips are
 reported worse, so accepted historical audio fixes are not proof of current health.
+
+Latest feedback: frame pacing much improved; Linux720p smoother but above720p
+severely hitches on X250. Do not dismiss that as a hardware limit without evidence.
+Android audio clipping/hitching remains a distracting post3.19 regression.
+Prioritize its recovery path, preserve video improvements, conserve the reported
+9% remaining weekly usage, and publish non-UI fixes for user testing.

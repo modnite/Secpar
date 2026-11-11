@@ -15,9 +15,9 @@ class AudioPlayoutTest {
     @Test fun aDelayedBatchWithinTheLatencyBudgetIsNotDiscarded() {
         assertEquals(AudioPlayout.Decision(false,false),AudioPlayout.decide(955_000,1_000_000,960))
     }
-    @Test fun overdueQueueIsFlushedButUsableIncomingAudioIsRetained() {
-        assertEquals(AudioPlayout.Decision(true,false),AudioPlayout.decide(950_000,1_000_000,1920))
-        assertEquals(AudioPlayout.Decision(true,true),AudioPlayout.decide(919_000,1_000_000,0))
+    @Test fun transitDelayDoesNotFlushAHealthyPlaybackReserve() {
+        assertEquals(AudioPlayout.Decision(false,false),AudioPlayout.decide(950_000,1_000_000,1920))
+        assertEquals(AudioPlayout.Decision(true,true),AudioPlayout.decide(839_000,1_000_000,0))
     }
     @Test fun unsynchronizedHostClockDoesNotInvalidateEveryPacket() {
         assertFalse(AudioPlayout.decide(null,1_000_000,1440).discard)

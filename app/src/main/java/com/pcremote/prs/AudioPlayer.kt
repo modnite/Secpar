@@ -26,7 +26,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private var previousLeft = 0
     private var previousRight = 0
     private var gapCaptureUs: Long? = null
-    private var firstBufferedCaptureUs: Long? = null
+    private var firstBufferedAtUs: Long? = null
     private var lastPacketId: Int? = null
     @Volatile internal var recoveries = 0; private set
     @Volatile internal var staleFrames = 0; private set
@@ -191,7 +191,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 val captureUs = captureToLocalUs(hostCaptureUs)
                 val nowUs = System.nanoTime() / 1000
                 decodedAgeUs = captureUs?.let { nowUs - it } ?: 0
-                if (!playing && firstBufferedCaptureUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t, "startup-expired", nowUs - firstBufferedCaptureUs!!)
+                if (!playing && firstBufferedAtUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t, "startup-expired", nowUs - firstBufferedAtUs!!)
                 val queued = queuedFrames(t)
                 val decision = AudioPlayout.decide(captureUs, nowUs, queued)
                 if (decision.reset && (playing || writer.writtenFrames > 0)) resetOutput(t, if (decision.discard) "stale-packet" else "latency-budget", decodedAgeUs, queued)
@@ -202,7 +202,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 } else if (fading) PcmFade.bridge(pcm, info.size)
                 fading = false
                 val before = writer.writtenFrames
-                val deadlineUs = captureUs?.plus(AudioPlayout.MAX_LATENCY_US) ?: (nowUs + AudioPlayout.MAX_LATENCY_US)
+                val deadlineUs = captureUs?.plus(AudioPlayout.MAX_PACKET_AGE_US) ?: (nowUs + AudioPlayout.MAX_PACKET_AGE_US)
                 writer.write(pcm, info.size, { !dead && System.nanoTime() / 1000 <= deadlineUs }, { Thread.sleep(1) }) { data, offset, size ->
                     t.write(data, offset, size, AudioTrack.WRITE_NON_BLOCKING)
                 }
@@ -218,7 +218,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                     previousLeft = PcmFade.sample(pcm, info.size - 4)
                     previousRight = PcmFade.sample(pcm, info.size - 2)
                 }
-                if (firstBufferedCaptureUs == null) firstBufferedCaptureUs = captureUs
+                if (firstBufferedAtUs == null) firstBufferedAtUs = System.nanoTime() / 1000
                 lastQueuedAgeUs = captureUs?.let { (System.nanoTime() / 1000 - it).coerceAtLeast(0) } ?: 0
                 if (!playing && !dead && writer.writtenFrames >= PRIME_FRAMES) {
                     t.play()
@@ -241,7 +241,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         playing = false
         fading = true
         previousLeft = 0; previousRight = 0
-        firstBufferedCaptureUs = null
+        firstBufferedAtUs = null
         recoveries++
     }
 
@@ -255,7 +255,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         playing = false
         fading = true
         previousLeft = 0; previousRight = 0
-        firstBufferedCaptureUs = null
+        firstBufferedAtUs = null
         gapCaptureUs = null
     }
 

@@ -1129,3 +1129,13 @@ macOS x64 and the macOS ARM cross-build. Actual Mac hosting remains unverified.
 uploaded asset SHA-256 digests match local packages. Client installation/testing
 is left to the user. No audio/pacing acceptance is claimed. Linux and macOS media
 engine improvements remain active work, not completed by the Windows changes.
+
+## Android 3.20.2 audio recovery
+
+Separate the80ms output-queue limit from a160ms maximum incoming packet age.
+Startup expiration measures time spent buffering locally, rather than including
+network transit. This prevents a delayed packet from immediately expiring the
+small reserve being rebuilt after a hiccup. Video and all desktop media paths are
+unchanged. Windows and Linux remain3.20.1. Audio packet loss itself is not repaired
+by this change; physical confirmation is left to the user. No local functional
+self-test cycle was run, following the latest workflow instruction.
