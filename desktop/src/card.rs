@@ -22,14 +22,19 @@ pub struct Card<'a> {
     pub preview: Option<&'a egui::TextureHandle>,
     /// `Some(enabled)` shows the Connect button.
     pub connect: Option<bool>,
+    /// Show the Files action for owned and manually paired computers.
+    pub files: Option<bool>,
     /// A trailing "..." menu, drawn by the caller.
     pub menu: Option<&'a mut dyn FnMut(&mut egui::Ui)>,
 }
 
-/// Draws the card. Returns true when Connect was clicked.
-pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
+#[derive(Default)]
+pub struct Action { pub connect: bool, pub files: bool }
+
+/// Draws the computer actions in the same row on narrow and wide cards.
+pub fn show(ui: &mut egui::Ui, card: Card) -> Action {
     if ui.available_width()<520. {return vertical(ui,card);}
-    let mut clicked = false;
+    let mut clicked = Action::default();
     design::surface().inner_margin(MARGIN as i8).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let gap = ui.spacing().item_spacing.x;
@@ -39,7 +44,7 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
             ui.fonts_mut(|f| f.layout_no_wrap(card.platform.into(), egui::FontId::proportional(SMALL), design::MUTED).size().x) + gap
         };
         // Every card keeps the slot of the menu button, used or not, so Connect sits in the same place on all of them.
-        let right = platform_w + if card.connect.is_some() { BUTTON + gap } else { 0. } + MENU + gap;
+        let right = platform_w + if card.connect.is_some() { BUTTON + gap } else { 0. } + if card.files.is_some() { 72. + gap } else { 0. } + MENU + gap;
         let thumb = if card.preview.is_some() { previews::WIDTH + gap } else { 0. };
         let text_w = (ui.available_width() - thumb - 8. - gap - right).max(MIN_TEXT);
         let name_h = ui
@@ -69,8 +74,11 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
                 } else {
                     ui.add_space(MENU_DRAWN + ui.spacing().item_spacing.x);
                 }
+                if let Some(enabled) = card.files {
+                    clicked.files = ui.add_enabled(enabled, egui::Button::new("Files").min_size(egui::vec2(72., design::CONTROL))).on_hover_text("Browse and transfer files").clicked();
+                }
                 if let Some(enabled) = card.connect {
-                    clicked = ui.add_enabled(enabled, design::primary("Connect")).clicked();
+                    clicked.connect = ui.add_enabled(enabled, design::primary("Connect")).clicked();
                 }
                 if !card.platform.is_empty() {
                     ui.label(RichText::new(card.platform).size(SMALL).color(design::MUTED));
@@ -82,8 +90,8 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> bool {
 }
 
 /// Android's card order: identity, preview, then the connection action.
-fn vertical(ui:&mut egui::Ui,mut card:Card)->bool {
-    let mut clicked=false;
+fn vertical(ui:&mut egui::Ui,mut card:Card)->Action {
+    let mut clicked=Action::default();
     design::surface().inner_margin(12).show(ui,|ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y=8.;
@@ -105,7 +113,13 @@ fn vertical(ui:&mut egui::Ui,mut card:Card)->bool {
             ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(width,width*9./16.)));
         }
         if let Some(enabled)=card.connect {
-            clicked=ui.add_enabled_ui(enabled,|ui|ui.add_sized([ui.available_width(),design::CONTROL],design::primary("Connect"))).inner.clicked();
+            ui.horizontal(|ui| {
+                let width=ui.available_width()-if card.files.is_some(){80.+ui.spacing().item_spacing.x}else{0.};
+                clicked.connect=ui.add_enabled_ui(enabled,|ui|ui.add_sized([width,design::CONTROL],design::primary("Connect"))).inner.clicked();
+                if let Some(enabled)=card.files {
+                    clicked.files=ui.add_enabled_ui(enabled,|ui|ui.add_sized([80.,design::CONTROL],egui::Button::new("Files"))).inner.on_hover_text("Browse and transfer files").clicked();
+                }
+            });
         }
     });
     clicked
@@ -125,7 +139,7 @@ mod tests {
         for _ in 0..2 {
             let _ = ctx.run(input.clone(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let card = Card { name, status: Some(("Online", design::OK)), platform: "Linux", preview: preview.then_some(&texture), connect: Some(true), menu: None };
+                    let card = Card { name, status: Some(("Online", design::OK)), platform: "Linux", preview: preview.then_some(&texture), connect: Some(true), files: Some(true), menu: None };
                     let top = ui.cursor().top();
                     show(ui, card);
                     out = ui.cursor().top() - top - ui.spacing().item_spacing.y;
@@ -133,6 +147,36 @@ mod tests {
             });
         }
         out
+    }
+
+    #[test]
+    fn files_and_connect_are_distinct_card_actions_at_narrow_and_wide_widths() {
+        for width in [380., 600.] {
+            for label in ["Files", "Connect"] {
+                let ctx=egui::Context::default();
+                design::configure(&ctx);
+                let mut target=egui::Pos2::ZERO;
+                for frame in 0..3 {
+                    let events=if frame==2 {vec![
+                        egui::Event::PointerMoved(target),
+                        egui::Event::PointerButton{pos:target,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},
+                        egui::Event::PointerButton{pos:target,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()},
+                    ]}else{vec![]};
+                    let mut action=Action::default();
+                    let output=ctx.run(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,400.))),events,..Default::default()},|ctx| {
+                        egui::CentralPanel::default().show(ctx,|ui| {
+                            action=show(ui,Card{name:"Computer",status:None,platform:"",preview:None,connect:Some(true),files:Some(true),menu:None});
+                        });
+                    });
+                    for shape in output.shapes {
+                        if let egui::epaint::Shape::Text(text)=shape.shape {
+                            if text.galley.job.text==label {target=egui::Rect::from_min_size(text.pos,text.galley.size()).center();}
+                        }
+                    }
+                    if frame==2 {assert_eq!(action.files,label=="Files");assert_eq!(action.connect,label=="Connect");}
+                }
+            }
+        }
     }
 
     #[test]

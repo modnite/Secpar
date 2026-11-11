@@ -517,23 +517,14 @@ impl Panel {
             let status = format!("@{} · {}", computer.owner_handle, computer.access());
             let enabled = !self.busy && !self.session_open;
             let preview = self.textures.get(&computer.id).cloned();
-            let mut files = false;
-            let mut menu = |ui: &mut eframe::egui::Ui| {
-                ui.menu_button("…", |ui| {
-                    if ui.add_enabled(enabled, eframe::egui::Button::new("Send files")).clicked() {
-                        files = true;
-                        ui.close();
-                    }
-                });
-            };
-            let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: preview.as_ref(), connect: Some(enabled), menu: Some(&mut menu) });
-            if files {
+            let clicked = crate::card::show(ui, crate::card::Card { name: &computer.name, status: Some((status.as_str(), design::OK)), platform, preview: preview.as_ref(), connect: Some(enabled), files: Some(enabled), menu: None });
+            if clicked.files {
                 // Browsing a friend's disks is never allowed. Sending files to them is, with the files permission.
                 let owner = computer.owner_handle.clone();
                 if self.tx.try_send(Command::RequestGuest { computer, permissions: vec!["files".to_string()] }).is_ok() {
                     self.guest_waiting = Some(owner);
                 }
-            } else if clicked {
+            } else if clicked.connect {
                 self.guest_choice = Some((computer, PERMISSION_DEFAULTS));
             }
         }
@@ -547,7 +538,8 @@ impl Panel {
             }
         });
     }
-    pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) {
+    pub fn computers_ui(&mut self, ui: &mut eframe::egui::Ui) -> Option<String> {
+        let mut files = None;
         use crate::design;
         use eframe::egui;
         ui.heading("Computers");
@@ -571,8 +563,9 @@ impl Panel {
                 let presence=if computer.online==1 {Presence::Online}else{Presence::Offline};
                 let (status,color)=computer_status(computer.linked==1,presence);
                 let platform=match computer.platform.as_str(){"windows"=>"Windows","linux"=>"Linux","macos"=>"macOS",_=>""};
-                let clicked=crate::card::show(ui,crate::card::Card{name:&computer.name,status:Some((status,color)),platform,preview,connect:Some(!self.busy && computer.linked==1),menu:None});
-                if clicked { connect=Some(computer.id.clone()); }
+                let clicked=crate::card::show(ui,crate::card::Card{name:&computer.name,status:Some((status,color)),platform,preview,connect:Some(!self.busy && computer.linked==1),files:Some(!self.busy && computer.linked==1 && computer.online==1),menu:None});
+                if clicked.connect { connect=Some(computer.id.clone()); }
+                if clicked.files { files=Some(computer.id.clone()); }
             }
             let none_of_ours = shown.is_empty();
             let waiting = self.guest_flow_ui(ui);
@@ -583,6 +576,7 @@ impl Panel {
             if !self.note.is_empty() { ui.label(&self.note); }
             ui.add_space(6.);
         }
+        files
     }
     pub fn poll(&mut self) {
         while let Ok(event) = self.events.try_recv() {

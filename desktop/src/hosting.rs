@@ -177,11 +177,19 @@ impl Panel {
             if refresh {self.refreshing=true;} else {self.busy=true;}
         }
     }
-    pub fn ui(
+    /// Settings content shares the parent's scroll area and has no back navigation.
+    pub fn inline_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &mut crate::account::Panel) {
+        self.ui_inner(ui, ctx, account, true);
+    }
+    pub fn ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &mut crate::account::Panel) -> bool {
+        self.ui_inner(ui, ctx, account, false)
+    }
+    fn ui_inner(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         account: &mut crate::account::Panel,
+        inline: bool,
     ) -> bool {
         let mut back=false;
         while let Ok(event) = self.events.try_recv() {
@@ -233,17 +241,17 @@ impl Panel {
         }
         ctx.request_repaint_after(Duration::from_secs(1));
         ui.horizontal(|ui| {
-            back=design::back_button(ui);
-            ui.heading(if self.settings_open {"Host settings"}else{"Paired devices"});
+            if !inline {back=design::back_button(ui);}
+            ui.heading(if inline || self.settings_open {"Host settings"}else{"Paired devices"});
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                 ui.menu_button("Manage",|ui| {
-                    if ui.button(if self.settings_open {"Paired devices"}else{"Host settings"}).clicked(){self.settings_open=!self.settings_open;ui.close();}
+                    if !inline && ui.button(if self.settings_open {"Paired devices"}else{"Host settings"}).clicked(){self.settings_open=!self.settings_open;ui.close();}
                     if ui.button("Account").clicked(){self.account_open=true;ui.close();}
                 });
             });
         });
         ui.add_space(if self.settings_open { 0. } else { 8. });
-        if !self.settings_open {
+        if !inline && !self.settings_open {
             design::surface().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -301,10 +309,22 @@ impl Panel {
             ui.colored_label(Color32::from_rgb(255, 170, 120), &self.error);
         }
         ui.add_space(if self.settings_open { 0. } else { 10. });
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if self.settings_open {
-                self.settings_ui(ui);
-            } else if let Some(state) = self.state.clone() {
+        let mut contents = |ui: &mut egui::Ui| {
+            if inline || self.settings_open { self.settings_ui(ui); }
+            if inline {
+                ui.add_space(8.);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Paired devices").strong());
+                    if account.user.is_none() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add_enabled(self.state.is_some() && !self.busy, egui::Button::new("Pair a device")).clicked() {
+                                self.pairing=true; self.link.clear(); self.qr=None; self.send(Command::Pair);
+                            }
+                        });
+                    }
+                });
+            }
+            if inline || !self.settings_open { if let Some(state) = self.state.clone() {
                 if state.devices.is_empty() {
                     ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
                 }
@@ -349,8 +369,10 @@ impl Panel {
                         });
                     });
                 }
+            } else { ui.label(egui::RichText::new("Hosting unavailable").color(design::MUTED)); }
             }
-        });
+        };
+        if inline { contents(ui); } else { egui::ScrollArea::vertical().show(ui, contents); }
         if self.account_open {
             egui::Modal::new(egui::Id::new("hosting-account")).show(ctx, |ui| {
                 ui.set_width(420_f32.min(ctx.content_rect().width() - 48.));

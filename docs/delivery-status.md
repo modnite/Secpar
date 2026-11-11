@@ -1065,3 +1065,12 @@ and queued children; a layout regression also checks cancellation/upload control
 against their clipping rectangles. Linux handler changes are present but have not
 been compiled or physically tested in this pass. No installed app or service was
 restarted. The public release remains blocked on Android and Linux frame pacing.
+
+
+Desktop navigation follow-up (not released): Files is a visible action on owned,
+manually paired and shared computer cards, and returns to Computers. Shared files
+retain the existing guest permission request. Settings keeps Client and Host groups
+expanded in one vertical scroll, including paired-device management. Four card
+tests pass, including independent Files/Connect click targets at narrow and wide
+widths. Native sample layouts reviewed at 420x640 and 640x400 for cards and both
+settings groups. No installed app, engine or version changes in this follow-up.

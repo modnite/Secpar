@@ -1248,7 +1248,7 @@ impl eframe::App for App {
                 )
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        // Match Android's three primary tabs. Hosting and Files live in Settings.
+                        // Match Android: Files belongs to Computers; both settings groups stay expanded.
                         let tab = ((ui.available_width() - 2. * ui.spacing().item_spacing.x) / 3.).clamp(60., 100.);
                         for (page, label) in [
                             (Page::Computers, "Computers"),
@@ -1258,7 +1258,7 @@ impl eframe::App for App {
                             if page == Page::Hosting && !cfg!(any(windows, target_os = "linux")) {
                                 continue;
                             }
-                            let selected = self.page == page || page==Page::Settings && matches!(self.page,Page::Hosting|Page::Files|Page::ClientSettings);
+                            let selected = self.page == page || page==Page::Settings && matches!(self.page,Page::Hosting|Page::ClientSettings) || page==Page::Computers && self.page==Page::Files;
                             let response = ui.add_sized(
                                 [tab, 36.],
                                 egui::Button::new(egui::RichText::new(label).size(14.).color(if selected {
@@ -1364,12 +1364,10 @@ impl eframe::App for App {
                     }
                 } else if self.command.is_none() {
                     if self.page==Page::Files {
-                        if ui.button("Back").clicked(){self.page=Page::Settings;}
+                        if ui.button("Back to computers").clicked(){self.page=Page::Computers;}
                         ui.add_space(8.);
                     }
-                    if self.page == Page::Hosting {
-                        if self.hosting.ui(ui, ctx, &mut self.account){self.page=Page::Settings;}
-                    } else if self.page == Page::Files {
+                    if self.page == Page::Files {
                         let manual = self.computer.clone().filter(|_| self.computer_account.is_none());
                         let picks = self.account.picks(manual.as_ref());
                         let note = self.account.note().to_string();
@@ -1382,30 +1380,28 @@ impl eframe::App for App {
                         }
                     } else if self.page == Page::Friends {
                         self.account.ui(ui);
-                    } else if self.page == Page::ClientSettings {
-                        ui.horizontal(|ui| {if design::back_button(ui){self.page=Page::Settings;}ui.heading("Client settings");});
-                        ui.add_space(8.);
-                        egui::ScrollArea::vertical().show(ui,|ui| {
-                            if self.client.ui(ui) {self.options=self.client.options();self.client.save();}
-                        });
-                    } else if self.page == Page::Settings {
-                        ui.heading("Settings");ui.add_space(8.);
-                        design::surface().inner_margin(0).show(ui,|ui| {
-                            ui.set_width(ui.available_width());
-                            for (page,label) in [(Page::ClientSettings,"Client settings"),(Page::Hosting,"Host settings"),(Page::Files,"Files")] {
-                                if page==Page::Hosting && !cfg!(any(windows,target_os="linux")){continue;}
-                                let (rect,response)=ui.allocate_exact_size(egui::vec2(ui.available_width(),44.),egui::Sense::click());
-                                response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,true,label));
-                                if response.hovered(){ui.painter().rect_filled(rect,0.,ui.visuals().widgets.hovered.bg_fill);}
-                                ui.painter().text(rect.left_center()+egui::vec2(12.,0.),egui::Align2::LEFT_CENTER,label,egui::FontId::proportional(14.),design::TEXT);
-                                icons::paint(ui,icons::Icon::Chevron,egui::Rect::from_center_size(rect.right_center()-egui::vec2(20.,0.),egui::vec2(16.,16.)),design::MUTED);
-                                if response.clicked(){if page==Page::Hosting {self.hosting.open_settings();}self.page=page;}
+                    } else if matches!(self.page, Page::Settings | Page::ClientSettings | Page::Hosting) {
+                        let settings_scroll=egui::ScrollArea::vertical().id_salt("settings-page").auto_shrink([false, false]);
+                        #[cfg(feature="ui-review")]
+                        let settings_scroll=if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p=="settings-host-sample") {settings_scroll.vertical_scroll_offset(460.)}else{settings_scroll};
+                        settings_scroll.show(ui, |ui| {
+                            ui.heading("Client settings");
+                            ui.add_space(8.);
+                            if self.client.ui(ui) { self.options=self.client.options(); self.client.save(); }
+                            if cfg!(any(windows,target_os="linux")) {
+                                ui.add_space(16.);
+                                self.hosting.inline_ui(ui, ctx, &mut self.account);
                             }
                         });
                     } else {
                         // Narrow windows keep the Android-style card order and scroll as one list.
                         let shown = egui::ScrollArea::vertical().id_salt("computers-page").auto_shrink([false, false]).show(ui, |ui| {
-                            self.account.computers_ui(ui);
+                            if let Some(id) = self.account.computers_ui(ui) {
+                                let name=self.account.computers.iter().find(|c|c.id==id).map(|c|c.name.clone()).unwrap_or_default();
+                                self.files.wait_for(&id, &name);
+                                self.account.connect_owned_for_files(id);
+                                self.page=Page::Files;
+                            }
                             if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none()) {
                                 let name = computer.name.clone();
                                 let mut forget = false;
@@ -1418,9 +1414,14 @@ impl eframe::App for App {
                                     });
                                 };
                                 let preview = self.account.preview(&computer.id).cloned();
-                                let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: preview.as_ref(), connect: Some(true), menu: Some(&mut menu) });
+                                let connect = card::show(ui, card::Card { name: &name, status: None, platform: "", preview: preview.as_ref(), connect: Some(true), files: Some(true), menu: Some(&mut menu) });
+                                if connect.files {
+                                    let computer=computer.clone();
+                                    self.files.open(&computer.id, &name, None, files::Source::Saved(computer.clone()));
+                                    self.page=Page::Files;
+                                }
                                 if forget { self.account.forget_computer(); }
-                                if connect { self.start(ctx); }
+                                if connect.connect { self.start(ctx); }
                             }
                             // Without an account a computer is still paired by its link, kept out of the way.
                             if self.account.user.is_none() {
