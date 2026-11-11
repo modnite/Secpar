@@ -1171,3 +1171,19 @@ repeated zero-rumble requests. A failed stop write remains retryable; nonzero
 refresh behavior is unchanged. This removes redundant kernel/Bluetooth output
 work, but its effect on this reported video slowdown is unverified. No decoder,
 video pacing or audio changes; user tests the public non-UI update.
+
+## Linux3.20.5 decoder backlog recovery
+
+User confirms decoder changes in the supplied timing log were manual; do not
+mislabel them as automatic fallback. Maximized and subsequently smaller windows
+can also become choppy, so fullscreen alone is not an established cause.
+
+Separate transient hardware-queue pressure from a device failure. On pressure,
+flush the pipeline safely and request a fresh keyframe while retaining VA-API.
+Actual decoded output resets consecutive failures. Three recoveries within five
+seconds, repeated recovery without output, a failed reset, or device errors still
+select software. Existing queue
+bounds remain. Recovery and fallback reasons are logged without media content.
+This corrects permanent fallback on a temporary backlog; it is not confirmation
+that every reported hitch has the same cause. Non-UI build/package checks only;
+physical testing remains with the user. Android audio is unchanged.

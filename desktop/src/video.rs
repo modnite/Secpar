@@ -58,7 +58,7 @@ enum Backend {
 /// `Invalid`: this data could not be decoded, ask for a keyframe. `Device`: the decoder itself
 /// is unusable (GPU removed, MFT fell back to system memory), so switch to software.
 #[derive(Debug,PartialEq)]
-enum DecodeError { Invalid, Dimensions, Device }
+enum DecodeError { Invalid, Dimensions, Device, Backpressure }
 struct DecodeBudget { limit:Duration, slow:u8 }
 impl DecodeBudget {
     fn new(fps:u32)->Self {Self {limit:Duration::from_secs_f64(1.5/fps.clamp(1,240) as f64),slow:0}}
@@ -92,6 +92,16 @@ impl Backend {
     fn is_hardware(&self)->bool {
         match self {Self::Software(_)=>false,#[cfg(any(target_os="linux",windows))] Self::Hardware(_)=>true}
     }
+    fn take_progress(&self)->bool {
+        #[cfg(target_os="linux")]
+        if let Self::Hardware(hardware)=self {return hardware.take_progress();}
+        false
+    }
+    fn reset_hardware(&mut self)->Result<(),()> {
+        #[cfg(target_os="linux")]
+        if let Self::Hardware(hardware)=self {return hardware.reset();}
+        Err(())
+    }
     fn label(&self,codec:Codec)->&'static str {
         match (codec,self.is_hardware(),cfg!(windows)) {
             (Codec::H264,false,_)=>"H.264 · software",
@@ -114,7 +124,7 @@ impl Backend {
                 Picture::from_i420([w,h],(yuv.y(),sy),(yuv.u(),su),(yuv.v(),sv)).map(Some).ok_or(DecodeError::Dimensions)
             }
             #[cfg(target_os="linux")]
-            Self::Hardware(decoder)=>decoder.decode_timed(bytes,capture_us,fps,generation).map_err(|_|DecodeError::Device),
+            Self::Hardware(decoder)=>decoder.decode_timed(bytes,capture_us,fps,generation).map_err(|error|match error {linux::Failure::Backpressure=>DecodeError::Backpressure,linux::Failure::Device=>DecodeError::Device}),
             #[cfg(windows)]
             Self::Hardware(decoder)=>decoder.decode(codec,bytes),
         }
@@ -248,6 +258,7 @@ impl Worker {
             let mut slow_fallback=false;
             // Consecutive hardware failures on bad data; a lone glitch only costs a keyframe.
             let mut bad_run=0u32;
+            let mut pressure_attempts:VecDeque<Instant>=VecDeque::new();
             // Until the decoder produced a picture it can only start on parameter sets.
             let mut started=false;
             loop {
@@ -257,6 +268,7 @@ impl Worker {
                     if state.stopped { break; }
                     (state.queue.pop_front().unwrap(), state.generation, state.fps)
                 };
+                if decoder.take_progress() {bad_run=0;}
                 budget.set_rate(rate);
                 let began=Instant::now();
                 let timing=secpar_stream::timing::begin();
@@ -289,15 +301,25 @@ impl Worker {
                     }
                     Err(error) => {
                         started=false;
-                        if error==DecodeError::Invalid {bad_run+=1;}
-                        // Linux keeps its old rule: any hardware failure switches to software.
-                        if decoder.is_hardware() && (error==DecodeError::Device || bad_run>=3 || !cfg!(windows)) {
+                        if matches!(error,DecodeError::Invalid|DecodeError::Backpressure) {bad_run+=1;}
+                        let pressure_failed=if error==DecodeError::Backpressure {
+                            let now=Instant::now();
+                            while pressure_attempts.front().is_some_and(|at|now.duration_since(*at)>Duration::from_secs(5)) {pressure_attempts.pop_front();}
+                            pressure_attempts.push_back(now);
+                            pressure_attempts.len()>=3
+                        } else {false};
+                        let reset_failed=error==DecodeError::Backpressure && bad_run<3 && !pressure_failed && decoder.reset_hardware().is_err();
+                        // Backpressure can recover on a keyframe. Repeated recovery without
+                        // decoded output, a failed reset, or a device fault falls back.
+                        if decoder.is_hardware() && (error==DecodeError::Device || bad_run>=3 || pressure_failed || reset_failed || (!cfg!(windows) && error!=DecodeError::Backpressure)) {
+                            eprintln!("video_decoder fallback=software reason={error:?}");
                             bad_run=0;
                             match Backend::new(Preference::Software) {
                                 Ok(software)=>decoder=software,
                                 Err(_)=> {lock.lock().unwrap().error=Some("H.264 decoder could not start".into());ctx.request_repaint();break;}
                             }
                         }
+                        if error==DecodeError::Backpressure && decoder.is_hardware() {eprintln!("video_decoder recovery=keyframe reason={error:?} attempts={bad_run}");}
                         let mut state = lock.lock().unwrap();
                         state.queue.clear();
                         state.waiting_key = true;

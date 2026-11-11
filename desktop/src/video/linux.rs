@@ -5,6 +5,9 @@ use gstreamer_video::{VideoFrameRef, VideoInfo};
 use gstreamer_video::prelude::*;
 use std::{collections::VecDeque, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
+#[derive(Debug)]
+pub enum Failure { Backpressure, Device }
+
 struct Pending { pts: u64, generation: u64, submitted: Instant }
 
 pub struct Hardware {
@@ -17,6 +20,7 @@ pub struct Hardware {
     asynchronous: bool,
     pending: Arc<Mutex<VecDeque<Pending>>>,
     failed: Arc<AtomicBool>,
+    progressed: Arc<AtomicBool>,
 }
 impl Hardware {
     pub fn open(factory: &str) -> Result<Self, ()> {
@@ -26,7 +30,7 @@ impl Hardware {
         let input = pipeline.by_name("input").ok_or(())?.downcast::<AppSrc>().map_err(|_| ())?;
         let output = pipeline.by_name("output").ok_or(())?.downcast::<AppSink>().map_err(|_| ())?;
         let hardware = Self { pipeline, input, output, sequence:0, epoch:None, last_pts:None,
-            asynchronous:false, pending:Arc::new(Mutex::new(VecDeque::new())), failed:Arc::new(AtomicBool::new(false)) };
+            asynchronous:false, pending:Arc::new(Mutex::new(VecDeque::new())), failed:Arc::new(AtomicBool::new(false)), progressed:Arc::new(AtomicBool::new(false)) };
         hardware.pipeline.set_state(gst::State::Playing).map_err(|_| ())?;
         Ok(hardware)
     }
@@ -35,6 +39,7 @@ impl Hardware {
     pub fn enable_async_output(&mut self, deliver: impl Fn(u64, Picture)+Send+Sync+'static) {
         let pending=self.pending.clone();
         let failed=self.failed.clone();
+        let progressed=self.progressed.clone();
         self.output.set_callbacks(AppSinkCallbacks::builder().new_sample(move |sink| {
             let result=(|| {
                 let sample=sink.pull_sample().map_err(|_| gst::FlowError::Error)?;
@@ -47,6 +52,7 @@ impl Hardware {
                     queued.drain(..=at);
                     generation
                 };
+                progressed.store(true,Ordering::Relaxed);
                 deliver(generation,image);
                 Ok(gst::FlowSuccess::Ok)
             })();
@@ -55,40 +61,52 @@ impl Hardware {
         }).build());
         self.asynchronous=true;
     }
+    pub fn take_progress(&self)->bool {self.progressed.swap(false,Ordering::Relaxed)}
+    pub fn reset(&mut self)->Result<(),()> {
+        // READY stops streaming callbacks and flushes appsrc/appsink and the DPB.
+        // Clear metadata only after those callbacks have stopped.
+        if self.pipeline.set_state(gst::State::Ready).map_err(|_| ())? == gst::StateChangeSuccess::Async {return Err(());}
+        self.pending.lock().unwrap().clear();
+        self.failed.store(false,Ordering::Relaxed);
+        self.progressed.store(false,Ordering::Relaxed);
+        self.epoch=None;self.last_pts=None;
+        self.pipeline.set_state(gst::State::Playing).map_err(|_| ())?;
+        Ok(())
+    }
     // The small capability probe uses the same pipeline with a bounded wait.
     pub fn decode(&mut self, bytes:&[u8]) -> Result<Option<Picture>, ()> {
         let capture=self.sequence*16_667;
         self.sequence+=1;
-        self.decode_timed(bytes,capture,60,0)
+        self.decode_timed(bytes,capture,60,0).map_err(|_| ())
     }
-    pub fn decode_timed(&mut self, bytes:&[u8], capture_us:u64, fps:u32, generation:u64) -> Result<Option<Picture>, ()> {
-        if self.failed.load(Ordering::Relaxed) {return Err(());}
+    pub fn decode_timed(&mut self, bytes:&[u8], capture_us:u64, fps:u32, generation:u64) -> Result<Option<Picture>, Failure> {
+        if self.failed.load(Ordering::Relaxed) {return Err(Failure::Device);}
         if let Some(bus)=self.pipeline.bus() {
-            if bus.pop_filtered(&[gst::MessageType::Error]).is_some() {return Err(());}
+            if bus.pop_filtered(&[gst::MessageType::Error]).is_some() {return Err(Failure::Device);}
         }
         // Bound both encoded input and frames waiting for the GPU/readback. A
         // stalled driver still triggers software fallback instead of growing RAM.
-        if self.input.property::<u64>("current-level-buffers")>=8 {return Err(());}
+        if self.input.property::<u64>("current-level-buffers")>=8 {return Err(Failure::Backpressure);}
         if self.asynchronous {
             let queued=self.pending.lock().unwrap();
-            if queued.len()>=8 || queued.front().is_some_and(|p|p.submitted.elapsed()>Duration::from_millis(250)) {return Err(());}
+            if queued.len()>=8 || queued.front().is_some_and(|p|p.submitted.elapsed()>Duration::from_millis(250)) {return Err(Failure::Backpressure);}
         }
         let epoch=*self.epoch.get_or_insert(capture_us);
         let pts=capture_us.saturating_sub(epoch).saturating_mul(1000)
             .max(self.last_pts.map_or(0,|p|p.saturating_add(1)));
         self.last_pts=Some(pts);
         let mut buffer=gst::Buffer::from_mut_slice(bytes.to_vec());
-        let data=buffer.get_mut().ok_or(())?;
+        let data=buffer.get_mut().ok_or(Failure::Device)?;
         data.set_pts(gst::ClockTime::from_nseconds(pts));
         data.set_duration(gst::ClockTime::from_nseconds(1_000_000_000/fps.clamp(1,240) as u64));
         if self.asynchronous {
             // Publish metadata before push_buffer: output may run immediately.
             self.pending.lock().unwrap().push_back(Pending{pts,generation,submitted:Instant::now()});
         }
-        self.input.push_buffer(buffer).map_err(|_| ())?;
+        self.input.push_buffer(buffer).map_err(|_| Failure::Device)?;
         if self.asynchronous {return Ok(None);}
         self.output.try_pull_sample(gst::ClockTime::from_mseconds(100))
-            .map(|sample|picture(&sample)).transpose()
+            .map(|sample|picture(&sample)).transpose().map_err(|_| Failure::Device)
     }
 }
 fn picture(sample:&gst::Sample)->Result<Picture,()> {
