@@ -44,7 +44,7 @@ pub fn choices(display:&str)->Vec<Choice> {
         options.push(Choice{id,name,available:result.is_ok(),reason:result.err().map(|e|e.message()).unwrap_or_default()});
     }
     #[cfg(not(feature="ffmpeg"))]
-    options.push(Choice{id:"media-foundation",name:"Media Foundation (legacy)",available:true,reason:String::new()});
+    options.insert(0,Choice{id:"media-foundation",name:"Media Foundation (legacy)",available:true,reason:String::new()});
     cache.insert(luid,options.clone());options
 }
 

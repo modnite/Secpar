@@ -503,7 +503,7 @@ impl Panel {
         let mut backend=config["encoder"]["backend"].as_str().unwrap_or("auto").to_string();
         let mut preset=config["encoder"]["preset"].as_str().unwrap_or("fast").to_string();
         let old=(backend.clone(),preset.clone());
-        ui.label(egui::RichText::new("Encoder").size(12.).color(design::MUTED));
+        ui.label(egui::RichText::new("Encoder").size(12.).color(design::MUTED)).on_hover_text("Changes apply to new connections.");
         let selected=if backend=="auto" {"Automatic"} else {
             choices.iter().find(|c|c["id"].as_str()==Some(&backend)).and_then(|c|c["name"].as_str()).unwrap_or("Encoder unavailable")
         };
@@ -528,7 +528,6 @@ impl Panel {
                 for (id,label) in ["fast","balanced","quality"].into_iter().zip(labels) {ui.selectable_value(&mut preset,id.into(),label);}
             });
         }
-        ui.label(egui::RichText::new("Applies to new connections.").size(12.).color(design::MUTED));
         if old!=(backend.clone(),preset.clone()) {self.send(Command::Patch(json!({"encoder":{"backend":backend,"preset":preset}})));}
     }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -540,8 +539,6 @@ impl Panel {
             ui.spacing_mut().item_spacing.y = 4.;
             design::surface().inner_margin(10).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(egui::RichText::new("Streaming").strong());
-                ui.add_space(6.);
                 ui.vertical(|ui| {
                     let left = &mut *ui;
                     left.label(egui::RichText::new("Display").size(12.).color(design::MUTED));

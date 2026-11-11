@@ -1383,7 +1383,7 @@ impl eframe::App for App {
                     } else if matches!(self.page, Page::Settings | Page::ClientSettings | Page::Hosting) {
                         let settings_scroll=egui::ScrollArea::vertical().id_salt("settings-page").auto_shrink([false, false]);
                         #[cfg(feature="ui-review")]
-                        let settings_scroll=if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p=="settings-host-sample") {settings_scroll.vertical_scroll_offset(460.)}else{settings_scroll};
+                        let settings_scroll=if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p=="settings-host-sample") {settings_scroll.vertical_scroll_offset(500.)}else{settings_scroll};
                         settings_scroll.show(ui, |ui| {
                             ui.heading("Client settings");
                             ui.add_space(8.);

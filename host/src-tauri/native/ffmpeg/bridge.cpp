@@ -25,10 +25,11 @@ struct Encoder {
     AVPacket* packet = nullptr;
     ComPtr<ID3D11DeviceContext> context;
     bool qsv = false;
+    bool relaxed_rate_control = false;
     unsigned fps = 0;
     ~Encoder() { av_packet_free(&packet); avcodec_free_context(&codec); av_buffer_unref(&device); }
     int open(ID3D11Device* dev, const char* backend, unsigned format, unsigned w,
-             unsigned h, unsigned rate, unsigned kbps, unsigned quality) {
+             unsigned h, unsigned rate, unsigned kbps, unsigned quality, bool fallback = false) {
         if (!dev || !backend || !w || !h || !rate || !kbps || format > 2 ||
             w > INT_MAX || h > INT_MAX || kbps > INT_MAX / 1000) return AVERROR(EINVAL);
         const char* names[] = {"h264", "hevc", "av1"};
@@ -46,6 +47,7 @@ struct Encoder {
         int status = av_hwdevice_ctx_init(base);
         if (status < 0) { av_buffer_unref(&base); return status; }
         qsv = std::strcmp(backend, "qsv") == 0;
+        relaxed_rate_control = qsv || std::strcmp(backend, "amf") == 0;
         if (qsv) {
             status = av_hwdevice_ctx_create_derived(&device, AV_HWDEVICE_TYPE_QSV, base, 0);
             av_buffer_unref(&base);
@@ -58,8 +60,11 @@ struct Encoder {
         codec->sample_aspect_ratio = AVRational{1, 1};
         codec->pix_fmt = qsv ? AV_PIX_FMT_QSV : AV_PIX_FMT_D3D11;
         codec->sw_pix_fmt = AV_PIX_FMT_NV12;
-        codec->bit_rate = codec->rc_max_rate = static_cast<int64_t>(kbps) * 1000;
-        codec->rc_buffer_size = static_cast<int>(codec->bit_rate / rate);
+        codec->rc_max_rate = static_cast<int64_t>(kbps) * 1000;
+        // Sunshine's AMF/QSV flags: CBR_WITH_VBR, NO_RC_BUF_LIMIT and RELAXED_COMPLIANCE.
+        codec->bit_rate = codec->rc_max_rate - (relaxed_rate_control ? 1 : 0);
+        codec->rc_buffer_size = relaxed_rate_control ? 0 : static_cast<int>(codec->bit_rate / rate);
+        if (relaxed_rate_control) codec->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
         codec->max_b_frames = 0;
         codec->gop_size = codec->keyint_min = INT_MAX;
         codec->refs = 1;
@@ -93,12 +98,16 @@ struct Encoder {
         } else if (qsv) {
             set("preset", quality == 2 ? "slow" : quality == 1 ? "medium" : "veryfast");
             set("forced_idr","1"); set("async_depth","1"); set("low_delay_brc","1");
-            set("low_power","1");
+            set("low_power",fallback ? "0" : "1");
+            if (format == 0) {
+                set("vcm","1"); set("recovery_point_sei","0");
+                set("pic_timing_sei","0"); set("max_dec_frame_buffering","1");
+            }
             // Sunshine's SDR high/main profiles, never B frames or lookahead.
             set("profile", format == 0 ? "high" : "main");
         } else if (std::strcmp(backend,"amf") == 0) {
             set("quality",quality == 2 ? "quality" : quality == 1 ? "balanced" : "speed");
-            set("usage","ultralowlatency"); set("rc","cbr");
+            set("usage",fallback ? "lowlatency" : "ultralowlatency"); set("rc","cbr");
             set("forced_idr","1"); set("async_depth","1");
             set("latency",format == 2 ? "lowest_latency" : "1");
             set("filler_data","0"); set("preencode","0");
@@ -149,6 +158,14 @@ void* secpar_avcodec_open(ID3D11Device* dev, const char* backend, unsigned codec
     try {
         auto encoder = std::make_unique<Encoder>();
         *status = encoder->open(dev,backend,codec,w,h,fps,kbps,quality);
+        // Sunshine retries old/low-end Intel GPUs without low-power encoding,
+        // and AMF H.264 with low-latency usage when ultra-low-latency is rejected.
+        if (*status < 0 && backend &&
+            ((std::strcmp(backend,"qsv")==0 && codec<2) ||
+             (std::strcmp(backend,"amf")==0 && codec==0))) {
+            encoder=std::make_unique<Encoder>();
+            *status=encoder->open(dev,backend,codec,w,h,fps,kbps,quality,true);
+        }
         return *status < 0 ? nullptr : encoder.release();
     } catch (...) { *status=AVERROR(ENOMEM); return nullptr; }
 }
@@ -169,8 +186,9 @@ int secpar_avcodec_receive(void* ptr, const unsigned char** data, unsigned* size
 int secpar_avcodec_bitrate(void* ptr, unsigned kbps) noexcept {
     if(!kbps || kbps>INT_MAX/1000) return AVERROR(EINVAL);
     auto* enc=static_cast<Encoder*>(ptr);
-    enc->codec->bit_rate=enc->codec->rc_max_rate=static_cast<int64_t>(kbps)*1000;
-    enc->codec->rc_buffer_size=static_cast<int>(enc->codec->bit_rate/enc->fps);
+    enc->codec->rc_max_rate=static_cast<int64_t>(kbps)*1000;
+    enc->codec->bit_rate=enc->codec->rc_max_rate-(enc->relaxed_rate_control ? 1 : 0);
+    enc->codec->rc_buffer_size=enc->relaxed_rate_control ? 0 : static_cast<int>(enc->codec->bit_rate/enc->fps);
     return 0;
 }
 void secpar_avcodec_error(int status, char* text, unsigned size) noexcept { av_strerror(status,text,size); }
