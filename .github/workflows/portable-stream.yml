@@ -115,6 +115,13 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Configure loopback addresses for multi-route tests
+        run: |
+          # These fixtures use distinct addresses on one port. macOS requires
+          # explicit aliases; Windows/Linux already route the loopback subnet.
+          for suffix in 2 3 4 5; do
+            sudo ifconfig lo0 inet "127.0.0.$suffix" netmask 255.255.255.255 alias
+          done
       - name: Use the desktop version for build and package metadata
         run: |
           python3 - <<'PY'
