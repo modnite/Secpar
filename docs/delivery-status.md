@@ -1076,7 +1076,7 @@ widths. Native sample layouts reviewed at 420x640 and 640x400 for cards and both
 settings groups. No installed app, engine or version changes in this follow-up.
 
 
-## Windows hardware encoder integration (private, not released)
+## Windows hardware encoder integration (3.20.0 draft)
 The FFmpeg-enabled host excludes Media Foundation encoding. It saves backend and
 preset choices, uses native NVENC on NVIDIA by default, and includes FFmpeg NVENC,
 AMF and Quick Sync. Codec selection and encoder recreation use the saved settings.
@@ -1089,7 +1089,21 @@ compatibility. Both also passed actual two-viewer decoding and shrink/grow tests
 with no detected corruption or decode errors. AMD/Intel hardware validation remains
 open. These results do not establish remote presentation pacing.
 
-The optimized private Windows3.20.0 candidate has a4,179,359byte installer and
-9,989,996bytes of extracted runtime files (executable, icon and notices), before
-Windows creates the uninstaller. It contains no debug binaries or static library
-archives. It is not installed or published. Public frame-pacing gates remain open.
+The normal optimized 3.20.0 release artifacts are in a GitHub draft: Windows
+installer 4,179,440 bytes, Linux AppImage 8,681,976 bytes, Android APK 8,656,466 bytes.
+The installed Windows footprint is 10,087,854 bytes including its uninstaller and
+notices; its executable is 9,884,160 bytes. Debug binaries and static archives are
+excluded. The Windows and Android artifacts are installed for validation. There
+is no separate private build cycle. Android and Linux gameplay pacing acceptance
+is still required before publication; packet-arrival measurements are insufficient.
+
+Linux's decoding/presentation implementation and Android's transport are unchanged.
+The Linux package includes the shared desktop UI changes. Android retains the
+accepted audio fixes. Neither package constitutes a full Moonlight engine migration.
+Client and Host settings remain expanded; Files is available on computer cards.
+The encoder form was reviewed at 420x640 and 640x400 logical pixels.
+
+CI test corrections preserve the relay's minimum rate interval without imposing
+an upper scheduling deadline, verify direct packets leave its gate unchanged, and
+wait for ViGEm's first updated XInput report instead of its neutral startup report.
+The relay and controller checks pass locally. Full cross-platform CI is in progress.

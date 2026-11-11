@@ -222,3 +222,9 @@ layout. Files belongs on computer cards, matching Android, not in Settings.
 engine migration. Keep its accepted audio, input and rendering fixes. Continue
 the host encoder integration, desktop UI and Linux client work. Do not describe
 MediaCodec or Moonlight-inspired timing as running the Moonlight/Artemis engine.
+
+2026-11-10 release workflow correction: use the normal optimized release artifacts
+for validation and eventual publication. Avoid a separate private test-build cycle.
+This does not waive the Android/Linux gameplay pacing gate or authorize rushing a
+release. Keep development/debug fixtures local; retain the release as a draft
+until the required validation passes.
