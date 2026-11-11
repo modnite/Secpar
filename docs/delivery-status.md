@@ -1107,3 +1107,20 @@ CI test corrections preserve the relay's minimum rate interval without imposing
 an upper scheduling deadline, verify direct packets leave its gate unchanged, and
 wait for ViGEm's first updated XInput report instead of its neutral startup report.
 The relay and controller checks pass locally. Full cross-platform CI is in progress.
+
+## 3.20.1 public release preparation
+
+The user now requests public optimized releases after package checks, with manual
+client updates and physical testing by the user. This supersedes the publication
+hold recorded above. Non-UI changes no longer get additional local self-test
+cycles; UI changes retain local visual/layout checks.
+
+Windows audio capture uses the same Pro Audio MMCSS task as Sunshine. Registration
+is scoped to its capture thread, reverts when it exits, and falls back to normal
+scheduling if unavailable. Four existing host audio tests passed before the latest
+workflow instruction. The observed audio dips have not been declared fixed.
+Android adds timing-only reset reasons without changing its playback algorithm.
+Linux includes the shared UI and version update; its host encoder, client decoder
+and presentation path are unchanged. Test Linux against the updated Windows host.
+The cross-platform CI run with the macOS loopback setup passed on Windows, Linux,
+macOS x64 and the macOS ARM cross-build. Actual Mac hosting remains unverified.

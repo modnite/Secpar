@@ -234,3 +234,8 @@ and let the user manually update clients and perform physical stream testing.
 This supersedes the earlier instruction to hold publication for Android/Linux
 pacing acceptance. Report unverified fixes honestly; do not call the remaining
 hitches/audio dips resolved from compilation or unit tests. Conserve usage.
+
+2026-11-10 standing workflow: for changes without UI work, build and publish the
+optimized release, then let the user manually update and test. Avoid additional
+local self-test cycles for those changes. For UI changes, perform local layout
+and visual checks before publication. Preserve the existing CI configuration.
