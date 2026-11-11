@@ -1124,3 +1124,8 @@ Linux includes the shared UI and version update; its host encoder, client decode
 and presentation path are unchanged. Test Linux against the updated Windows host.
 The cross-platform CI run with the macOS loopback setup passed on Windows, Linux,
 macOS x64 and the macOS ARM cross-build. Actual Mac hosting remains unverified.
+
+3.20.1 is now public with Windows installer, Linux AppImage and Android APK;
+uploaded asset SHA-256 digests match local packages. Client installation/testing
+is left to the user. No audio/pacing acceptance is claimed. Linux and macOS media
+engine improvements remain active work, not completed by the Windows changes.

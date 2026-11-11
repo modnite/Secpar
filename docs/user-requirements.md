@@ -239,3 +239,11 @@ hitches/audio dips resolved from compilation or unit tests. Conserve usage.
 optimized release, then let the user manually update and test. Avoid additional
 local self-test cycles for those changes. For UI changes, perform local layout
 and visual checks before publication. Preserve the existing CI configuration.
+
+2026-11-10 scope correction: encoder AND decoder improvements are required across
+Windows, Linux and macOS; Android remains client-only and needs decoder work.
+Windows-only improvements do not satisfy this requirement. Testing a Linux client
+against a changed Windows host is not a Linux engine improvement. Prioritize the
+Linux media path next, retain macOS hosting/client work as active scope, and report
+unverified improvements or regressions plainly. The latest Android audio dips are
+reported worse, so accepted historical audio fixes are not proof of current health.
