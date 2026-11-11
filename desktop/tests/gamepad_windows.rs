@@ -31,7 +31,7 @@ fn physical_pad_to_host_pad_through_the_wire_format() {
         return;
     };
     let Some(mut xinput) = XInput::load() else { panic!("xinput1_4.dll must load on Windows") };
-    if xinput.poll().len() > 1 {
+    if !xinput.poll().is_empty() {
         eprintln!("other controllers are attached: skipped");
         return;
     }
@@ -66,7 +66,12 @@ fn physical_pad_to_host_pad_through_the_wire_format() {
         last
     };
 
-    let (id, btn, lt, rt, lx, ly, rx, ry) = wait(|| step(&mut xinput, true, &mut host_pads)).expect("capture saw the pad");
+    // ViGEm may publish its initial neutral state before the first update reaches XInput.
+    // Wait for the sent state, rather than treating that startup report as a failure.
+    let (id, btn, lt, rt, lx, ly, rx, ry) = wait(|| {
+        step(&mut xinput, true, &mut host_pads)
+            .filter(|(_, btn, lt, rt, ..)| (*btn, *lt, *rt) == (sent.btn, sent.lt, sent.rt))
+    }).expect("capture saw the updated pad");
     assert_eq!(id, 0);
     assert_eq!((btn, lt, rt), (sent.btn, 200, 0));
     assert!(near(lx, 20000) && near(ly, -15000) && near(rx, 0) && near(ry, 30000), "{lx} {ly} {rx} {ry}");

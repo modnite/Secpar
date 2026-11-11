@@ -338,18 +338,20 @@ mod tests {
         let log = server.log();
         assert!(log[before..].iter().any(|l| l.starts_with("channeldata 4000") || l == "send"), "{log:?}");
 
-        // the rate gate: 300 packets take about 100 ms at 3000 pps, direct peers are never slowed
+        // The rate gate must enforce its minimum interval. Scheduler delays may add time.
         let t0 = Instant::now();
         for _ in 0..300 {
             link.throttle(&peer);
         }
         let took = t0.elapsed();
-        assert!(took >= Duration::from_millis(80) && took < Duration::from_millis(400), "{took:?}");
-        let t0 = Instant::now();
+        assert!(took >= Duration::from_millis(80), "{took:?}");
+        // Direct packets must bypass the gate without reserving any relay slots.
+        // Checking its state avoids imposing a wall-clock deadline on the CI scheduler.
+        let gate_before = *link.gate.lock().unwrap();
         for _ in 0..300 {
             link.throttle(&sa("203.0.113.99:1"));
         }
-        assert!(t0.elapsed() < Duration::from_millis(20));
+        assert_eq!(*link.gate.lock().unwrap(), gate_before);
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
