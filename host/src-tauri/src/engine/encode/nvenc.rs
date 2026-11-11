@@ -3,7 +3,7 @@ use super::{Codec, Encoded};
 use std::{cell::Cell, ffi::c_void, ptr::NonNull};
 use windows::{core::{Interface, Error, HRESULT}, Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D}};
 unsafe extern "C" {
-    fn secpar_nvenc_open(dev:*mut c_void,codec:u32,w:u32,h:u32,fps:u32,kbps:u32,error:*mut i32)->*mut c_void;
+    fn secpar_nvenc_open(dev:*mut c_void,codec:u32,w:u32,h:u32,fps:u32,kbps:u32,quality:u32,error:*mut i32)->*mut c_void;
     fn secpar_nvenc_encode(enc:*mut c_void,tex:*mut c_void,time:u64,idr:bool,data:*mut *const u8,size:*mut u32,key:*mut bool,timings:*mut u64)->i32;
     fn secpar_nvenc_bitrate(enc:*mut c_void,kbps:u32)->i32;
     fn secpar_nvenc_close(enc:*mut c_void);
@@ -14,10 +14,13 @@ fn checked(status:i32)->windows::core::Result<()> {
 pub(super) struct Encoder {raw:NonNull<c_void>,kbps:Cell<u32>}
 impl Encoder {
     pub fn new(dev:&ID3D11Device,codec:Codec,(w,h):(u32,u32),fps:u32,kbps:u32)->windows::core::Result<Self> {
+        Self::with_quality(dev,codec,(w,h),fps,kbps,0)
+    }
+    pub fn with_quality(dev:&ID3D11Device,codec:Codec,(w,h):(u32,u32),fps:u32,kbps:u32,quality:u32)->windows::core::Result<Self> {
         if w==0||h==0||fps==0||kbps==0||kbps>u32::MAX/1000 {return Err(Error::from_hresult(HRESULT(0x80070057u32 as i32)));}
         let mut error=0;
         // SAFETY: borrowed live COM device; bridge retains its own reference.
-        let ptr=unsafe {secpar_nvenc_open(dev.as_raw(),codec as u32,w,h,fps,kbps,&mut error)};
+        let ptr=unsafe {secpar_nvenc_open(dev.as_raw(),codec as u32,w,h,fps,kbps,quality,&mut error)};
         checked(error)?;
         Ok(Self {raw:NonNull::new(ptr).ok_or_else(||Error::from_hresult(HRESULT(0x80004005u32 as i32)))?,kbps:Cell::new(kbps)})
     }

@@ -1074,3 +1074,22 @@ expanded in one vertical scroll, including paired-device management. Four card
 tests pass, including independent Files/Connect click targets at narrow and wide
 widths. Native sample layouts reviewed at 420x640 and 640x400 for cards and both
 settings groups. No installed app, engine or version changes in this follow-up.
+
+
+## Windows hardware encoder integration (private, not released)
+The FFmpeg-enabled host excludes Media Foundation encoding. It saves backend and
+preset choices, uses native NVENC on NVIDIA by default, and includes FFmpeg NVENC,
+AMF and Quick Sync. Codec selection and encoder recreation use the saved settings.
+The dependency build pins Sunshine, its matching FFmpeg/SDK patches, and Intel's
+static dispatcher. See encoding-backends.md for build instructions and limits.
+
+On an RTX2060, native NVENC and FFmpeg NVENC each passed five functional checks:
+H264/HEVC headers and forced keyframes, bitrate changes, preset output and settings
+compatibility. Both also passed actual two-viewer decoding and shrink/grow tests,
+with no detected corruption or decode errors. AMD/Intel hardware validation remains
+open. These results do not establish remote presentation pacing.
+
+The optimized private Windows3.20.0 candidate has a4,179,359byte installer and
+9,989,996bytes of extracted runtime files (executable, icon and notices), before
+Windows creates the uninstaller. It contains no debug binaries or static library
+archives. It is not installed or published. Public frame-pacing gates remain open.

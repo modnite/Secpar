@@ -17,6 +17,7 @@ required-features = ["webui"]
 [features]
 # Private validation builds only; normal release defaults stay unchanged.
 gpu-isolation = []
+ffmpeg = []
 # The old Tauri window. The Windows app is the egui desktop, which links this crate without it.
 default = ["webui"]
 webui = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-single-instance", "dep:tauri-plugin-notification"]

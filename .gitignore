@@ -58,3 +58,6 @@ __pycache__/
 
 # Kotlin compiler session cache
 .kotlin/
+.secpar-build-tools/
+host/src-tauri/tauri.encoder-build.conf.json
+host/src-tauri/encoder-licenses/

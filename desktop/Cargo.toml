@@ -68,6 +68,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 
 [features]
 gpu-isolation = ["secpar-host/gpu-isolation"]
+ffmpeg = ["secpar-host/ffmpeg"]
 tray-review = []
 ui-review = ["eframe/__screenshot"]
 

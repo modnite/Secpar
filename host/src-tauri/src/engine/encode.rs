@@ -13,27 +13,42 @@ use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::VARIANT;
 
 mod nvenc;
+mod settings;
+pub use settings::{Settings,Choice,choices};
+#[cfg(feature="ffmpeg")]
+mod ffmpeg;
 
-enum Backend { MediaFoundation(MfEncoder), Nvenc(nvenc::Encoder) }
+enum Backend { #[cfg(not(feature="ffmpeg"))] MediaFoundation(MfEncoder), Nvenc(nvenc::Encoder), #[cfg(feature="ffmpeg")] Ffmpeg(ffmpeg::Encoder) }
 
-/// Media Foundation remains the default while direct NVENC is benchmarked.
+/// Hardware encoder selected by the saved host settings. FFmpeg builds exclude the legacy MFT path.
 pub struct Encoder { backend: Backend, codec: Codec, pub size: (u32, u32) }
 impl Encoder {
     pub fn new(dev: &ID3D11Device, luid: i64, codec: Codec, size: (u32,u32), fps: u32, kbps: u32) -> windows::core::Result<Self> {
-        // Explicit selection must fail rather than silently benchmark the fallback.
-        let backend = if std::env::var("SECPAR_WINDOWS_ENCODER").as_deref() == Ok("nvenc") {
-            Backend::Nvenc(nvenc::Encoder::new(dev,codec,size,fps,kbps)?)
-        } else { Backend::MediaFoundation(MfEncoder::new(dev,luid,codec,size,fps,kbps)?) };
-        if secpar_stream::timing::enabled() {
-            eprintln!("frame_timing stage=host.encoder backend={}",match &backend {Backend::Nvenc(_)=>"nvenc",Backend::MediaFoundation(_)=>"media-foundation"});
-        }
-        Ok(Self {backend,codec,size})
+        Self::selected(dev,luid,codec,size,fps,kbps,&Settings::default())
+    }
+    pub fn selected(dev:&ID3D11Device,luid:i64,codec:Codec,size:(u32,u32),fps:u32,kbps:u32,settings:&Settings)->windows::core::Result<Self> {
+        settings.validate().map_err(|message|windows::core::Error::new(windows::core::HRESULT(0x80070057u32 as i32),message))?;
+        let configured=if settings.backend=="auto" {
+            if cfg!(feature="ffmpeg") {settings::automatic(dev)} else {"media-foundation"}
+        } else {settings.backend.as_str()};
+        let choice=std::env::var("SECPAR_WINDOWS_ENCODER").unwrap_or_else(|_|configured.into());
+        let quality=settings.quality();
+        let backend=match choice.as_str() {
+            "nvenc"=>Backend::Nvenc(nvenc::Encoder::with_quality(dev,codec,size,fps,kbps,quality)?),
+            #[cfg(not(feature="ffmpeg"))]
+            "media-foundation"=>Backend::MediaFoundation(MfEncoder::new(dev,luid,codec,size,fps,kbps)?),
+            #[cfg(feature="ffmpeg")]
+            "ffmpeg-nvenc"|"ffmpeg-amf"|"ffmpeg-qsv"=>Backend::Ffmpeg(ffmpeg::Encoder::new(dev,codec,size,fps,kbps,&choice[7..],quality)?),
+            _=>return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32),format!("Encoder '{choice}' is unavailable in this build or on this GPU"))),
+        };
+        if secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.encoder backend={choice} preset={}",settings.preset);}
+        Ok(Self{backend,codec,size})
     }
     pub fn codec(&self)->Codec {self.codec}
-    pub fn set_bitrate(&self,kbps:u32)->windows::core::Result<()> {match &self.backend {Backend::Nvenc(e)=>e.set_bitrate(kbps),Backend::MediaFoundation(e)=>e.set_bitrate(kbps)}}
-    pub fn bitrate(&self)->Option<u32> {match &self.backend {Backend::Nvenc(e)=>Some(e.bitrate()),Backend::MediaFoundation(e)=>e.bitrate()}}
+    pub fn set_bitrate(&self,kbps:u32)->windows::core::Result<()> {match &self.backend {Backend::Nvenc(e)=>e.set_bitrate(kbps),#[cfg(not(feature="ffmpeg"))] Backend::MediaFoundation(e)=>e.set_bitrate(kbps),#[cfg(feature="ffmpeg")] Backend::Ffmpeg(e)=>e.set_bitrate(kbps)}}
+    pub fn bitrate(&self)->Option<u32> {match &self.backend {Backend::Nvenc(e)=>Some(e.bitrate()),#[cfg(not(feature="ffmpeg"))] Backend::MediaFoundation(e)=>e.bitrate(),#[cfg(feature="ffmpeg")] Backend::Ffmpeg(e)=>Some(e.bitrate())}}
     pub fn encode(&mut self,tex:&ID3D11Texture2D,capture_us:u64,force_idr:bool)->windows::core::Result<Vec<Encoded>> {
-        match &mut self.backend {Backend::Nvenc(e)=>e.encode(tex,capture_us,force_idr),Backend::MediaFoundation(e)=>e.encode(tex,capture_us,force_idr)}
+        match &mut self.backend {Backend::Nvenc(e)=>e.encode(tex,capture_us,force_idr),#[cfg(not(feature="ffmpeg"))] Backend::MediaFoundation(e)=>e.encode(tex,capture_us,force_idr),#[cfg(feature="ffmpeg")] Backend::Ffmpeg(e)=>e.encode(tex,capture_us,force_idr)}
     }
 }
 
@@ -435,8 +450,10 @@ mod tests {
 
     /// (device, luid, a converter + NV12 source) or None when this PC has no hardware encoder.
     fn rig(codec: Codec) -> Option<(ID3D11Device, i64, Convert, ID3D11Texture2D)> {
-        let (dev, ctx, _, luid) = capture::device("")?;
-        if std::env::var("SECPAR_WINDOWS_ENCODER").as_deref() != Ok("nvenc") && !codecs_available(luid).contains(&codec) {
+        let device=capture::device("");
+        if std::env::var_os("SECPAR_WINDOWS_ENCODER").is_some() {assert!(device.is_some(),"explicit encoder test needs a real GPU device");}
+        let (dev, ctx, _, luid) = device?;
+        if !std::env::var("SECPAR_WINDOWS_ENCODER").is_ok_and(|s|s=="nvenc"||s.starts_with("ffmpeg-")) && !codecs_available(luid).contains(&codec) {
             eprintln!("no hardware {codec:?} encoder on this PC");
             return None;
         }
@@ -469,6 +486,20 @@ mod tests {
             let nv12 = conv.convert(&src).unwrap();
             let idr = enc.encode(&nv12, 2000, true).unwrap();
             assert!(idr.iter().any(|e| e.key && has_param_sets(codec, &e.data)), "{codec:?}: forced keyframe");
+        }
+    }
+
+    #[test]
+    fn selected_presets_produce_real_keyframes() {
+        let _com=crate::engine::Com::init();
+        let Some((dev,luid,mut conv,src))=rig(Codec::H264) else {return};
+        for preset in ["fast","balanced","quality"] {
+            let settings=Settings{backend:"auto".into(),preset:preset.into()};
+            let mut enc=Encoder::selected(&dev,luid,Codec::H264,(1280,720),60,8000,&settings).unwrap();
+            let frames=enc.encode(&conv.convert(&src).unwrap(),123456,true).unwrap();
+            assert_eq!(frames.len(),1,"{preset} must not queue an extra frame");
+            assert!(frames[0].key && has_param_sets(Codec::H264,&frames[0].data));
+            assert_eq!(frames[0].capture_us,123456);
         }
     }
 

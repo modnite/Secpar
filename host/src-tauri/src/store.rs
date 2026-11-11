@@ -27,6 +27,7 @@ pub struct Config {
     pub autostart: bool,
     pub display: String,
     pub max_quality: String,
+    pub encoder: crate::engine::encode::Settings,
     pub allow_files: bool,
     pub allow_clip: bool,
     /// Friends may connect (they still need your approval or an "any time" setting).
@@ -41,6 +42,7 @@ impl Default for Config {
             autostart: true,
             display: String::new(),
             max_quality: "auto".into(),
+            encoder: Default::default(),
             allow_files: true,
             allow_clip: true,
             friends: true,

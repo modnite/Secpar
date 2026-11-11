@@ -4,7 +4,7 @@
 use super::bitrate::{notch_size, notches_below, Bitrate, Target};
 use super::capture::{self, SharedCapture};
 use super::convert::{fit, Convert};
-use super::encode::{codec_name, codecs_available, parse_codec, Encoder};
+use super::encode::{codec_name, parse_codec, Encoder};
 use super::input::Dedup;
 use super::{audio, cursor, now_us, Com};
 use crate::proto::{ClientMsg, ServerMsg};
@@ -38,6 +38,7 @@ pub struct Params {
     pub fps: u32,
     pub codecs: Vec<String>,
     pub max_kbps: u32,
+    pub encoder: super::encode::Settings,
     pub audio: bool,
     /// The phone's PRS addresses to punch towards.
     pub cands: Vec<SocketAddr>,
@@ -383,16 +384,17 @@ impl Video {
             if adapter != luid { return Err(err("no_encoder", "capture and encoder GPUs do not match")); }
             (dev, ctx)
         } else { (capture_dev, capture_ctx) };
-        let avail = codecs_available(luid);
-        let codec = p
-            .codecs
-            .iter()
-            .filter_map(|c| parse_codec(c))
-            .find(|c| avail.contains(c))
-            .ok_or_else(|| err("no_encoder", "this PC's GPU can't encode any codec the phone decodes"))?;
-        let base = fit(cap.size().unwrap_or((1,1)), (p.w, p.h));
-        let fps = p.fps.clamp(1, 240);
-        let enc = Encoder::new(&dev, luid, codec, base, fps, kbps).map_err(|e| err("no_encoder", &e.message()))?;
+        let base=fit(cap.size().unwrap_or((1,1)),(p.w,p.h));
+        let fps=p.fps.clamp(1,240);
+        let mut failure="No supported client codec".to_string();
+        let mut encoder=None;
+        for codec in p.codecs.iter().filter_map(|c|parse_codec(c)) {
+            match Encoder::selected(&dev,luid,codec,base,fps,kbps,&p.encoder) {
+                Ok(found)=>{encoder=Some(found);break;}
+                Err(error)=>failure=error.message(),
+            }
+        }
+        let enc=encoder.ok_or_else(||err("no_encoder",&failure))?;
         Ok(Video { dev, ctx, luid, cap, enc, base, fps, shown })
     }
 
@@ -464,7 +466,7 @@ impl Video {
             }
             if t.notch != applied.notch {
                 let size = notch_size(self.base.0, self.base.1, t.notch);
-                match Encoder::new(&self.dev, self.luid, self.enc.codec(), size, self.fps, t.kbps) {
+                match Encoder::selected(&self.dev, self.luid, self.enc.codec(), size, self.fps, t.kbps, &p.encoder) {
                     Ok(e) => {
                         self.enc = e;
                         prepared.clear();

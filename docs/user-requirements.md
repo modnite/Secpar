@@ -217,3 +217,8 @@ supported encoder controls; unavailable backends must not masquerade as working.
 Do not silently fall back to Media Foundation for explicit encoder selections.
 Desktop Settings must show Client and Host settings expanded, with one vertical
 layout. Files belongs on computer cards, matching Android, not in Settings.
+
+2026-11-10 clarification: the user accepts deferring the full Android streaming
+engine migration. Keep its accepted audio, input and rendering fixes. Continue
+the host encoder integration, desktop UI and Linux client work. Do not describe
+MediaCodec or Moonlight-inspired timing as running the Moonlight/Artemis engine.

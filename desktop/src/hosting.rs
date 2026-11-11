@@ -150,7 +150,7 @@ impl Panel {
             } else {
                 Vec::new()
             },
-            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","allow_files":true,"allow_clip":true,"friends":true,"anywhere":false},"displays":[],"pad":{"ok":true,"text":"Gamepad ready"}}),
+            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","encoder":{"backend":"auto","preset":"fast"},"allow_files":true,"allow_clip":true,"friends":true,"anywhere":false},"displays":[],"encoders":[{"id":"nvenc","name":"NVIDIA NVENC","available":true},{"id":"ffmpeg-nvenc","name":"NVIDIA NVENC (FFmpeg)","available":true},{"id":"ffmpeg-amf","name":"AMD AMF","available":false,"reason":"Not available on this GPU"},{"id":"ffmpeg-qsv","name":"Intel Quick Sync","available":false,"reason":"Not available on this GPU"}],"pad":{"ok":true,"text":"Gamepad ready"}}),
             error: String::new(),
             busy: false,
             refreshing: false,
@@ -497,6 +497,40 @@ impl Panel {
             });
         });
     }
+    fn encoder_ui(&mut self, ui:&mut egui::Ui, config:&Value) {
+        let choices=self.settings["encoders"].as_array().cloned().unwrap_or_default();
+        if choices.is_empty() {return;}
+        let mut backend=config["encoder"]["backend"].as_str().unwrap_or("auto").to_string();
+        let mut preset=config["encoder"]["preset"].as_str().unwrap_or("fast").to_string();
+        let old=(backend.clone(),preset.clone());
+        ui.label(egui::RichText::new("Encoder").size(12.).color(design::MUTED));
+        let selected=if backend=="auto" {"Automatic"} else {
+            choices.iter().find(|c|c["id"].as_str()==Some(&backend)).and_then(|c|c["name"].as_str()).unwrap_or("Encoder unavailable")
+        };
+        egui::ComboBox::from_id_salt("host-encoder").width(ui.available_width()).selected_text(selected).show_ui(ui,|ui| {
+            ui.selectable_value(&mut backend,"auto".into(),"Automatic");
+            for choice in &choices {
+                let id=choice["id"].as_str().unwrap_or("");
+                let name=choice["name"].as_str().unwrap_or(id);
+                let enabled=choice["available"].as_bool().unwrap_or(false);
+                let response=ui.add_enabled(enabled,egui::Button::new(name).selected(backend==id));
+                if response.clicked() {backend=id.into();}
+                if !enabled {response.on_hover_text(choice["reason"].as_str().unwrap_or("Unavailable on this GPU"));}
+            }
+        });
+        let effective=if backend=="auto" {choices.iter().find(|c|c["available"].as_bool()==Some(true)).and_then(|c|c["id"].as_str()).unwrap_or("")}else{&backend};
+        let labels=if effective.contains("nvenc") {["P1 · fastest","P4 · balanced","P7 · highest quality"]}
+            else if effective.contains("qsv") {["Very fast","Medium","Slow"]}else{["Speed","Balanced","Quality"]};
+        if effective!="media-foundation" {
+            ui.label(egui::RichText::new("Encoder preset").size(12.).color(design::MUTED));
+            let index=match preset.as_str(){"balanced"=>1,"quality"=>2,_=>0};
+            egui::ComboBox::from_id_salt("host-encoder-preset").width(ui.available_width()).selected_text(labels[index]).show_ui(ui,|ui| {
+                for (id,label) in ["fast","balanced","quality"].into_iter().zip(labels) {ui.selectable_value(&mut preset,id.into(),label);}
+            });
+        }
+        ui.label(egui::RichText::new("Applies to new connections.").size(12.).color(design::MUTED));
+        if old!=(backend.clone(),preset.clone()) {self.send(Command::Patch(json!({"encoder":{"backend":backend,"preset":preset}})));}
+    }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         if cfg!(target_os = "linux") {
             return self.linux_settings_ui(ui);
@@ -539,6 +573,7 @@ impl Panel {
                             for (value,label) in choices { ui.selectable_value(&mut quality,value.into(),label); }
                         });
                     if quality != old { self.send(Command::Patch(json!({"max_quality":quality}))); }
+                    self.encoder_ui(right, &config);
                 });
             });
             ui.add_space(4.);

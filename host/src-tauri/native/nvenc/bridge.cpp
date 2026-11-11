@@ -48,7 +48,7 @@ struct Encoder {
         if (library) FreeLibrary(library);
     }
 
-    NVENCSTATUS open(ID3D11Device* dev, unsigned codec, unsigned w, unsigned h, unsigned fps, unsigned kbps) {
+    NVENCSTATUS open(ID3D11Device* dev, unsigned codec, unsigned w, unsigned h, unsigned fps, unsigned kbps, unsigned quality) {
         if (codec != 1 && codec != 2) return NV_ENC_ERR_UNSUPPORTED_PARAM;
         library = LoadLibraryExW(L"nvEncodeAPI64.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!library) return NV_ENC_ERR_NO_ENCODE_DEVICE;
@@ -67,8 +67,9 @@ struct Encoder {
         status = api.nvEncOpenEncodeSessionEx(&open, &session); if (status != NV_ENC_SUCCESS) return status;
         device = dev; device->AddRef();
         const GUID guid = codec == 1 ? NV_ENC_CODEC_H264_GUID : NV_ENC_CODEC_HEVC_GUID;
+        const GUID preset_guid = quality == 2 ? NV_ENC_PRESET_P7_GUID : quality == 1 ? NV_ENC_PRESET_P4_GUID : NV_ENC_PRESET_P1_GUID;
         NV_ENC_PRESET_CONFIG preset{}; preset.version = NV_ENC_PRESET_CONFIG_VER; preset.presetCfg.version = NV_ENC_CONFIG_VER;
-        status = api.nvEncGetEncodePresetConfigEx(session, guid, NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset);
+        status = api.nvEncGetEncodePresetConfigEx(session, guid, preset_guid, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset);
         if (status != NV_ENC_SUCCESS) return status;
         config = preset.presetCfg;
         config.gopLength = NVENC_INFINITE_GOPLENGTH; config.frameIntervalP = 1;
@@ -99,7 +100,7 @@ struct Encoder {
         event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (!event) return NV_ENC_ERR_OUT_OF_MEMORY;
         init.version = NV_ENC_INITIALIZE_PARAMS_VER; init.encodeGUID = guid;
-        init.presetGUID = NV_ENC_PRESET_P1_GUID; init.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
+        init.presetGUID = preset_guid; init.tuningInfo = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
         init.encodeWidth = w; init.encodeHeight = h; init.darWidth = w; init.darHeight = h;
         init.maxEncodeWidth = w; init.maxEncodeHeight = h;
         init.frameRateNum = fps; init.frameRateDen = 1;
@@ -188,10 +189,10 @@ struct Encoder {
 };
 
 extern "C" {
-void* secpar_nvenc_open(ID3D11Device* dev, unsigned codec, unsigned w, unsigned h, unsigned fps, unsigned kbps, int* error) noexcept {
+void* secpar_nvenc_open(ID3D11Device* dev, unsigned codec, unsigned w, unsigned h, unsigned fps, unsigned kbps, unsigned quality, int* error) noexcept {
     try {
         auto p = std::make_unique<Encoder>();
-        const auto status = p->open(dev, codec, w, h, fps, kbps);
+        const auto status = p->open(dev, codec, w, h, fps, kbps, quality);
         *error = status;
         if (status != NV_ENC_SUCCESS) return nullptr;
         return p.release();

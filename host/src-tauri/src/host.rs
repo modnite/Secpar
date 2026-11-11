@@ -275,7 +275,8 @@ impl Session for HostSession {
                 let (fps, max_kbps) = (if fps == 0 { 60 } else { fps }, if max_kbps == 0 { 20000 } else { max_kbps });
                 let (w,h,fps)=crate::engine::session::quality_limit(&self.store.lock().unwrap().config().max_quality,w,h,fps);
                 let display = if display.is_empty() { self.store.lock().unwrap().config().display.clone() } else { display };
-                let p = Params { w, h, fps, codecs, max_kbps, audio, cands, public, display, gate: self.gate.clone() };
+                let encoder=self.store.lock().unwrap().config().encoder.clone();
+                let p = Params { w, h, fps, codecs, max_kbps, encoder, audio, cands, public, display, gate: self.gate.clone() };
                 let out = self.out.clone();
                 let notify: crate::engine::session::Notify = Arc::new(move |m| {
                     out.send(m);

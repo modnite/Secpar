@@ -1,0 +1,14 @@
+{
+  "sunshine": "63d35f702ee9e362e43263742981836ec0710384",
+  "sources": [
+    {"name":"sunshine-build-deps","repo":"https://github.com/LizardByte/build-deps.git","commit":"a1fe2841cbc0d8c4501a1006d2d1cb88f219cc8c"},
+    {"name":"ffmpeg-sunshine","repo":"https://github.com/FFmpeg/FFmpeg.git","commit":"bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa"},
+    {"name":"amf-sunshine","repo":"https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git","commit":"eadd00804d5f7e5cd8c85d540073198312870776"},
+    {"name":"nv-sdk11","repo":"https://github.com/FFmpeg/nv-codec-headers.git","commit":"625b3199e94db49e3bb0dc797fc4cffbf7115d81"},
+    {"name":"nv-sdk12","repo":"https://github.com/FFmpeg/nv-codec-headers.git","commit":"956b49b0d3a19465e8eb997b7e39c548ad9dd4b2"},
+    {"name":"nv-sdk13","repo":"https://github.com/FFmpeg/nv-codec-headers.git","commit":"88fee5c37318c991a8762d423530f91681e32e3a"},
+    {"name":"nv-sdk131","repo":"https://github.com/FFmpeg/nv-codec-headers.git","commit":"0a6fba9a2820628b8103464f4c8753ee05838baa"},
+    {"name":"libvpl","repo":"https://github.com/intel/libvpl.git","commit":"778a66d6c6537f08eabb91955dbbf1bce3812894"}
+  ],
+  "patches": ["cbs/01-explicit-intmath.patch","cbs/02-remove-register.patch","nv-codec-headers/01-dynamic-nvenc-api-selection.patch"]
+}

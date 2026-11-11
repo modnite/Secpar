@@ -2,8 +2,10 @@
   "productName": "Secpar",
   "bundle": {
     "shortDescription": "Host and connect to your computers",
+    "windows": {"webviewInstallMode": {"type": "skip"}},
     "resources": {
       "icons/icon.ico": "secpar-icon-d55a811c41e4.ico",
+      "../../LICENSE.txt": "licenses/Secpar-GPL-3.0.txt",
       "../../assets/icons/lucide/LICENSE": "licenses/Lucide-ISC.txt"
     }
   },
