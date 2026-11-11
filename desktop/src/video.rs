@@ -103,7 +103,8 @@ impl Backend {
             (Codec::Av1,_,false)=>"AV1 · VA-API",
         }
     }
-    fn decode(&mut self,bytes:&[u8],codec:Codec)->Result<Option<Picture>,DecodeError> {
+    fn decode(&mut self,bytes:&[u8],codec:Codec,capture_us:u64,fps:u32,generation:u64)->Result<Option<Picture>,DecodeError> {
+        let _=(capture_us,fps,generation);
         match self {
             Self::Software(_) if codec!=Codec::H264 => Err(DecodeError::Device),
             Self::Software(decoder)=> {
@@ -113,7 +114,7 @@ impl Backend {
                 Picture::from_i420([w,h],(yuv.y(),sy),(yuv.u(),su),(yuv.v(),sv)).map(Some).ok_or(DecodeError::Dimensions)
             }
             #[cfg(target_os="linux")]
-            Self::Hardware(decoder)=>decoder.decode(bytes).map_err(|_|DecodeError::Device),
+            Self::Hardware(decoder)=>decoder.decode_timed(bytes,capture_us,fps,generation).map_err(|_|DecodeError::Device),
             #[cfg(windows)]
             Self::Hardware(decoder)=>decoder.decode(codec,bytes),
         }
@@ -221,6 +222,21 @@ impl Worker {
                     return;
                 }
             };
+            #[cfg(target_os="linux")]
+            if let Backend::Hardware(hardware)=&mut decoder {
+                let output=shared.clone();
+                let wake=ctx.clone();
+                hardware.enable_async_output(move |generation,image| {
+                    let mut state=output.0.lock().unwrap();
+                    if !state.stopped && state.generation==generation {
+                        state.image=Some(image);
+                        state.backend=Some("H.264 · VA-API");
+                        secpar_stream::timing::mark(secpar_stream::timing::Stage::Decoded);
+                        drop(state);
+                        wake.request_repaint();
+                    }
+                });
+            }
             {
                 // Start from the newest keyframe that arrived while the decoder was being made.
                 let mut state=lock.lock().unwrap();
@@ -247,7 +263,7 @@ impl Worker {
                 let codec=frame.header.codec;
                 let mut decoded = if cfg!(windows) && decoder.is_hardware() && !started && !nal::has_parameter_sets(codec,&frame.data) {
                     Err(DecodeError::Invalid)
-                } else {decoder.decode(&frame.data,codec)};
+                } else {decoder.decode(&frame.data,codec,frame.header.capture_us,rate,generation)};
                 secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Decode,timing);
                 if matches!(decoded,Ok(Some(_))) {secpar_stream::timing::mark(secpar_stream::timing::Stage::Decoded);}
                 if decoder.is_hardware() && budget.exceeded(began.elapsed()) {
@@ -255,7 +271,7 @@ impl Worker {
                     // stream throughput. Include native decode and GPU readback.
                     slow_fallback=true;decoded=Err(DecodeError::Device);
                 }
-                if decoder.is_hardware() && matches!(decoded,Ok(None)) {
+                if !cfg!(target_os="linux") && decoder.is_hardware() && matches!(decoded,Ok(None)) {
                     missing_output += 1;
                     if missing_output >= 4 { missing_output=0;decoded=Err(DecodeError::Invalid); }
                 } else { missing_output=0; }

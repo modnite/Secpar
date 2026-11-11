@@ -1139,3 +1139,19 @@ small reserve being rebuilt after a hiccup. Video and all desktop media paths ar
 unchanged. Windows and Linux remain3.20.1. Audio packet loss itself is not repaired
 by this change; physical confirmation is left to the user. No local functional
 self-test cycle was run, following the latest workflow instruction.
+
+## Linux3.20.3 decoder input/output separation
+
+VA-API frame submission no longer waits up to100ms for each packet's output.
+Decoded pictures arrive through the GStreamer appsink callback, including the last
+picture before input goes idle. Host capture timestamps and negotiated frame
+intervals replace synthetic100fps timestamps. Output pictures carry their input
+generation so callbacks from discarded work cannot overwrite a newer stream.
+Both pending GPU work and compressed input are bounded; a stalled decoder still
+falls back to software. The synchronous wait remains only in the capability probe.
+
+GPU-to-CPU NV12 readback remains. This is not a full Moonlight decoder/renderer
+migration or a verified1080p performance fix. Publish after compilation/package
+checks and let the user test the X250, following the non-UI workflow.
+Android3.20.2 feedback: volume dips gone, audio much improved, occasional hitches
+remain. Preserve this recovery behavior; do not call all audio problems resolved.
