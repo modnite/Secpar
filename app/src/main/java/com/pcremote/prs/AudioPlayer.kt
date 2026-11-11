@@ -191,10 +191,10 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 val captureUs = captureToLocalUs(hostCaptureUs)
                 val nowUs = System.nanoTime() / 1000
                 decodedAgeUs = captureUs?.let { nowUs - it } ?: 0
-                if (!playing && firstBufferedCaptureUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t)
+                if (!playing && firstBufferedCaptureUs?.let { nowUs - it > AudioPlayout.MAX_LATENCY_US } == true) resetOutput(t, "startup-expired", nowUs - firstBufferedCaptureUs!!)
                 val queued = queuedFrames(t)
                 val decision = AudioPlayout.decide(captureUs, nowUs, queued)
-                if (decision.reset && (playing || writer.writtenFrames > 0)) resetOutput(t)
+                if (decision.reset && (playing || writer.writtenFrames > 0)) resetOutput(t, if (decision.discard) "stale-packet" else "latency-budget", decodedAgeUs, queued)
                 if (decision.discard) { staleFrames++; continue }
                 if (gapCaptureUs?.let { hostCaptureUs >= it } == true) {
                     PcmFade.bridge(pcm, info.size, previousLeft, previousRight)
@@ -213,7 +213,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                     if (healthySinceNs == 0L) healthySinceNs = nowNs
                     if (nowNs - healthySinceNs >= 1_000_000_000L) failureStreak = 0
                 }
-                if (!dead && accepted * 4 < info.size) { incompleteWrites++; staleFrames++; resetOutput(t); continue }
+                if (!dead && accepted * 4 < info.size) { incompleteWrites++; staleFrames++; resetOutput(t, "incomplete-write", decodedAgeUs); continue }
                 if (info.size >= 4) {
                     previousLeft = PcmFade.sample(pcm, info.size - 4)
                     previousRight = PcmFade.sample(pcm, info.size - 2)
@@ -232,7 +232,8 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
 
     // AudioTrack resumes when fresh PCM arrives. Flushing on its cumulative
     // underrun counter can itself starve playback and start another reset cycle.
-    private fun resetOutput(t: AudioTrack) {
+    private fun resetOutput(t: AudioTrack, reason: String, captureAgeUs: Long, queued: Long = queuedFrames(t)) {
+        Log.i(TAG, "output reset reason=$reason queuedMs=${queued * 1000 / RATE} captureAgeMs=${captureAgeUs / 1000} underruns=${t.underrunCount} pendingPackets=${pending.get()} playing=$playing")
         t.pause()
         t.flush()
         writer = PcmWriter()

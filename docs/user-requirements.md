@@ -228,3 +228,9 @@ for validation and eventual publication. Avoid a separate private test-build cyc
 This does not waive the Android/Linux gameplay pacing gate or authorize rushing a
 release. Keep development/debug fixtures local; retain the release as a draft
 until the required validation passes.
+
+2026-11-10 latest correction: publish optimized public releases after build checks
+and let the user manually update clients and perform physical stream testing.
+This supersedes the earlier instruction to hold publication for Android/Linux
+pacing acceptance. Report unverified fixes honestly; do not call the remaining
+hitches/audio dips resolved from compilation or unit tests. Conserve usage.

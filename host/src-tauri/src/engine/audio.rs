@@ -6,7 +6,33 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
-use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::Win32::System::Threading::{AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject};
+
+// Match Sunshine's Windows capture scheduling. The guard cannot move threads:
+// AvRevertMmThreadCharacteristics must run on the registering thread.
+struct AudioScheduling {
+    handle: HANDLE,
+    _thread: std::marker::PhantomData<*mut ()>,
+}
+impl AudioScheduling {
+    fn enter() -> Option<Self> {
+        let mut index = 0;
+        // SAFETY: the task name is a static NUL-terminated string; index is writable.
+        match unsafe { AvSetMmThreadCharacteristicsW(windows::core::w!("Pro Audio"), &mut index) } {
+            Ok(handle) => Some(Self { handle, _thread: std::marker::PhantomData }),
+            Err(error) => {
+                crate::log::line(&format!("audio: MMCSS unavailable; using normal scheduling ({error})"));
+                None
+            }
+        }
+    }
+}
+impl Drop for AudioScheduling {
+    fn drop(&mut self) {
+        // SAFETY: this non-Send guard owns this thread's successful registration.
+        unsafe { let _ = AvRevertMmThreadCharacteristics(self.handle); }
+    }
+}
 
 pub const RATE: u32 = 48_000;
 /// Samples per channel in one 10 ms packet.
@@ -41,6 +67,7 @@ impl Opus {
 
 /// Captures until `stop`, re-opening the source when it is gone; `send(opus, captureUs)`.
 pub fn run<S: Source>(mut open: impl FnMut() -> Option<S>, stop: &AtomicBool, mut send: impl FnMut(&[u8], u64)) {
+    let _scheduling = AudioScheduling::enter();
     let Some(mut enc) = Opus::new() else { return };
     let (mut src, mut pcm) = (None::<S>, Vec::new());
     let mut frames = secpar_host_core::audio::AudioFrames::default();
