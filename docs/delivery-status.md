@@ -1155,3 +1155,8 @@ migration or a verified1080p performance fix. Publish after compilation/package
 checks and let the user test the X250, following the non-UI workflow.
 Android3.20.2 feedback: volume dips gone, audio much improved, occasional hitches
 remain. Preserve this recovery behavior; do not call all audio problems resolved.
+
+Linux3.20.3 is published after optimized compilation and matching package checksums.
+The site serves Linux3.20.3, Android3.20.2 and Windows3.20.1 independently. Physical
+Linux acceptance is pending. Android logs also show encoded-audio queue overflow;
+retain that as a lead for the occasional remaining hitches, not a proven diagnosis.
