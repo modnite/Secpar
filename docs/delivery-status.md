@@ -1160,3 +1160,14 @@ Linux3.20.3 is published after optimized compilation and matching package checks
 The site serves Linux3.20.3, Android3.20.2 and Windows3.20.1 independently. Physical
 Linux acceptance is pending. Android logs also show encoded-audio queue overflow;
 retain that as a lead for the occasional remaining hitches, not a proven diagnosis.
+
+## Linux3.20.4 controller feedback cleanup
+
+User reports1080p VA-API works until a Bluetooth controller connects, even idle,
+while using5GHz Wi-Fi;720p remains stable. This is not a proven decode ceiling or
+2.4GHz interference. A focus-loss comparison is pending to isolate active input.
+Avoid uploading or stopping an already-stopped Linux force-feedback effect for
+repeated zero-rumble requests. A failed stop write remains retryable; nonzero
+refresh behavior is unchanged. This removes redundant kernel/Bluetooth output
+work, but its effect on this reported video slowdown is unverified. No decoder,
+video pacing or audio changes; user tests the public non-UI update.

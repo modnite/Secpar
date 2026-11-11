@@ -73,6 +73,7 @@ struct Dev {
     /// Uploaded rumble effect id, when the device can rumble and was opened for writing.
     ff: Option<i16>,
     can_rumble: bool,
+    rumble_stopped: bool,
     state: State,
 }
 
@@ -115,7 +116,7 @@ impl Dev {
         ioctl(&fd, EVIOCGID, id.as_mut_ptr()).ok()?;
         let mapper = Mapper::new(id[1], |c| abs_info(&fd, c).filter(|_| has(&abs, c)))?;
         let can_rumble = writable && has(&bits(&fd, EV_FF, 16), FF_RUMBLE);
-        let mut dev = Dev { fd, key, path: path.into(), mapper, ff: None, can_rumble, state: State::default() };
+        let mut dev = Dev { fd, key, path: path.into(), mapper, ff: None, can_rumble, rumble_stopped: true, state: State::default() };
         dev.resync();
         Some(dev)
     }
@@ -164,7 +165,9 @@ impl Dev {
     }
 
     fn rumble(&mut self, lo: u8, hi: u8) {
-        if !self.can_rumble {
+        // Avoid Bluetooth output reports for repeated zero-force requests.
+        // Nonzero reports retain their existing refresh behavior.
+        if !self.can_rumble || (lo == 0 && hi == 0 && self.rumble_stopped) {
             return;
         }
         let (strong, weak) = rumble16(lo, hi);
@@ -178,16 +181,17 @@ impl Dev {
             return;
         }
         self.ff = Some(effect.id);
-        self.play(effect.id, strong != 0 || weak != 0);
+        let on = strong != 0 || weak != 0;
+        if self.play(effect.id, on) { self.rumble_stopped = !on; }
     }
 
-    fn play(&self, id: i16, on: bool) {
+    fn play(&self, id: i16, on: bool) -> bool {
         // SAFETY: input_event is plain data; one whole event is written.
         let mut ev: libc::input_event = unsafe { std::mem::zeroed() };
         ev.type_ = EV_FF;
         ev.code = id as u16;
         ev.value = on as i32;
-        unsafe { libc::write(self.fd.as_raw_fd(), (&ev as *const libc::input_event).cast(), size_of::<libc::input_event>()) };
+        unsafe { libc::write(self.fd.as_raw_fd(), (&ev as *const libc::input_event).cast(), size_of::<libc::input_event>()) == size_of::<libc::input_event>() as isize }
     }
 }
 
