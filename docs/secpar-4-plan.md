@@ -194,6 +194,46 @@ forced to the software encoder finds x264 through our FFmpeg. Not checked: AMD a
 Intel encoders (no such hardware here) and Media Foundation, and no stream has
 been encoded for a client yet.
 
+### Linux host build (2026-11-13)
+
+The pinned Sunshine builds unmodified on Arch Linux with
+`scripts/build-sunshine-linux.sh`, run on the OMV build box in a throwaway
+container from the existing build image. Result: `sunshine`, about 42 MB, with
+Sunshine's prebuilt FFmpeg. Compiled in: KMS, KWin, portal, wlroots and X11
+capture, and VA-API. Left out for now: the tray icon and CUDA, so NVIDIA capture
+and direct NVENC on Linux are not in this build.
+
+One workaround: the Boost 1.89 that Sunshine downloads has an IDE file-grouping
+line that current CMake rejects; the script deletes that line from the downloaded
+copy. The program has not been run. The build box has no desktop, so capture, the
+login screen and streaming on Linux are all still unconfirmed. A minimal FFmpeg
+for Linux is not built yet.
+
+Run in a headless KDE Wayland session (throwaway container on the build box, Intel
+UHD 730, same day): the host starts, captures the virtual screen through the
+desktop portal by default, and with `capture = kwin` captures through KWin
+directly. It finds VA-API H.264 and HEVC; that GPU has no AV1 encoder. Limits of
+this check: KWin's permission checks are switched off in that session, so the
+desktop-file permission KWin capture needs on a real desktop is untested; the
+portal dialog was pressed by a script; KMS capture and virtual gamepads are not
+available in a container; nothing connected to it.
+
+The owner's laptop, read over SSH: CachyOS, KWin 6.8.2, SDDM with automatic login
+into Plasma, Intel HD 5500 (Broadwell) whose driver offers H.264 encoding only.
+So on that laptop the pre-login case is really the locked session after automatic
+login, and HEVC hosting from it is not possible in hardware.
+
+Run on the owner's laptop in the real Plasma session (30 seconds, from a folder in
+the home directory, no administrator rights): KWin capture works with KWin's
+permission checks on. Sunshine gets the permission by writing a temporary desktop
+file into `~/.local/share/applications` and waiting three seconds; Secpar should
+install its own desktop file with that permission instead. It found the laptop
+screen (1366x768), VA-API H.264 as the only hardware encoder, and reported no
+problem creating virtual controllers. Not checked there: capture while the
+session is locked, the portal route, and any stream to a client. The laptop lacks
+OpenSSL 4 and the UPnP library version this build links, so Linux packages must
+bundle or pin those.
+
 Two things to handle in the Secpar host: Sunshine always announces itself on the
 LAN by mDNS under the computer's name (no setting turns it off), and its data
 folder is always `config` beside the executable.
