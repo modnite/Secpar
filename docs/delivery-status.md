@@ -1,8 +1,8 @@
 # Secpar delivery record
 
-## Desktop identity fixes after 3.20.5 (source only, not released)
+## 3.20.6: desktop identity fixes
 
-Branch fix/desktop-identity-parity. Not built into a release and not tested on the laptop.
+Published for Windows and Linux as 3.20.6. Android stays on 3.20.2. Not tested on the laptop.
 
 - A credential store that cannot be read no longer counts as a missing credential. Automatic
   pairing waits instead of making another device entry on the host. This is the likely cause of
