@@ -1,0 +1,14 @@
+[package]
+name = "secpar-tunnel"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+bytes = "1"
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
+ring = "0.17.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }

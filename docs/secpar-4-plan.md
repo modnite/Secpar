@@ -79,6 +79,34 @@ local tunnel, so the engines run unmodified and never see the internet directly.
 This also enforces "Secpar to Secpar only": the engine ports are never open on the
 network.
 
+Design, decided and first built 2026-11-13 (`crates/secpar-tunnel`):
+
+- The tunnel is one QUIC connection (the `quinn` library) between two devices.
+  QUIC streams carry the engines' TCP connections and QUIC datagrams carry their
+  UDP packets, each tagged with the engine port it belongs to.
+- Both ends prove a device identity with a certificate. The connecting side
+  accepts only the host certificate it expects; the host accepts only
+  certificates on its allow-list. No certificate authority is involved.
+- The engine is configured with `bind_address = 127.0.0.1`, so it listens only on
+  the computer itself. On the connecting side the tunnel listens on another
+  loopback address (`127.0.0.2`) with the same port numbers, and the stream
+  component connects there as if it were the host. A computer can therefore host
+  and connect at the same time without port clashes.
+- The video packet size is set to 1024 bytes so a packet plus tunnel overhead
+  fits in one network packet.
+
+Checked in the KDE container: with the engine bound to loopback it did not answer
+on the container's network address; through the tunnel, pairing and a 16 second
+720p stream ran at 60.1 fps received, 59.6 rendered, no loss, with sound. Unit
+tests cover delivery, an unlisted device, a wrong host certificate and a port the
+host does not offer.
+
+Still to do for the tunnel: run it over the 3.x connection scheme's sockets
+(hole punching and the relay) instead of a plain address; removing access while a
+connection is open; behaviour on lossy or low-MTU paths, where QUIC's congestion
+control and packet size limits may need tuning for video; measurements at higher
+bitrates.
+
 ### 3.3 Identity and access (replacing 3.x pairing)
 
 - Each installation creates one key pair at first run and keeps it for good. The
