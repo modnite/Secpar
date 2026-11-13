@@ -262,6 +262,29 @@ allowance was raised from 15 to 60 seconds because the engine took about 30
 seconds to open its management port on this PC. Pairing through the supervisor
 has not been run on Windows yet.
 
+### First stream between the Secpar-built parts (2026-11-13)
+
+`integrations/gamestream/kde-stream-check.sh`, run in a throwaway container from
+the headless KDE image on the build box (Intel UHD 730). Both parts were built
+from the pinned sources with Secpar's patches: the Linux engine and the Moonlight
+stream component. Result of a 16 second stream at 1280x720, 60 fps, H.264:
+
+- PIN pairing completed.
+- Capture through KWin, encoding and decoding through VA-API on the Intel GPU.
+- 60.0 fps received, 59.5 fps rendered, no frames lost.
+- The session's test tones arrived at the receiving side's sound output.
+
+What this does not show: both ends ran on one machine over loopback, so there is
+no real network, no second GPU and no real display. Pairing used the engine's
+fixed-PIN input, not the supervisor's certificate-bound approval. Controllers,
+keyboard and mouse were not exercised. One run of the script ended early without
+output and passed when repeated; the cause was not captured.
+
+Sound note for the product: while a stream runs the engine makes its own virtual
+output the system default and captures from it, unless `audio_sink` is set, in
+which case it captures that named output instead. Secpar should leave
+`audio_sink` unset unless the user picks a device.
+
 Two things to handle in the Secpar host: Sunshine always announces itself on the
 LAN by mDNS under the computer's name (no setting turns it off), and its data
 folder is always `config` beside the executable.
