@@ -37,6 +37,10 @@ pub fn configure(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(8., 8.);
     style.spacing.button_padding = egui::vec2(12., 7.);
     style.spacing.interact_size.y = CONTROL;
+    // A plain bar in its own gutter. The default floating one is thin and lies over the controls.
+    style.spacing.scroll = egui::style::ScrollStyle::solid();
+    style.spacing.scroll.bar_width = 10.;
+    style.spacing.scroll.bar_inner_margin = 6.;
     style
         .text_styles
         .insert(egui::TextStyle::Body, egui::FontId::proportional(14.));

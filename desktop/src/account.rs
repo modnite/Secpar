@@ -246,6 +246,9 @@ pub enum Event {
 
 pub struct Panel {
     host: Option<Result<local_host::State, String>>,
+    /// The account id of this computer from the last answer of the local host. A later failed
+    /// answer does not clear it, so this computer stays out of its own list.
+    local_computer: Option<String>,
     pub restored_computer: Option<Computer>,
     pub forgot_computer: bool,
     pub storage_note: Option<String>,
@@ -323,6 +326,7 @@ impl Panel {
                     previews: previews::Previews::inert(),
                     textures: review_textures(&ctx),
                     forgot_computer: false,
+                    local_computer: None,
                     storage_note: None,
                     user: sample.then(|| User {
                         id: own.clone(),
@@ -395,6 +399,7 @@ impl Panel {
         };
         Self {
             host: None,
+            local_computer: None,
             restored_computer: None,
             computers: vec![],
             owned_connection: None,
@@ -477,7 +482,7 @@ impl Panel {
     /// Takes new preview frames and tells the preview worker which computers to watch. A computer
     /// being streamed, this computer and offline ones get no preview.
     pub fn sync_previews(&mut self, ctx: &eframe::egui::Context, streaming: Option<&str>, manual: Option<&Computer>) {
-        let local = self.host.as_ref().and_then(|state| state.as_ref().ok()).and_then(|state| state.computer.as_deref());
+        let local = match &self.host { Some(Ok(state)) => state.computer.as_deref(), _ => self.local_computer.as_deref() };
         let owner = self.user.as_ref().map(|user| user.id.as_str());
         let shown = |c: &OwnedComputer| c.online == 1 && c.linked == 1 && Some(c.id.as_str()) != local && Some(c.id.as_str()) != streaming;
         let targets = owner.map(|owner| {
@@ -507,7 +512,7 @@ impl Panel {
     }
     /// The computer this app hosts from, when the local host is linked to the account.
     pub fn local_id(&self) -> Option<&str> {
-        self.host.as_ref().and_then(|state| state.as_ref().ok()).and_then(|state| state.computer.as_deref())
+        match &self.host { Some(Ok(state)) => state.computer.as_deref(), _ => self.local_computer.as_deref() }
     }
     /// Computers that friends share with you, drawn like your own.
     fn friend_cards(&mut self, ui: &mut eframe::egui::Ui) {
@@ -581,7 +586,10 @@ impl Panel {
     pub fn poll(&mut self) {
         while let Ok(event) = self.events.try_recv() {
             match event {
-                Event::Host(state) => self.host = Some(state),
+                Event::Host(state) => {
+                    if let Ok(state) = &state { self.local_computer = state.computer.clone(); }
+                    self.host = Some(state);
+                }
                 Event::SignedOut(note) => {
                     self.computers.clear();
                     self.owned_connection = None;
@@ -1342,8 +1350,17 @@ struct PendingGuest {
 }
 /// The credential saved for an account computer by an earlier connection.
 fn saved_owned(owner: &str, id: &str) -> Option<Computer> {
-    let key = owned_key(owner, id).ok()?;
-    serde_json::from_str(&vault::load(&key).ok().flatten()?).ok()
+    read_owned(owner, id).ok().flatten()
+}
+/// Err when the credential store could not be read. That is not the same as having no credential:
+/// pairing again would leave one more device entry on the computer every time it happens.
+fn read_owned(owner: &str, id: &str) -> Result<Option<Computer>, ()> {
+    let key = owned_key(owner, id).map_err(|_| ())?;
+    match vault::load(&key) {
+        Ok(Some(value)) => Ok(serde_json::from_str(&value).ok()),
+        Ok(None) => Ok(None),
+        Err(_) => Err(()),
+    }
 }
 fn fingerprint_of(c: &OwnedComputer) -> Option<[u8; 32]> {
     c.certificate_fp.as_deref().and_then(|fp| secpar_client::pairing::fingerprint(fp).ok())
@@ -1606,6 +1623,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut seen = Seen::default();
             let mut known: Vec<OwnedComputer> = vec![];
             let mut local_id: Option<String> = None;
+            let storage_logged: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
             // The first sync says which computer is this one. Until then nothing is paired by itself.
             let mut synced = false;
             let mut sync_fut: Background<SyncOut> = None;
@@ -1858,7 +1876,15 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 // background, so opening one later needs no pairing.
                 if synced && auto_fut.is_none() && pending_pair.is_none() {
                     if let Some(owner)=signed_owner.as_deref().filter(|_| api.token.is_some()) {
-                        let saved=|id:&str| saved_owned(owner,id).map(|c| c.fingerprint);
+                        // A store that cannot be read counts as holding the credential: nothing is
+                        // paired by itself until it can be read again.
+                        let saved=|id:&str| match read_owned(owner,id) {
+                            Ok(found)=>found.map(|c| c.fingerprint),
+                            Err(())=>{
+                                if storage_logged.borrow_mut().insert(id.to_string()) { connlog::note(id,"credential","storage unavailable, automatic pairing held",0); }
+                                known.iter().find(|c| c.id==id).and_then(fingerprint_of)
+                            }
+                        };
                         if let Some(next)=plan_auto_pair(&known,local_id.as_deref(),&saved,&auto_tried,Instant::now()).cloned() {
                             if let Some(fingerprint)=fingerprint_of(&next) {
                                 auto_tried.insert(next.id.clone(),Instant::now());

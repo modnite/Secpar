@@ -1,5 +1,24 @@
 # Secpar delivery record
 
+## Desktop identity fixes after 3.20.5 (source only, not released)
+
+Branch fix/desktop-identity-parity. Not built into a release and not tested on the laptop.
+
+- A credential store that cannot be read no longer counts as a missing credential. Automatic
+  pairing waits instead of making another device entry on the host. This is the likely cause of
+  the repeated x250 entries on Windows; it has not been confirmed on the laptop.
+- Credentials saved or read in a run are kept for that run, so a failed save does not lead to
+  pairing again and previews can still use them.
+- This computer stays out of its own list when the local host answers with an error.
+- Scroll bars are solid, 10 px wide and sit beside the content. Checked in review captures at
+  420x640 and 640x400.
+
+Open: the second, offline x250 on the account is a separate enrollment with another host key.
+The account service can unlink a computer but cannot delete its record, so there is no clean way
+to remove it yet. Linux sound and shortcut reports are not diagnosed: the audio, shortcut and
+preview code is unchanged since 3.18.0 and needs the laptop's Audio details and the exact keys.
+
+
 ## 3.18.0 release preparation
 
 Desktop follows Android's three main tabs and a narrow vertical window. Settings
