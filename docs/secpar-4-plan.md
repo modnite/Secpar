@@ -285,6 +285,55 @@ output the system default and captures from it, unless `audio_sink` is set, in
 which case it captures that named output instead. Secpar should leave
 `audio_sink` unset unless the user picks a device.
 
+### First stream over the real network (2026-11-13)
+
+Hosting engine in the KDE container on the build box (wired, Intel UHD 730,
+`integrations/gamestream/kde-host-serve.sh`, ports published for 100 seconds).
+Connecting part on the owner's laptop (ThinkPad X250, HD 5500, Wi-Fi, real Plasma
+Wayland session), run from the test folder. 20 seconds at 1280x720, 60 fps, H.264:
+
+- Pairing by PIN completed across the LAN.
+- The laptop decoded in hardware (VA-API) and used Moonlight's VA-API renderer on
+  Wayland. This is the case 3.x handled with a software decoder.
+- 59.8 fps received and decoded, 58.0 fps rendered.
+- No frames lost to the network, 0.83% dropped for jitter.
+- Network latency 13 ms average, decoding 0.65 ms, host processing 2.7 ms average.
+
+A second run of two minutes was watched by the owner on the laptop, who judged it
+"smooth and clear": 59.2 fps received, 59.0 rendered, no network loss, 0.11%
+jitter drops, 6 ms latency.
+
+Not covered: the content was a simple animation, not a game or desktop work; no
+sound (the tone was off), no input, no controllers; 1080p untested; fixed-PIN
+pairing. A new test container has a new identity at the same address, and the
+connecting part then refuses to pair until its saved entry is cleared; Secpar
+must handle "same address, different computer" itself.
+
+Blocked for now: streaming from this Windows PC's engine to another device.
+Windows Firewall blocks inbound connections to the test build and has no rule
+for it. The owner must allow it; Secpar's installer will add its own rule.
+The laptop's firewall (ufw) is on as well, so the laptop cannot host a LAN test
+without a rule either.
+
+### Device-bound pairing through the supervisor (2026-11-13)
+
+The existing `pairing_review` check was run in the KDE container against today's
+patched engine and connecting part. All of it passed:
+
+- The engine refused an approval with the wrong certificate, the wrong client id,
+  or missing identity, and enrolled nothing.
+- Approval naming the exact device completed pairing, and the engine recorded
+  that device's certificate.
+- A second device needed its own approval and could not reuse the first.
+- A wrong PIN enrolled nothing.
+- Revoking one device removed only that device, could not be undone by
+  re-approval, and still held after the engine restarted.
+
+This is the mechanism Secpar's account service will drive: the service tells a
+host which device certificates may connect, and the supervisor approves exactly
+those. The check used the review example's software and X11 settings, so the
+engine reported no display there; pairing does not depend on capture.
+
 Two things to handle in the Secpar host: Sunshine always announces itself on the
 LAN by mDNS under the computer's name (no setting turns it off), and its data
 folder is always `config` beside the executable.
