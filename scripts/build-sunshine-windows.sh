@@ -15,7 +15,18 @@ src=${1:?give the Sunshine source directory}
 # a wrongly named FFmpeg archive and links ARM libraries.
 export PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE:-AMD64}
 command -v node >/dev/null 2>&1 || export PATH="$PATH:/c/Program Files/nodejs"
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$src"
+# Secpar's patches on Sunshine (integrations/gamestream/patches/sunshine): pairing
+# bound to a client certificate, and the management password read from a pipe.
+patches=$here/integrations/gamestream/patches/sunshine
+for p in "$patches"/*.patch; do
+  if git apply --check "$p" 2>/dev/null; then
+    git apply "$p"
+  else
+    git apply -R --check "$p"   # already applied, or stop here
+  fi
+done
 # Sunshine's tray icon (its only use of Qt) and its WiX installer are not used:
 # Secpar has its own tray and installer.
 # Optional second argument: Secpar's minimal FFmpeg from build-ffmpeg-windows.sh.

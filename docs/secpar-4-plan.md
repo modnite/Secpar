@@ -234,6 +234,34 @@ session is locked, the portal route, and any stream to a client. The laptop lack
 OpenSSL 4 and the UPnP library version this build links, so Linux packages must
 bundle or pin those.
 
+### Groundwork already in the repository (found 2026-11-13)
+
+An earlier 3.x migration attempt left work against the same pins that Secpar 4
+builds on instead of rewriting. See `integrations/gamestream/README.md`.
+
+- `crates/secpar-gamestream-host`: runs a private Sunshine as a supervised child
+  with its own state folder and port range, ties the process to its parent, talks
+  to its local management port pinned to its certificate, and keeps a durable
+  record of which client certificate belongs to which Secpar device, with
+  revocation.
+- `integrations/gamestream/patches/sunshine`: two patches, 221 lines together.
+  One binds pairing approval to a client certificate; one reads the management
+  password from a pipe instead of the command line. Both build scripts now apply
+  them. These count toward the "few and separate" patch set in risk 6.
+- `integrations/gamestream/patches/moonlight-qt`: two patches giving the client a
+  separate Secpar settings identity and a pairing mode that exits instead of
+  showing a dialog.
+- A container test that paired and streamed generated video and sound between
+  Sunshine and the patched Moonlight client (software, 640x360), and an Android
+  harness that compiles Moonlight's native core.
+
+Checked today on Windows: with both patches the engine builds, and the supervisor
+starts it on separate ports, reads its version, refuses a second start on the
+same state, stops it, and restarts it with the same certificate. The start
+allowance was raised from 15 to 60 seconds because the engine took about 30
+seconds to open its management port on this PC. Pairing through the supervisor
+has not been run on Windows yet.
+
 Two things to handle in the Secpar host: Sunshine always announces itself on the
 LAN by mDNS under the computer's name (no setting turns it off), and its data
 folder is always `config` beside the executable.

@@ -77,6 +77,11 @@ impl Config {
             "sunshine_name = Secpar\nport = {}\norigin_web_ui_allowed = pc\n",
             self.base_port
         );
+        // The engine must not change the computer it runs on: no audio driver
+        // install, no display mode changes, no tray icon of its own.
+        text.push_str(
+            "install_steam_audio_drivers = disabled\ndd_configuration_option = disabled\nsystem_tray = disabled\n",
+        );
         for (key, file) in [
             ("file_state", "clients.json"),
             ("credentials_file", "management.json"),
@@ -255,7 +260,9 @@ impl Host {
                 return Err(Error("Could not contain the bundled host process"));
             }
         };
-        let deadline = Instant::now() + Duration::from_secs(15);
+        // On Windows the engine took about 30 seconds to open its management
+        // port on the first test PC, most of it before encoder detection.
+        let deadline = Instant::now() + Duration::from_secs(60);
         let mut api = None;
         loop {
             if child
@@ -477,6 +484,10 @@ impl Host {
 }
 fn command(executable: &Path) -> Command {
     let mut command = Command::new(executable);
+    // The engine finds its assets relative to where it is started.
+    if let Some(dir) = executable.parent() {
+        command.current_dir(dir);
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())

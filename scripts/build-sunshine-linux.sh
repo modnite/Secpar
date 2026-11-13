@@ -15,7 +15,18 @@ if [ "${SECPAR_INSTALL_DEPS:-}" = 1 ]; then
     libpulse libva libx11 libxcb libxfixes libxrandr libxtst miniupnpc ninja nodejs \
     npm numactl openssl opus pipewire python-jinja shaderc systemd vulkan-icd-loader wayland
 fi
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$src"
+# Secpar's patches on Sunshine (integrations/gamestream/patches/sunshine): pairing
+# bound to a client certificate, and the management password read from a pipe.
+patches=$here/integrations/gamestream/patches/sunshine
+for p in "$patches"/*.patch; do
+  if git apply --check "$p" 2>/dev/null; then
+    git apply "$p"
+  else
+    git apply -R --check "$p"   # already applied, or stop here
+  fi
+done
 # SECPAR_RELOCATABLE=1 makes the host look for its assets in ./usr/local/assets
 # under the directory it is started from, so it can run from any folder.
 relocatable=${SECPAR_RELOCATABLE:+-DSUNSHINE_BUILD_APPIMAGE=ON}
