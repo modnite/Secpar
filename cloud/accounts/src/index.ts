@@ -1,4 +1,5 @@
 import { hostRoutes } from "./hosts";
+import { deviceRoutes } from "./devices";
 import { EFFECTIVE, flags, friendSettings, saveSettings } from "./settings";
 import { passwordRoutes } from "./passwords";
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
@@ -233,6 +234,8 @@ export async function handle(
     const me = await user(request, env);
     const ownerHostResponse=await hostRoutes(request,env,me,hostApi);
     if(ownerHostResponse)return ownerHostResponse;
+    const deviceResponse = await deviceRoutes(request, env, me, { ...hostApi, signing: () => signing(env) });
+    if (deviceResponse) return deviceResponse;
     if (path === "/v1/me" && method === "GET")
       return response({ ...me, visible: !!me.visible });
     if (path === "/v1/me/visibility" && method === "PUT") {
@@ -591,6 +594,7 @@ export async function cleanup(env: Env) {
   const now = seconds();
   await env.DB.batch([
     q(env, "DELETE FROM host_challenges WHERE expires<=?", now),
+    q(env, "DELETE FROM device_challenges WHERE expires<=?", now),
     q(env, "DELETE FROM email_tokens WHERE expires<=?", now),
     q(env, "DELETE FROM oauth_states WHERE expires<=?", now),
     q(env, "DELETE FROM sessions WHERE expires<=?", now),

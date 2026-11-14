@@ -45,6 +45,7 @@ class Database {
     this.db.exec(readFileSync(new URL("../migrations/0006_directory_and_friend_settings.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0007_host_presence.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0008_keyboard_and_mouse.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0009_devices.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -960,5 +961,133 @@ describe("in-app accounts", () => {
     expect((await handle(new Request(`${base}/v1/app/sign-in`), mailEnv, send)).status).toBe(405);
     const text = await handle(new Request(`${base}/v1/app/sign-in`, { method: "POST", body: "email=a" }), mailEnv, send);
     expect(text.status).toBe(400);
+  });
+});
+
+// Secpar 4 devices. Disposable, publicly committed certificates and keys.
+const deviceFiles = (n: string) => ({
+  certificate: readFileSync(new URL(`./fixtures/device-${n}-cert.pem`, import.meta.url), "utf8"),
+  key: readFileSync(new URL(`./fixtures/device-${n}-key.pem`, import.meta.url), "utf8"),
+});
+async function deviceFingerprint(certificate: string) {
+  const encoded = certificate.replace(/-----[^-]+-----/g, "").replace(/\s/g, "");
+  return Buffer.from(await crypto.subtle.digest("SHA-256", Buffer.from(encoded, "base64"))).toString("hex");
+}
+async function deviceProof(n: string, challenge: string, actor: string, changes: Record<string, unknown> = {}, signer = n) {
+  const { certificate } = deviceFiles(n);
+  return new SignJWT({ purpose: "secpar-device", challenge, fingerprint: await deviceFingerprint(certificate), name: `Device ${n}`, platform: "windows", hosts: false, ...changes })
+    .setProtectedHeader({ alg: "ES256", typ: "secpar-device+jwt" })
+    .setIssuer("secpar-device").setSubject(actor).setAudience(base).setIssuedAt().setExpirationTime("60s")
+    .sign(await importPKCS8(deviceFiles(signer).key, "ES256"));
+}
+async function enrol(n: string, actor: keyof typeof tokens = "alice", changes: Record<string, unknown> = {}) {
+  const started = await call("/v1/devices/challenge", actor, "POST");
+  expect(started.status).toBe(201);
+  const { challenge } = (await started.json()) as { challenge: string };
+  return call("/v1/devices", actor, "POST", { certificate: deviceFiles(n).certificate, proof: await deviceProof(n, challenge, actor, changes) });
+}
+async function devices(actor: keyof typeof tokens = "alice") {
+  return ((await (await call("/v1/devices", actor)).json()) as { devices: { id: string; fingerprint: string; name: string; hosts: boolean }[] }).devices;
+}
+async function accessList(id: string, actor: keyof typeof tokens = "alice") {
+  const response = await call(`/v1/devices/${id}/access`, actor);
+  expect(response.status).toBe(200);
+  const { access } = (await response.json()) as { access: string };
+  const jwks = (await (await call("/.well-known/jwks.json", null)).json()) as { keys: Record<string, unknown>[] };
+  const { payload, protectedHeader } = await jwtVerify(access, await importJWK(jwks.keys[0], "ES256"), { issuer: base, audience: "secpar-host" });
+  expect(protectedHeader.typ).toBe("secpar-access+jwt");
+  return payload as { sub: string; exp: number; iat: number; owner: string; devices: { fingerprint: string }[]; guests: { fingerprint: string; handle: string; trusted: boolean; keyboard: boolean; mouse: boolean }[] };
+}
+
+describe("Secpar 4 devices", () => {
+  it("enrols a device with proof of its key, and the same device again stays one device", async () => {
+    const first = await enrol("a");
+    expect(first.status).toBe(201);
+    const again = await enrol("a", "alice", { name: "Renamed" });
+    expect(again.status).toBe(200);
+    const list = await devices();
+    expect(list).toHaveLength(1);
+    expect(list[0].name).toBe("Renamed");
+    expect(list[0].fingerprint).toBe(await deviceFingerprint(deviceFiles("a").certificate));
+  });
+
+  it("needs a session, the certificate's own key and a fresh challenge from the same account", async () => {
+    expect((await call("/v1/devices", null)).status).toBe(401);
+    const { challenge } = (await (await call("/v1/devices/challenge", "alice", "POST")).json()) as { challenge: string };
+    const certificate = deviceFiles("a").certificate;
+    // Signed by another device's key.
+    expect((await call("/v1/devices", "alice", "POST", { certificate, proof: await deviceProof("a", challenge, "alice", {}, "b") })).status).toBe(403);
+    // Bob cannot use Alice's challenge.
+    expect((await call("/v1/devices", "bob", "POST", { certificate, proof: await deviceProof("a", challenge, "bob") })).status).toBe(409);
+    // The real proof works once, and a replay does nothing.
+    const proof = await deviceProof("a", challenge, "alice");
+    expect((await call("/v1/devices", "alice", "POST", { certificate, proof })).status).toBe(201);
+    expect((await call("/v1/devices", "alice", "POST", { certificate, proof })).status).toBe(409);
+    expect(await devices()).toHaveLength(1);
+  });
+
+  it("does not let another account take over a device, and rejects details it cannot use", async () => {
+    expect((await enrol("a")).status).toBe(201);
+    expect((await enrol("a", "bob")).status).toBe(409);
+    expect(await devices("bob")).toHaveLength(0);
+    expect((await enrol("b", "alice", { platform: "macos" })).status).toBe(400);
+    expect((await enrol("b", "alice", { platform: "android", hosts: true })).status).toBe(400);
+    expect((await enrol("b", "alice", { name: "" })).status).toBe(400);
+  });
+
+  it("lists and removes only the caller's devices", async () => {
+    await enrol("a");
+    await enrol("b", "bob");
+    const [mine] = await devices();
+    expect((await call(`/v1/devices/${mine.id}`, "bob", "DELETE")).status).toBe(404);
+    expect((await call(`/v1/devices/${mine.id}`, "alice", "DELETE")).status).toBe(204);
+    expect(await devices()).toHaveLength(0);
+    expect(await devices("bob")).toHaveLength(1);
+  });
+
+  it("signs an access list for a hosting device with the owner's other devices and friends' devices", async () => {
+    await enrol("a", "alice", { hosts: true });
+    await enrol("b", "alice", { name: "Phone", platform: "android" });
+    await enrol("c", "bob");
+    const host = (await devices()).find((d) => d.hosts)!;
+    let list = await accessList(host.id);
+    expect(list.sub).toBe(host.fingerprint);
+    expect(list.owner).toBe("alice");
+    expect(list.exp - list.iat).toBe(7 * 24 * 3600);
+    expect(list.devices.map((d) => d.fingerprint)).toEqual([await deviceFingerprint(deviceFiles("b").certificate)]);
+    // Bob is not a friend yet.
+    expect(list.guests).toEqual([]);
+    await friendship();
+    list = await accessList(host.id);
+    expect(list.guests).toHaveLength(1);
+    expect(list.guests[0]).toMatchObject({ handle: "bob", trusted: false, keyboard: false, mouse: false });
+    // Alice trusts Bob and allows the keyboard.
+    expect((await call("/v1/friends/bob/settings", "alice", "PUT", { connect: "always", keyboard: true })).status).toBeLessThan(300);
+    list = await accessList(host.id);
+    expect(list.guests[0]).toMatchObject({ trusted: true, keyboard: true, mouse: false });
+  });
+
+  it("gives no access list to a device that does not host, to another account, or for a blocked friend", async () => {
+    await enrol("a", "alice", { hosts: true });
+    await enrol("b", "alice");
+    await enrol("c", "bob");
+    const all = await devices();
+    const host = all.find((d) => d.hosts)!, other = all.find((d) => !d.hosts)!;
+    expect((await call(`/v1/devices/${other.id}/access`, "alice")).status).toBe(404);
+    expect((await call(`/v1/devices/${host.id}/access`, "bob")).status).toBe(404);
+    await friendship();
+    expect((await accessList(host.id)).guests).toHaveLength(1);
+    expect((await call("/v1/blocks/bob", "alice", "PUT")).status).toBeLessThan(300);
+    expect((await accessList(host.id)).guests).toEqual([]);
+  });
+
+  it("drops a removed device from the next access list", async () => {
+    await enrol("a", "alice", { hosts: true });
+    await enrol("b", "alice");
+    const all = await devices();
+    const host = all.find((d) => d.hosts)!, other = all.find((d) => !d.hosts)!;
+    expect((await accessList(host.id)).devices).toHaveLength(1);
+    expect((await call(`/v1/devices/${other.id}`, "alice", "DELETE")).status).toBe(204);
+    expect((await accessList(host.id)).devices).toEqual([]);
   });
 });

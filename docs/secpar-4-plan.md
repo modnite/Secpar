@@ -147,6 +147,25 @@ device. Unit tests cover each rule, and a round trip through the real Windows
 credential store passed. Not done: the Linux credential store on a real desktop,
 storage for the host service (which runs without a user session), Android.
 
+Account service, device part (written 2026-11-13/14 in `cloud/accounts`, not
+deployed). The 3.x service and its database are kept; Secpar 4 adds one table and
+these routes, all for a signed-in account:
+
+| Route | Purpose |
+| --- | --- |
+| `POST /v1/devices/challenge` | One-use challenge, valid five minutes |
+| `POST /v1/devices` | Enrol this installation: its certificate plus a proof signed with the certificate's key over the challenge. The same certificate again updates its row, so there is never a second record for one device. A certificate held by another account is refused. |
+| `GET /v1/devices` | The account's devices |
+| `DELETE /v1/devices/:id` | Remove a device |
+| `GET /v1/devices/:id/access` | For a hosting device: the access list, signed by the service and valid seven days. It names the owner's other devices and the devices of accepted, unblocked friends, each friend with trusted or not, keyboard and mouse. |
+
+The host feeds the fingerprints from the access list to the tunnel's allow-list
+and the supervisor, and applies the friend flags itself. Tests cover each rule
+above (64 pass, 7 of them new). Not done: deploying it (the migration changes the
+live database, so it needs the owner's go-ahead), the client side in
+`secpar-core`, friend devices asking a non-trusting host, and how a host that has
+no user session signs in to fetch its list.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and
