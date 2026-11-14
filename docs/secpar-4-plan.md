@@ -166,6 +166,23 @@ live database, so it needs the owner's go-ahead), the client side in
 `secpar-core`, friend devices asking a non-trusting host, and how a host that has
 no user session signs in to fetch its list.
 
+**App side of the account service (2026-11-14).** `crates/secpar-core/src/account.rs`
+signs in through the existing `/v1/app/sign-in` route, keeps the session in the
+credential store, enrols the device identity with a proof signed by its own key,
+lists and removes devices, and fetches the access list. `verify_access` checks a
+signed list against the service's public keys without the network (signature,
+issuer, audience, hosting device, expiry), which is what a hosting device uses for
+its saved copy. The client refuses plain HTTP except for a test service on
+127.0.0.1.
+
+Checked end to end on Windows against the real service code running locally
+(`cloud/accounts/test/local-server.mjs`, in-memory database, accounts created
+through the real sign-up routes): wrong password refused, sign-in, enrol twice
+stays one device, another account cannot take the device, Android cannot host,
+list fetched and verified, list refused for another device, removed device gone
+from the next list, closed port reported as unreachable. Not checked: the live
+service (not deployed), Linux and Android, and TLS to the real address.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and

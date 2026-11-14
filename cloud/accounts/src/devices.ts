@@ -36,7 +36,7 @@ export async function deviceRoutes(request: Request, env: Environment, me: Owner
     await api.limit(request, env, "device_challenge", 20);
     const challenge = random(), issued = now();
     await q(env, "INSERT INTO device_challenges(hash,owner,expires) VALUES(?,?,?)", await api.hash(challenge), me.id, issued + 300).run();
-    return json({ challenge, owner: me.id, origin: base, expires_at: issued + 300 }, 201);
+    return json({ challenge, owner: me.id, origin: base, issued_at: issued, expires_at: issued + 300 }, 201);
   }
 
   if (path === "/v1/devices" && method === "POST") {
