@@ -241,6 +241,21 @@ path, the hosting service as an installed background service, where it keeps
 the device key, the channel to the window, the friend's request to be accepted,
 and keyboard/mouse limits for guests.
 
+**Stream through the hosting path (2026-11-14).** `kde-hosting-check.sh` with
+`HOSTING_CHECK_STREAM=1`, in the test container on the build box: after pairing
+over the tunnel, the stream component streamed the KDE session for 15 seconds
+through the tunnel. KWin capture, VA-API encoding and decoding, 720p60 H.264.
+Two runs with figures: 60.0 and 60.5 fps from the network, 59.7 and 58.6 fps
+rendered, 0% dropped by the network. A first run connected but its log had no
+figures; not explained. With `HOSTING_CHECK_REMOVE=1` the device was removed
+from the list 8 seconds into the stream and its tunnel closed.
+
+Open from this run: after the tunnel closes, the stream component keeps its
+window until it is stopped, and the engine only ends the session by its own
+timeout. The app must stop the component when the tunnel reports closed, and the
+hosting side should end the engine session of a device whose access ended. Sound
+was not measured here, and both ends ran on one computer.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and

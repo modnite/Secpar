@@ -103,6 +103,7 @@ async fn main() -> Result {
     let executable = PathBuf::from(args.next().ok_or("Missing engine executable")?);
     let root = PathBuf::from(args.next().ok_or("Missing state folder")?);
     let component = PathBuf::from(args.next().ok_or("Missing stream component")?);
+    let stream = std::env::var("HOSTING_CHECK_STREAM").as_deref() == Ok("1");
 
     let rng = SystemRandom::new();
     let document = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
@@ -116,7 +117,14 @@ async fn main() -> Result {
     access.update(&list(&signer, &host_id, &[&laptop]), &keys, now())?;
 
     let engine = Arc::new(
-        Host::start(Config { executable, state: root.join("host"), base_port: PORT, capture: Capture::X11, encoder: Encoder::Software, audio_sink: Some("host_audio".into()) }).await?,
+        // With HOSTING_CHECK_STREAM=1 the engine captures the KDE session so a
+        // stream can follow; otherwise the cheapest settings that can pair.
+        Host::start(if stream {
+            Config { executable, state: root.join("host"), base_port: PORT, capture: Capture::KWin, encoder: Encoder::Automatic, audio_sink: None }
+        } else {
+            Config { executable, state: root.join("host"), base_port: PORT, capture: Capture::X11, encoder: Encoder::Software, audio_sink: Some("host_audio".into()) }
+        })
+        .await?,
     );
     println!("engine started, version {}", engine.info.version);
     // The engine must only listen on this computer.
@@ -166,6 +174,34 @@ async fn main() -> Result {
     let (child, fresh) = start_pairing(&component, &root.join("profile-b")).await?;
     check("a new stream identity pairs", request_pairing(&tunnel, &fresh).await == Answer::Paired && finished(child).await?)?;
     check("only the new certificate is enrolled", enrolled(&engine, &fresh).await? && !enrolled(&engine, &first).await?)?;
+
+    if stream {
+        // Everything between the component and the engine goes through the tunnel.
+        let log = std::fs::File::create(root.join("stream.log"))?;
+        let home = root.join("profile-b");
+        let mut child = Command::new("timeout")
+            .args(["-s", "INT", "16"])
+            .arg(&component)
+            .args(["stream", &format!("127.0.0.2:{PORT}"), "Desktop", "--packet-size", "1024", "--resolution", "1280x720", "--fps", "60", "--bitrate", "10000"])
+            .args(["--video-codec", "H.264", "--display-mode", "windowed", "--absolute-mouse", "--keep-awake", "--frame-pacing", "--no-mute-on-focus-loss"])
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("XDG_CACHE_HOME", home.join("cache"))
+            .stdin(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log)
+            .kill_on_drop(true)
+            .spawn()?;
+        // Halfway through, the laptop is removed from the account while it streams.
+        let removal = std::env::var("HOSTING_CHECK_REMOVE").as_deref() == Ok("1");
+        if removal {
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            access.update(&list(&signer, &host_id, &[]), &keys, now())?;
+            hosting.apply().await;
+            check("removal during a stream closes the tunnel", tokio::time::timeout(Duration::from_secs(5), tunnel.closed()).await.is_ok())?;
+        }
+        let status = tokio::time::timeout(Duration::from_secs(40), child.wait()).await??;
+        println!("stream component exit: {:?}", status.code());
+    }
 
     drop(hosting);
     // The tunnel lets go of the engine a moment after it closes.

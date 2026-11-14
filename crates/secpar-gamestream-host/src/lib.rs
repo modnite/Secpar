@@ -37,6 +37,8 @@ pub enum Capture {
     #[default]
     Automatic,
     X11,
+    /// KDE Plasma on Wayland, through KWin's own screen capture.
+    KWin,
 }
 #[derive(Clone, Copy, Default)]
 pub enum Encoder {
@@ -93,6 +95,9 @@ impl Config {
             ("log_path", "host.log"),
         ] {
             text.push_str(&format!("{key} = {}\n", self.state.join(file).display()));
+        }
+        if matches!(self.capture, Capture::KWin) {
+            text.push_str("capture = kwin\n");
         }
         if matches!(self.capture, Capture::X11) {
             text.push_str("capture = x11\n");
