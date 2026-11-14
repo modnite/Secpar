@@ -47,6 +47,18 @@ pub fn hex(fingerprint: &Fingerprint) -> String {
     fingerprint.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The reverse of `hex`: 64 lowercase or uppercase hexadecimal characters.
+pub fn unhex(text: &str) -> Option<Fingerprint> {
+    if text.len() != 64 || !text.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
 fn encode(identity: &Identity) -> Vec<u8> {
     let certificate = identity.certificate_der();
     let mut out = (certificate.len() as u32).to_be_bytes().to_vec();

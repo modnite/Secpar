@@ -256,6 +256,35 @@ timeout. The app must stop the component when the tunnel reports closed, and the
 hosting side should end the engine session of a device whose access ended. Sound
 was not measured here, and both ends ran on one computer.
 
+**The background part of the app (2026-11-14).** `crates/secpar-service`.
+Decision: on a desktop computer one background part holds the device key and is
+the only part that speaks as the device. It accepts tunnels when the computer
+hosts and opens the tunnel when the person connects to another computer. The
+window holds the session and does everything with the account service; it never
+has the device key, and the background part never has the password or session.
+This is still one app: the background part is an internal piece of it.
+
+The window talks to it over a channel that stays on the computer: a named pipe
+on Windows (system, administrators and the logged-in person only, no remote
+clients), a socket file on Linux (owner only). One JSON object per line:
+`status`, `enrolment`, `refresh`, `accept`, `dismiss`, `connect`, `disconnect`,
+`pair`. The engine's base port on every hosting computer is 46989, so it runs
+beside an installed engine of the same family; the connecting side offers the
+same ports on 127.0.0.2.
+
+Checked on Windows (`tests/two_computers.rs`, real pipe, real tunnels, the
+account service code running locally, stand-in engine): window signs in and
+enrols a hosting desktop and a connecting laptop through their background
+parts; the laptop is refused before the desktop has its list and let in after;
+pairing is granted under the account for that laptop; another account's
+computer is refused; removing the laptop ends its tunnel and grant; removing
+the desktop leaves it with no list. Compiles on Linux; not run there.
+
+Not done: running it as an installed service (Windows service before login,
+Linux user service), the program itself with the real credential store and real
+engine, starting the stream component from the window, the friend's request to
+be accepted, and guest keyboard/mouse limits.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and

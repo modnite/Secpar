@@ -26,6 +26,10 @@ mod engine;
 #[cfg(test)]
 mod tests;
 
+/// The engine's base port on every Secpar hosting computer. Chosen away from the
+/// usual range of this engine family, so it runs beside an installed one.
+pub const ENGINE_BASE: u16 = 46989;
+
 pub type Pending<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The stream component's own identity towards the engine, as it shows up in

@@ -394,6 +394,10 @@ impl Client {
             _ => Err(FAILED),
         }
     }
+    /// Whether the tunnel is gone, without waiting.
+    pub fn is_closed(&self) -> bool {
+        self.connection.close_reason().is_some()
+    }
     /// Resolves when the tunnel is gone.
     pub async fn closed(&self) {
         self.connection.closed().await;
