@@ -308,12 +308,40 @@ the same, with captures in `docs/screenshots/secpar4/` (sign-in at 800x600 and
 640x400, Computers, Settings: Devices and Account). Not checked: typing into the
 sign-in page by hand, the real credential store from the window, Linux.
 
+**Finding a computer and Connect (2026-11-14).** A hosting computer tells the
+account service where it can be reached each time it fetches its access list:
+its tunnel port and the address it has on its own network (migration
+`0010_device_reach.sql`). The report is inside the token signed with the device
+key. The device list gives it to the same account's signed-in devices only, and
+marks a hosting computer online for 20 minutes after its last report. The
+servers therefore also see each hosting computer's local network address.
+
+A hosting computer also fetches a new list when a device it does not know tries
+to connect (at most once in ten seconds), so a computer the owner has just
+signed in on is let in on its next try instead of waiting for the 15 minute
+refresh. The window tries three times.
+
+Connect in the window opens the tunnel and the tile shows Connected with
+Disconnect. No stream starts yet: starting the stream component and pairing it
+from the window is the next step.
+
+Checked on Windows: 67 service tests; `crates/secpar-app/tests/connect.rs`
+(online and offline shown, a just-enrolled laptop connects, disconnect, a
+computer that is off, an unknown computer); the built window against a stand-in
+hosting computer (`crates/secpar-service/examples/test_host.rs`), with captures
+of Online, Connected and "did not answer". Known gaps: a computer that was
+switched off still shows Online for up to 20 minutes; a single tile fills the
+whole row; only one local address is reported and none for the internet side,
+so this works on one network only; the three tries take about 30 seconds before
+the window says the computer did not answer.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and
 files are encrypted between the two devices, so the relay carries data it cannot
 read. The servers see account email, device names, friend links, and which device
-connects to which and when. Self-hosting is not a goal for the first release, but
+connects to which and when, and each hosting computer's tunnel port and local
+network address. Self-hosting is not a goal for the first release, but
 server addresses will be a build setting, not scattered constants.
 
 ## 4. Risks found while checking upstream

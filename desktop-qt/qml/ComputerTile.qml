@@ -11,7 +11,10 @@ Rectangle {
     property string route      // "This network", "Direct", "Relay" or empty
     property string status     // shown instead of the online state when set
     property int previewLimit: 10000   // tallest the preview may be
+    property bool connected: false
+    property bool busy: false
     signal connectRequested()
+    signal disconnectRequested()
 
     radius: Theme.radius
     color: Theme.surface
@@ -74,10 +77,10 @@ Rectangle {
                 }
             }
             FlatButton {
-                text: "Connect"
-                primary: true
-                enabled: tile.online
-                onClicked: tile.connectRequested()
+                text: tile.connected ? "Disconnect" : "Connect"
+                primary: !tile.connected
+                enabled: tile.connected || (tile.online && !tile.busy)
+                onClicked: tile.connected ? tile.disconnectRequested() : tile.connectRequested()
             }
         }
     }

@@ -24,8 +24,24 @@ const PLATFORMS = ["windows", "linux", "android"];
 const MAX_DEVICES = 50;
 /** How long a host may rely on one signed access list. */
 export const ACCESS_SECONDS = 7 * 24 * 3600;
-type Device = { id: string; owner: string; fingerprint: string; name: string; platform: string; hosts: number; created: number; last_seen: number };
-const shown = (d: Device) => ({ id: d.id, fingerprint: d.fingerprint, name: d.name, platform: d.platform, hosts: !!d.hosts, created: d.created, last_seen: d.last_seen });
+/** A hosting device counts as online this long after it last reported in. */
+export const ONLINE_SECONDS = 20 * 60;
+type Device = { id: string; owner: string; fingerprint: string; name: string; platform: string; hosts: number; created: number; last_seen: number; reach: string | null; reach_seen: number };
+type Reach = { port: number; addresses: string[] };
+const shown = (d: Device) => {
+  const online = !!d.hosts && !!d.reach && d.reach_seen > now() - ONLINE_SECONDS;
+  return { id: d.id, fingerprint: d.fingerprint, name: d.name, platform: d.platform, hosts: !!d.hosts, created: d.created, last_seen: d.last_seen, online, reach: online ? (JSON.parse(d.reach as string) as Reach) : null };
+};
+/** A tunnel port and up to eight literal addresses, or nothing. */
+function reachOf(value: unknown): Reach | null {
+  if (!value || typeof value !== "object") return null;
+  const { port, addresses } = value as { port?: unknown; addresses?: unknown };
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+  if (!Array.isArray(addresses) || addresses.length < 1 || addresses.length > 8) return null;
+  const literal = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}|[0-9a-fA-F:]{2,39})$/;
+  if (!addresses.every((a) => typeof a === "string" && literal.test(a))) return null;
+  return { port, addresses: addresses as string[] };
+}
 
 /** Reads a device certificate and a token signed with its key. Returns the
  * certificate's fingerprint and the token's claims. */
@@ -99,6 +115,9 @@ export async function deviceKeyRoutes(request: Request, env: Environment, api: H
   const device = await q(env, "SELECT * FROM devices WHERE fingerprint=? AND hosts=1", fingerprint).first<Device>();
   // A removed device and one that never hosted look the same from outside.
   if (!device) api.fail(404, "device_not_found");
+  // The request may say where the device can be reached now; without it, nowhere.
+  const reach = reachOf(payload.reach);
+  await q(env, "UPDATE devices SET reach=?,reach_seen=? WHERE id=?", reach ? JSON.stringify(reach) : "", reach ? now() : 0, device.id).run();
   return accessList(env, device, base, api);
 }
 

@@ -13,10 +13,10 @@ Item {
         { name: "Mika's desktop", owner: "Mika", online: true, route: "Relay" },
         { name: "Attic server", owner: "", online: false, route: "" }
     ]
-    // The account's other hosting computers. Whether one is switched on is not
-    // known yet, so Connect stays off and the tile says what is known.
+    // The account's other hosting computers.
     readonly property var own: backend.devices.filter(d => d.hosts && !d.this).map(d => (
-        { name: d.name, owner: "", online: false, route: "", status: "On your account" }))
+        { id: d.id, name: d.name, owner: "", online: d.online, route: "",
+          status: backend.connectedId === d.id ? "Connected" : backend.connectingId === d.id ? "Connecting" : "" }))
     readonly property var computers: sampleData ? sample : own
 
     ScrollView {
@@ -47,10 +47,35 @@ Item {
                     online: modelData.online
                     route: modelData.route
                     status: modelData.status || ""
+                    connected: !sampleData && backend.connectedId === modelData.id
+                    busy: !sampleData && backend.busy
+                    onConnectRequested: backend.connectTo(modelData.id)
+                    onDisconnectRequested: backend.disconnect()
                     previewLimit: grid.previewLimit
                 }
             }
             Item { Layout.columnSpan: grid.columns; Layout.preferredHeight: Theme.margin - Theme.gap }
+        }
+    }
+
+    // What went wrong with the last Connect, along the bottom edge.
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        visible: !sampleData && backend.message.length > 0
+        height: notice.implicitHeight + 16
+        color: Theme.surface
+        Rectangle { width: parent.width; height: 1; color: Theme.border }
+        Text {
+            id: notice
+            anchors.verticalCenter: parent.verticalCenter
+            x: Theme.margin
+            width: parent.width - 2 * Theme.margin
+            text: backend.message
+            color: Theme.orange
+            font.pixelSize: Theme.smallTextSize
+            wrapMode: Text.WordWrap
         }
     }
 

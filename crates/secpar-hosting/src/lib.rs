@@ -8,7 +8,7 @@
 //! to one device of one account, and is taken away again when that device leaves
 //! the list.
 use secpar_core::{
-    account::Service,
+    account::{Reach, Service},
     hosting::{Access, Peer, Refreshed},
     identity::hex,
 };
@@ -155,9 +155,25 @@ impl<E: Engine> Hosting<E> {
         }
     }
 
+    /// Where other devices can reach this tunnel: its port, and the address this
+    /// computer uses on its network (or the one address the tunnel is bound to).
+    pub fn reach(&self) -> Option<Reach> {
+        let bound = self.tunnel.local_addr().ok()?;
+        let address = if bound.ip().is_unspecified() {
+            // No packet is sent; this only asks the system which address it would use.
+            let probe = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+            probe.connect("192.0.2.1:9").ok()?;
+            probe.local_addr().ok()?.ip()
+        } else {
+            bound.ip()
+        };
+        Some(Reach { port: bound.port(), addresses: vec![address.to_string()] })
+    }
+
     /// Fetches a new list with the device's own key and applies it.
     pub async fn refresh(&self, service: &Service, identity: &Identity) -> Refreshed {
-        let result = self.inner.access.refresh(service, identity).await;
+        let reach = self.reach();
+        let result = self.inner.access.refresh(service, identity, reach.as_ref()).await;
         if result == Refreshed::Removed {
             // This computer is no longer a hosting device of the account.
             self.tunnel.set_allowed([]);
@@ -184,8 +200,13 @@ impl<E: Engine> Hosting<E> {
 
     /// Keeps everything current: applies time limits every 20 seconds and asks
     /// the account service for a new list every 15 minutes. Never returns.
+    ///
+    /// It also asks for a new list when a device that is not allowed tries to
+    /// connect, at most once in ten seconds: a computer the owner has just
+    /// signed in on is not on the old list yet, and should not have to wait.
     pub async fn keep_current(&self, service: &Service, identity: &Identity) {
         let mut tick = 0u32;
+        let mut knocked = tokio::time::Instant::now() - Duration::from_secs(10);
         loop {
             if tick % 45 == 0 {
                 self.refresh(service, identity).await;
@@ -193,7 +214,19 @@ impl<E: Engine> Hosting<E> {
                 self.apply().await;
             }
             tick = tick.wrapping_add(1);
-            tokio::time::sleep(Duration::from_secs(20)).await;
+            let next = tokio::time::sleep(Duration::from_secs(20));
+            tokio::pin!(next);
+            loop {
+                tokio::select! {
+                    _ = &mut next => break,
+                    _ = self.tunnel.turned_away() => {
+                        if knocked.elapsed() >= Duration::from_secs(10) {
+                            knocked = tokio::time::Instant::now();
+                            self.refresh(service, identity).await;
+                        }
+                    }
+                }
+            }
         }
     }
 }

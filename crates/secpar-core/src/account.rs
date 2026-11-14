@@ -114,6 +114,19 @@ pub struct Device {
     pub name: String,
     pub platform: String,
     pub hosts: bool,
+    /// A hosting device that reported in recently.
+    #[serde(default)]
+    pub online: bool,
+    /// Where it said it can be reached, while it is online.
+    #[serde(default)]
+    pub reach: Option<Reach>,
+}
+/// Where a hosting device can be reached: its tunnel port and the addresses it
+/// has on its own network.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reach {
+    pub port: u16,
+    pub addresses: Vec<String>,
 }
 
 /// A public key the service signs access lists with.
@@ -409,7 +422,10 @@ impl Service {
     /// Fetches and checks this hosting device's access list using only its own
     /// key, so it works before anyone has logged in to the computer. Returns the
     /// signed text to save, and what it says.
-    pub async fn device_access(&self, identity: &Identity, keys: &[Key]) -> Result<(String, AccessList)> {
+    ///
+    /// `reach` tells the account's other devices where this one can be reached
+    /// from now on; without it this device shows as offline.
+    pub async fn device_access(&self, identity: &Identity, keys: &[Key], reach: Option<&Reach>) -> Result<(String, AccessList)> {
         #[derive(Deserialize)]
         struct Time {
             now: u64,
@@ -423,7 +439,7 @@ impl Service {
         let host = identity.fingerprint();
         let claims = serde_json::json!({
             "iss": "secpar-device", "aud": self.origin, "sub": hex(&host),
-            "purpose": "secpar-access", "iat": at, "exp": at + 60,
+            "purpose": "secpar-access", "iat": at, "exp": at + 60, "reach": reach,
         });
         let body = Proof { certificate: pem(identity.certificate_der()), proof: token(identity, "secpar-device-request+jwt", claims)? };
         let signed: Signed = self.json(self.http.post(self.url("/v1/device/access")).json(&body)).await?;

@@ -78,9 +78,9 @@ async fn sign_in_enrol_and_fetch_the_access_list() {
 
     // The hosting device gets the same list with only its own key, as it must
     // before anyone has logged in. A device that does not host gets nothing.
-    let (_, own) = service.device_access(&desktop, &keys).await.unwrap();
+    let (_, own) = service.device_access(&desktop, &keys, None).await.unwrap();
     assert_eq!(own.devices, list.devices);
-    assert!(matches!(service.device_access(&laptop, &keys).await, Err(Error::Refused { status: 404, .. })));
+    assert!(matches!(service.device_access(&laptop, &keys, None).await, Err(Error::Refused { status: 404, .. })));
 
     // The hosting side keeps the list, and keeps using it while the service is away.
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
@@ -88,21 +88,21 @@ async fn sign_in_enrol_and_fetch_the_access_list() {
     let file = folder.path().join("access.json");
     let access = Access::open(&origin, desktop.fingerprint(), file.clone(), at);
     assert!(access.allowed(at).is_empty());
-    assert_eq!(access.refresh(&service, &desktop).await, Refreshed::Updated);
+    assert_eq!(access.refresh(&service, &desktop, None).await, Refreshed::Updated);
     assert_eq!(access.allowed(at), vec![laptop.fingerprint()]);
     let nowhere = Service::local_test(&origin, "http://127.0.0.1:9").unwrap();
     assert_eq!(nowhere.keys().await, Err(Error::Unreachable));
-    assert_eq!(access.refresh(&nowhere, &desktop).await, Refreshed::Kept(Error::Unreachable));
+    assert_eq!(access.refresh(&nowhere, &desktop, None).await, Refreshed::Kept(Error::Unreachable));
     assert_eq!(access.allowed(at), vec![laptop.fingerprint()]);
     assert_eq!(Access::open(&origin, desktop.fingerprint(), file.clone(), at).allowed(at), vec![laptop.fingerprint()]);
 
     // Removing the laptop from the account drops it at the next refresh.
     service.remove(&session, &second.id).await.unwrap();
-    assert_eq!(access.refresh(&service, &desktop).await, Refreshed::Updated);
+    assert_eq!(access.refresh(&service, &desktop, None).await, Refreshed::Updated);
     assert!(access.allowed(at).is_empty());
 
     // Removing the hosting device itself leaves it with no list at all.
     service.remove(&session, &first.id).await.unwrap();
-    assert_eq!(access.refresh(&service, &desktop).await, Refreshed::Removed);
+    assert_eq!(access.refresh(&service, &desktop, None).await, Refreshed::Removed);
     assert!(!file.exists());
 }

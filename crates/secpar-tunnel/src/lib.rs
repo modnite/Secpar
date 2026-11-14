@@ -75,16 +75,23 @@ impl Identity {
 
 /// The certificates a host accepts. Shared, so access can change while it runs.
 #[derive(Debug, Default)]
-pub struct Allowed(RwLock<HashSet<Fingerprint>>);
+pub struct Allowed {
+    devices: RwLock<HashSet<Fingerprint>>,
+    refused: tokio::sync::Notify,
+}
 impl Allowed {
     pub fn new(devices: impl IntoIterator<Item = Fingerprint>) -> Arc<Self> {
-        Arc::new(Self(RwLock::new(devices.into_iter().collect())))
+        Arc::new(Self { devices: RwLock::new(devices.into_iter().collect()), refused: tokio::sync::Notify::new() })
     }
     pub fn set(&self, devices: impl IntoIterator<Item = Fingerprint>) {
-        *self.0.write().unwrap() = devices.into_iter().collect();
+        *self.devices.write().unwrap() = devices.into_iter().collect();
     }
     pub fn contains(&self, device: &Fingerprint) -> bool {
-        self.0.read().unwrap().contains(device)
+        self.devices.read().unwrap().contains(device)
+    }
+    /// Called when a device that is not allowed tried to connect.
+    pub(crate) fn turned_away(&self) {
+        self.refused.notify_one();
     }
 }
 
@@ -199,6 +206,11 @@ impl Host {
             }
             keep
         });
+    }
+    /// Resolves the next time a device that is not allowed tries to connect. The
+    /// host can take that as a hint that its list may be out of date.
+    pub async fn turned_away(&self) {
+        self.allowed.refused.notified().await;
     }
     /// Devices with an open tunnel.
     pub fn connected(&self) -> Vec<Fingerprint> {

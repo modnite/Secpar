@@ -34,6 +34,9 @@ enum Request {
     SignOut,
     Devices,
     RemoveDevice { id: String },
+    /// Open a tunnel to one of the account's hosting computers.
+    Connect { id: String },
+    Disconnect,
 }
 
 struct App {
@@ -158,13 +161,47 @@ impl App {
             Ok(devices) => json!({
                 "ok": true,
                 "devices": devices.iter().map(|d| json!({
-                    "id": d.id, "name": d.name, "platform": d.platform, "hosts": d.hosts,
+                    "id": d.id, "name": d.name, "platform": d.platform, "hosts": d.hosts, "online": d.online,
                     "this": mine.as_ref().is_some_and(|m| *m == d.fingerprint.as_str()),
                 })).collect::<Vec<_>>(),
             }),
             Err(error) if self.expired(&error) => failed("signed_out"),
             Err(error) => refused(error),
         }
+    }
+
+    async fn connect(&self, id: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        // Ask now: the computer's address may have changed since the list was shown.
+        let devices = match self.account.devices(&session).await {
+            Ok(devices) => devices,
+            Err(error) if self.expired(&error) => return failed("signed_out"),
+            Err(error) => return refused(error),
+        };
+        let Some(device) = devices.iter().find(|d| d.id == id) else { return failed("device_not_found") };
+        let Some(reach) = &device.reach else { return failed("offline") };
+        let addresses: Vec<String> = reach
+            .addresses
+            .iter()
+            .map(|a| if a.contains(':') { format!("[{a}]:{}", reach.port) } else { format!("{a}:{}", reach.port) })
+            .collect();
+        let request = json!({"do": "connect", "host": device.fingerprint, "addresses": addresses});
+        // A computer that has not heard of this device yet fetches a new list
+        // when it is refused, so a second and third try are worth making.
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            match self.background(request.clone()).await {
+                None => return failed("background_not_running"),
+                Some(answer) if answer["ok"] == true => return json!({"ok": true, "id": id, "stream_address": answer["stream_address"]}),
+                Some(_) => {}
+            }
+        }
+        failed("not_reachable")
     }
 
     async fn remove_device(&self, id: &str) -> Value {
@@ -215,6 +252,8 @@ pub fn call(request: &str) -> Value {
             Request::SignOut => app.sign_out().await,
             Request::Devices => app.devices().await,
             Request::RemoveDevice { id } => app.remove_device(&id).await,
+            Request::Connect { id } => app.connect(&id).await,
+            Request::Disconnect => app.background(json!({"do": "disconnect"})).await.unwrap_or_else(|| failed("background_not_running")),
         }
     })
 }

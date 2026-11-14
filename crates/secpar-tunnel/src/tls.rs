@@ -85,6 +85,7 @@ impl ClientCertVerifier for AllowedDevices {
         _: UnixTime,
     ) -> std::result::Result<ClientCertVerified, rustls::Error> {
         if !self.allowed.contains(&fingerprint(end.as_ref())) {
+            self.allowed.turned_away();
             return Err(rustls::Error::General("Device is not allowed on this host".into()));
         }
         Ok(ClientCertVerified::assertion())

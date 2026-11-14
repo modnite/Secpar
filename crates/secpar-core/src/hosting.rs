@@ -8,7 +8,7 @@
 //! The file sits in the hosting part's own data folder. Someone who can write
 //! there already controls the hosting part, so the saved keys are trusted as far
 //! as that folder is.
-use crate::account::{verify_access, AccessList, Error, Key, Result, Service};
+use crate::account::{verify_access, AccessList, Error, Key, Reach, Result, Service};
 use secpar_tunnel::{Fingerprint, Identity};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
@@ -144,11 +144,12 @@ impl Access {
         self.state.lock().unwrap().list.as_ref().map(|l| l.expires_at)
     }
 
-    /// Asks the account service for a new list with the device's own key.
-    pub async fn refresh(&self, service: &Service, identity: &Identity) -> Refreshed {
+    /// Asks the account service for a new list with the device's own key, and
+    /// tells it where this device can be reached.
+    pub async fn refresh(&self, service: &Service, identity: &Identity, reach: Option<&Reach>) -> Refreshed {
         let fetched = async {
             let keys = service.keys().await?;
-            let (access, list) = service.device_access(identity, &keys).await?;
+            let (access, list) = service.device_access(identity, &keys, reach).await?;
             Ok::<_, Error>((access, keys, list))
         };
         match fetched.await {

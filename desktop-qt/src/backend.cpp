@@ -56,6 +56,10 @@ QString Backend::explain(const QJsonObject &answer)
         return "The system's password store could not be used. Unlock it and try again.";
     if (code == "background_not_running")
         return "This computer was not added to the account because Secpar's background part is not running.";
+    if (code == "offline")
+        return "That computer is off or not connected to the internet.";
+    if (code == "not_reachable")
+        return "That computer did not answer. Check that both computers are on the same network.";
     if (code == "signed_out")
         return QString();
     return "That did not work (" + code + "). Try again.";
@@ -72,6 +76,26 @@ void Backend::takeState(const QJsonObject &state)
     m_handle = state["handle"].toString();
     if (!m_signedIn)
         m_devices.clear();
+    if (!state["connected_to_host"].toBool())
+        m_connectedId.clear();
+}
+
+void Backend::connectTo(const QString &id)
+{
+    m_message.clear();
+    m_connectingId = id;
+    ask({{"do", "connect"}, {"id", id}}, [this, id](const QJsonObject &answer) {
+        m_connectingId.clear();
+        if (answer["ok"].toBool())
+            m_connectedId = id;
+        else
+            m_message = explain(answer);
+    });
+}
+
+void Backend::disconnect()
+{
+    ask({{"do", "disconnect"}}, [this](const QJsonObject &) { m_connectedId.clear(); });
 }
 
 void Backend::loadDevices()

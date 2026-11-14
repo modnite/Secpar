@@ -12,6 +12,7 @@
 //   --test-account <origin> <address>   use a test account service on this computer
 //   --memory-store           keep the session out of the system's password store
 //   --test-sign-in <file>    sign in as the first account of a local test accounts file
+//   --test-connect           three seconds later, connect to the first computer that is on
 #include "backend.h"
 
 #include <QDir>
@@ -61,6 +62,18 @@ int main(int argc, char *argv[])
     if (accounts.open(QIODevice::ReadOnly)) {
         const QJsonObject first = QJsonDocument::fromJson(accounts.readAll()).object()["accounts"].toArray().first().toObject();
         backend.signIn(first["email"].toString(), first["password"].toString());
+    }
+
+    if (args.contains("--test-connect")) {
+        QTimer::singleShot(3000, &backend, [&backend] {
+            for (const QVariant &entry : backend.property("devices").toList()) {
+                const QVariantMap device = entry.toMap();
+                if (device["online"].toBool() && !device["this"].toBool()) {
+                    backend.connectTo(device["id"].toString());
+                    break;
+                }
+            }
+        });
     }
 
     QQmlApplicationEngine engine;

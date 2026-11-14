@@ -46,6 +46,7 @@ class Database {
     this.db.exec(readFileSync(new URL("../migrations/0007_host_presence.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0008_keyboard_and_mouse.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0009_devices.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0010_device_reach.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -1115,6 +1116,28 @@ describe("Secpar 4 access list with the device's own key", () => {
     const { payload } = await jwtVerify(access, await importJWK(jwks.keys[0], "ES256"), { issuer: base, audience: "secpar-host" });
     expect(payload.sub).toBe(await deviceFingerprint(deviceFiles("a").certificate));
     expect((payload.devices as { fingerprint: string }[]).map((d) => d.fingerprint)).toEqual([await deviceFingerprint(deviceFiles("b").certificate)]);
+  });
+
+  it("records where a hosting device says it can be reached, for the owner only", async () => {
+    await enrol("a", "alice", { hosts: true });
+    type Listed = { online: boolean; reach: { port: number; addresses: string[] } | null };
+    const listed = async () => ((await (await call("/v1/devices", "alice")).json()) as { devices: Listed[] }).devices[0];
+    expect(await listed()).toMatchObject({ online: false, reach: null });
+    const reach = { port: 47400, addresses: ["192.168.1.20", "fd00::20"] };
+    expect((await request("a", { reach })).status).toBe(200);
+    expect(await listed()).toMatchObject({ online: true, reach });
+    // The signed list for hosts says nothing about addresses.
+    const { access } = (await (await request("a", { reach })).json()) as { access: string };
+    expect(Buffer.from(access.split(".")[1], "base64url").toString()).not.toContain("192.168.1.20");
+    // A report that is not a port and literal addresses is not kept, and the device shows as offline.
+    for (const bad of [{ port: 0, addresses: ["192.168.1.20"] }, { port: 47400, addresses: ["example.com"] }, { port: 47400, addresses: [] }, { port: 47400, addresses: Array(9).fill("10.0.0.1") }]) {
+      expect((await request("a", { reach: bad })).status).toBe(200);
+      expect(await listed()).toMatchObject({ online: false, reach: null });
+    }
+    // A report that is too old no longer counts.
+    expect((await request("a", { reach })).status).toBe(200);
+    db.db.prepare("UPDATE devices SET reach_seen=reach_seen-1201").run();
+    expect(await listed()).toMatchObject({ online: false, reach: null });
   });
 
   it("refuses another key, another purpose, an enrolment token, and devices that do not host or are gone", async () => {

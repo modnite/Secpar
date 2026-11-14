@@ -17,6 +17,9 @@ class Backend : public QObject
     Q_PROPERTY(bool busy MEMBER m_busy NOTIFY changed)
     Q_PROPERTY(QString message MEMBER m_message NOTIFY changed)
     Q_PROPERTY(QVariantList devices MEMBER m_devices NOTIFY changed)
+    // The computer this one has a tunnel to, and the one it is trying to reach.
+    Q_PROPERTY(QString connectedId MEMBER m_connectedId NOTIFY changed)
+    Q_PROPERTY(QString connectingId MEMBER m_connectingId NOTIFY changed)
 
 public:
     explicit Backend(const QJsonObject &configuration, const QString &computerName, QObject *parent = nullptr);
@@ -25,6 +28,8 @@ public:
     Q_INVOKABLE void signIn(const QString &email, const QString &password);
     Q_INVOKABLE void signOut();
     Q_INVOKABLE void removeDevice(const QString &id);
+    Q_INVOKABLE void connectTo(const QString &id);
+    Q_INVOKABLE void disconnect();
 
 signals:
     void changed();
@@ -41,5 +46,7 @@ private:
     QString m_handle;
     QString m_computer;
     QString m_message;
+    QString m_connectedId;
+    QString m_connectingId;
     QVariantList m_devices;
 };
