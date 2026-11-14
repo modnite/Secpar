@@ -1091,3 +1091,46 @@ describe("Secpar 4 devices", () => {
     expect((await accessList(host.id)).devices).toEqual([]);
   });
 });
+
+describe("Secpar 4 access list with the device's own key", () => {
+  async function request(n: string, changes: Record<string, unknown> = {}, signer = n, typ = "secpar-device-request+jwt") {
+    const { certificate } = deviceFiles(n);
+    const fingerprint = await deviceFingerprint(certificate);
+    const proof = await new SignJWT({ purpose: "secpar-access", ...changes })
+      .setProtectedHeader({ alg: "ES256", typ })
+      .setIssuer("secpar-device").setSubject(fingerprint).setAudience(base).setIssuedAt().setExpirationTime("60s")
+      .sign(await importPKCS8(deviceFiles(signer).key, "ES256"));
+    return call("/v1/device/access", null, "POST", { certificate, proof });
+  }
+
+  it("gives a hosting device its list without a session, and the same list the owner sees", async () => {
+    await enrol("a", "alice", { hosts: true });
+    await enrol("b", "alice");
+    const time = await call("/v1/device/time", null);
+    expect(Math.abs(((await time.json()) as { now: number }).now - Date.now() / 1000)).toBeLessThan(5);
+    const response = await request("a");
+    expect(response.status).toBe(200);
+    const { access } = (await response.json()) as { access: string };
+    const jwks = (await (await call("/.well-known/jwks.json", null)).json()) as { keys: Record<string, unknown>[] };
+    const { payload } = await jwtVerify(access, await importJWK(jwks.keys[0], "ES256"), { issuer: base, audience: "secpar-host" });
+    expect(payload.sub).toBe(await deviceFingerprint(deviceFiles("a").certificate));
+    expect((payload.devices as { fingerprint: string }[]).map((d) => d.fingerprint)).toEqual([await deviceFingerprint(deviceFiles("b").certificate)]);
+  });
+
+  it("refuses another key, another purpose, an enrolment token, and devices that do not host or are gone", async () => {
+    await enrol("a", "alice", { hosts: true });
+    await enrol("b", "alice");
+    // Device b's key cannot ask for device a's list.
+    expect((await request("a", {}, "b")).status).toBe(403);
+    expect((await request("a", { purpose: "secpar-device" })).status).toBe(403);
+    expect((await request("a", {}, "a", "secpar-device+jwt")).status).toBe(403);
+    // Not hosting, and never enrolled.
+    expect((await request("b")).status).toBe(404);
+    expect((await request("c")).status).toBe(404);
+    // Removed from the account.
+    const host = (await devices()).find((d) => d.hosts)!;
+    expect((await request("a")).status).toBe(200);
+    expect((await call(`/v1/devices/${host.id}`, "alice", "DELETE")).status).toBe(204);
+    expect((await request("a")).status).toBe(404);
+  });
+});

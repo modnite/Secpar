@@ -1,5 +1,5 @@
 import { hostRoutes } from "./hosts";
-import { deviceRoutes } from "./devices";
+import { deviceKeyRoutes, deviceRoutes } from "./devices";
 import { EFFECTIVE, flags, friendSettings, saveSettings } from "./settings";
 import { passwordRoutes } from "./passwords";
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
@@ -231,6 +231,8 @@ export async function handle(
     const hostApi = {body,fail:deny,hash,limit:(r:Request,_env:unknown,operation:string,maximum:number)=>limit(r,env,operation,maximum)};
     const machineResponse=await hostRoutes(request,env,null,hostApi);
     if(machineResponse)return machineResponse;
+    const deviceKeyResponse = await deviceKeyRoutes(request, env, { ...hostApi, signing: () => signing(env) });
+    if (deviceKeyResponse) return deviceKeyResponse;
     const me = await user(request, env);
     const ownerHostResponse=await hostRoutes(request,env,me,hostApi);
     if(ownerHostResponse)return ownerHostResponse;

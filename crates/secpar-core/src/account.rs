@@ -256,17 +256,37 @@ pub fn verify_access(access: &str, keys: &[Key], origin: &str, host: &Fingerprin
     })
 }
 
-#[derive(Deserialize)]
-struct Challenge {
-    challenge: String,
-    owner: String,
-    origin: String,
-    issued_at: u64,
-    expires_at: u64,
+/// A one-use enrolment challenge from the service. Not a secret.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Challenge {
+    pub challenge: String,
+    pub owner: String,
+    pub origin: String,
+    pub issued_at: u64,
+    pub expires_at: u64,
 }
-/// The enrolment proof: a token signed with the device certificate's own key that
-/// names the account, the one-use challenge and this certificate.
-fn prove(identity: &Identity, challenge: &Challenge, origin: &str, name: &str, platform: Platform, hosts: bool) -> Result<String> {
+/// A device certificate with a token signed by its key. Not a secret, and only
+/// usable for the one purpose the token names.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Proof {
+    pub certificate: String,
+    pub proof: String,
+}
+/// A token signed with the device certificate's own key.
+fn token(identity: &Identity, typ: &str, claims: serde_json::Value) -> Result<String> {
+    let header = serde_json::json!({"alg": "ES256", "typ": typ});
+    let input = format!("{}.{}", URL_SAFE_NO_PAD.encode(header.to_string()), URL_SAFE_NO_PAD.encode(claims.to_string()));
+    let rng = SystemRandom::new();
+    let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, identity.key_der(), &rng)
+        .map_err(|_| Error::Invalid("The device identity cannot sign for the account service"))?;
+    let signature = key.sign(&rng, input.as_bytes()).map_err(|_| Error::Invalid("The device identity cannot sign for the account service"))?;
+    Ok(format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature.as_ref())))
+}
+/// The enrolment proof: names the account, the one-use challenge and this
+/// certificate. On a hosting computer the part that holds the device key makes
+/// this, and the signed-in app hands it to the service, so neither the password
+/// nor the session ever reaches the part that runs before login.
+pub fn enrolment(identity: &Identity, challenge: &Challenge, origin: &str, name: &str, platform: Platform, hosts: bool) -> Result<Proof> {
     const BAD: Error = Error::Invalid("The account service sent an enrolment challenge Secpar cannot use");
     let lower_hex = |s: &str| s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
     if challenge.origin != origin
@@ -278,7 +298,10 @@ fn prove(identity: &Identity, challenge: &Challenge, origin: &str, name: &str, p
     {
         return Err(BAD);
     }
-    let header = serde_json::json!({"alg": "ES256", "typ": "secpar-device+jwt"});
+    let name = name.trim();
+    if name.is_empty() || name.encode_utf16().count() > 80 {
+        return Err(Error::Invalid("Use a device name of 1 to 80 characters"));
+    }
     let claims = serde_json::json!({
         "iss": "secpar-device", "aud": origin, "sub": challenge.owner,
         "purpose": "secpar-device", "challenge": challenge.challenge,
@@ -287,12 +310,7 @@ fn prove(identity: &Identity, challenge: &Challenge, origin: &str, name: &str, p
         // The service's own time, so a wrong clock here cannot spoil the proof.
         "iat": challenge.issued_at, "exp": (challenge.issued_at + 90).min(challenge.expires_at),
     });
-    let input = format!("{}.{}", URL_SAFE_NO_PAD.encode(header.to_string()), URL_SAFE_NO_PAD.encode(claims.to_string()));
-    let rng = SystemRandom::new();
-    let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, identity.key_der(), &rng)
-        .map_err(|_| Error::Invalid("The device identity cannot sign an enrolment proof"))?;
-    let signature = key.sign(&rng, input.as_bytes()).map_err(|_| Error::Invalid("The enrolment proof could not be signed"))?;
-    Ok(format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature.as_ref())))
+    Ok(Proof { certificate: pem(identity.certificate_der()), proof: token(identity, "secpar-device+jwt", claims)? })
 }
 fn pem(certificate: &[u8]) -> String {
     let encoded = STANDARD.encode(certificate);
@@ -372,19 +390,45 @@ impl Service {
     /// Enrols this installation under the signed-in account. Doing it again with
     /// the same identity updates the name and role; it never makes a second device.
     pub async fn enrol(&self, session: &Session, identity: &Identity, name: &str, platform: Platform, hosts: bool) -> Result<Device> {
-        let name = name.trim();
-        if name.is_empty() || name.encode_utf16().count() > 80 {
-            return Err(Error::Invalid("Use a device name of 1 to 80 characters"));
-        }
+        let challenge = self.challenge(session).await?;
+        self.submit(session, &enrolment(identity, &challenge, &self.origin, name, platform, hosts)?).await
+    }
+    /// The first half of enrolling, for when another part holds the device key.
+    pub async fn challenge(&self, session: &Session) -> Result<Challenge> {
         let challenge: Challenge = self.json(self.http.post(self.url("/v1/devices/challenge")).bearer_auth(&session.token)).await?;
         if challenge.owner != session.user.id {
             return Err(Error::Invalid("The account service sent an enrolment challenge Secpar cannot use"));
         }
-        let body = serde_json::json!({
-            "certificate": pem(identity.certificate_der()),
-            "proof": prove(identity, &challenge, &self.origin, name, platform, hosts)?,
+        Ok(challenge)
+    }
+    /// The second half: hands the proof made by `enrolment` to the service.
+    pub async fn submit(&self, session: &Session, proof: &Proof) -> Result<Device> {
+        self.json(self.http.post(self.url("/v1/devices")).bearer_auth(&session.token).json(proof)).await
+    }
+
+    /// Fetches and checks this hosting device's access list using only its own
+    /// key, so it works before anyone has logged in to the computer. Returns the
+    /// signed text to save, and what it says.
+    pub async fn device_access(&self, identity: &Identity, keys: &[Key]) -> Result<(String, AccessList)> {
+        #[derive(Deserialize)]
+        struct Time {
+            now: u64,
+        }
+        #[derive(Deserialize)]
+        struct Signed {
+            access: String,
+        }
+        // Dated with the service's time, so a wrong clock here does not matter.
+        let Time { now: at } = self.json(self.http.get(self.url("/v1/device/time"))).await?;
+        let host = identity.fingerprint();
+        let claims = serde_json::json!({
+            "iss": "secpar-device", "aud": self.origin, "sub": hex(&host),
+            "purpose": "secpar-access", "iat": at, "exp": at + 60,
         });
-        self.json(self.http.post(self.url("/v1/devices")).bearer_auth(&session.token).json(&body)).await
+        let body = Proof { certificate: pem(identity.certificate_der()), proof: token(identity, "secpar-device-request+jwt", claims)? };
+        let signed: Signed = self.json(self.http.post(self.url("/v1/device/access")).json(&body)).await?;
+        let list = verify_access(&signed.access, keys, &self.origin, &host, at)?;
+        Ok((signed.access, list))
     }
 
     pub async fn devices(&self, session: &Session) -> Result<Vec<Device>> {

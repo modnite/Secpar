@@ -2,7 +2,10 @@
 //!
 //! Start `node cloud/accounts/test/local-server.mjs <port> <file>` and run with
 //! `SECPAR_TEST_ACCOUNTS=<file> cargo test --test account_service -- --ignored`.
-use secpar_core::account::{verify_access, Error, Platform, Service};
+use secpar_core::{
+    account::{verify_access, Error, Platform, Service},
+    hosting::{Access, Refreshed},
+};
 use secpar_tunnel::Identity;
 use serde::Deserialize;
 
@@ -73,12 +76,33 @@ async fn sign_in_enrol_and_fetch_the_access_list() {
         Err(Error::Refused { status: 404, .. })
     ));
 
-    // Removing the laptop drops it from the next list.
-    service.remove(&session, &second.id).await.unwrap();
-    let (_, list) = service.access(&session, &first, &desktop.fingerprint(), &keys).await.unwrap();
-    assert!(list.devices.is_empty());
+    // The hosting device gets the same list with only its own key, as it must
+    // before anyone has logged in. A device that does not host gets nothing.
+    let (_, own) = service.device_access(&desktop, &keys).await.unwrap();
+    assert_eq!(own.devices, list.devices);
+    assert!(matches!(service.device_access(&laptop, &keys).await, Err(Error::Refused { status: 404, .. })));
 
-    // Nothing answers on a closed port.
+    // The hosting side keeps the list, and keeps using it while the service is away.
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("access.json");
+    let access = Access::open(&origin, desktop.fingerprint(), file.clone(), at);
+    assert!(access.allowed(at).is_empty());
+    assert_eq!(access.refresh(&service, &desktop).await, Refreshed::Updated);
+    assert_eq!(access.allowed(at), vec![laptop.fingerprint()]);
     let nowhere = Service::local_test(&origin, "http://127.0.0.1:9").unwrap();
     assert_eq!(nowhere.keys().await, Err(Error::Unreachable));
+    assert_eq!(access.refresh(&nowhere, &desktop).await, Refreshed::Kept(Error::Unreachable));
+    assert_eq!(access.allowed(at), vec![laptop.fingerprint()]);
+    assert_eq!(Access::open(&origin, desktop.fingerprint(), file.clone(), at).allowed(at), vec![laptop.fingerprint()]);
+
+    // Removing the laptop from the account drops it at the next refresh.
+    service.remove(&session, &second.id).await.unwrap();
+    assert_eq!(access.refresh(&service, &desktop).await, Refreshed::Updated);
+    assert!(access.allowed(at).is_empty());
+
+    // Removing the hosting device itself leaves it with no list at all.
+    service.remove(&session, &first.id).await.unwrap();
+    assert_eq!(access.refresh(&service, &desktop).await, Refreshed::Removed);
+    assert!(!file.exists());
 }

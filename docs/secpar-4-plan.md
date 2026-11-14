@@ -183,6 +183,33 @@ list fetched and verified, list refused for another device, removed device gone
 from the next list, closed port reported as unreachable. Not checked: the live
 service (not deployed), Linux and Android, and TLS to the real address.
 
+**Hosting before login, and who may connect (2026-11-14).** Decision: on a
+hosting computer the part that runs before login holds the device key and never
+holds the password or the session. Two consequences:
+
+- Enrolling is split in two. The signed-in window asks the service for a
+  challenge (`Service::challenge`), the part with the key signs it
+  (`account::enrolment`), and the window hands the proof in (`Service::submit`).
+- The hosting part fetches its own list with only its key: `GET /v1/device/time`
+  for the service's time, then `POST /v1/device/access` with the certificate and a
+  token of type `secpar-device-request+jwt` signed by it. A device that does not
+  host, was removed, or signs with another key gets nothing.
+
+`crates/secpar-core/src/hosting.rs` (`Access`) turns the list into the answer the
+tunnel needs. Allowed: the owner's other devices, trusted friends' devices, and
+friends who are asked about each time only while the owner's acceptance lasts.
+The last list is saved with the service's keys and checked again at start, so it
+works offline until it expires (7 days). An unreachable service keeps the saved
+list; a service that no longer knows the device as a host clears it.
+
+Checked on Windows: 17 unit tests, 66 service tests, and the end-to-end run
+against the local service (fetch with the device key, offline use, restart from
+the saved file, removed laptop dropped, removed host cleared). Not done: where
+the hosting part keeps the device key on each system, the local channel between
+the window and the hosting part, the request a friend sends to be accepted, and
+handing `Access::allowed` to the tunnel and the engine's pairing in a running
+hosting service.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and
