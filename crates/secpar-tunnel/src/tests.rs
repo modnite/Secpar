@@ -164,3 +164,29 @@ async fn punching_sends_from_the_tunnel_port() {
     let (_, from) = within(device.recv_from(&mut packet)).await.unwrap();
     assert_eq!(from.port(), at.port());
 }
+
+#[tokio::test]
+async fn a_device_can_ask_the_host_itself_and_the_host_knows_who_asks() {
+    let (host_id, device_id) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let host = serve(
+        "127.0.0.1:0".parse().unwrap(),
+        &host_id,
+        Allowed::new([device_id.fingerprint()]),
+        "127.0.0.1".parse().unwrap(),
+        Ports { tcp: vec![], udp: vec![] },
+    )
+    .await
+    .unwrap();
+    let address = host.local_addr().unwrap();
+    let ports = Ports { tcp: vec![], udp: vec![] };
+    let client = connect(address, &device_id, host_id.fingerprint(), "127.0.0.1".parse().unwrap(), ports).await.unwrap();
+    // Nobody answers yet.
+    assert!(client.request(b"hello").await.is_err());
+    host.on_request(Arc::new(|device, request| {
+        Box::pin(async move { [&device[..], &request[..]].concat() })
+    }));
+    let answer = client.request(b"hello").await.unwrap();
+    assert_eq!(&answer[..32], &device_id.fingerprint()[..]);
+    assert_eq!(&answer[32..], b"hello");
+    assert!(client.request(&vec![0u8; MAX_REQUEST + 1]).await.is_err());
+}

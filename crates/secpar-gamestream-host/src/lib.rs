@@ -74,7 +74,9 @@ impl Config {
     fn text(&self) -> Result<String> {
         self.validate()?;
         let mut text = format!(
-            "sunshine_name = Secpar\nport = {}\norigin_web_ui_allowed = pc\n",
+            // The engine listens on this computer only; devices reach it through
+            // the Secpar tunnel.
+            "sunshine_name = Secpar\nport = {}\norigin_web_ui_allowed = pc\nbind_address = 127.0.0.1\n",
             self.base_port
         );
         // The engine must not change the computer it runs on: no audio driver
@@ -409,6 +411,10 @@ impl Host {
             return Err(e);
         }
         Ok(())
+    }
+    /// Every grant made so far, including revoked ones.
+    pub async fn grants(&self) -> Vec<Grant> {
+        self.journal.lock().await.records().to_vec()
     }
     /// Revoke every client granted to this owner's device. Recorded durably
     /// first, then removed from the host and verified gone.

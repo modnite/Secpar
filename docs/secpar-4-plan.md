@@ -210,6 +210,37 @@ the window and the hosting part, the request a friend sends to be accepted, and
 handing `Access::allowed` to the tunnel and the engine's pairing in a running
 hosting service.
 
+**Hosting put together (2026-11-14).** `crates/secpar-hosting` joins the three
+parts: the access list decides who the tunnel lets in, and the engine behind the
+tunnel only pairs with a device that came in through it.
+
+- The engine now listens on this computer only (`bind_address = 127.0.0.1` in
+  the supervisor's config).
+- The tunnel has its own small channel to the host (`Client::request`,
+  `Host::on_request`). The host knows which device asks from the tunnel's
+  certificate check, not from anything the device says.
+- Pairing: the connecting side starts its stream component's pairing against the
+  tunnel's local end and asks the host over that channel to complete it. The
+  host takes the account and the device name from the signed list and records
+  the grant for that device. No PIN or prompt is shown to anyone.
+- `Hosting::apply` closes the tunnels of devices that may no longer connect and
+  takes the engine pairing away from devices the list no longer names. A friend
+  whose acceptance ran out only loses the tunnel. A device that returns to the
+  list must make a new stream identity (the host answers `revoked`).
+- A lost or expired list lets nobody in but revokes nothing.
+
+Checked: 5 tests with real tunnels and a stand-in engine (Windows), and
+`integrations/gamestream/kde-hosting-check.sh` in a throwaway container on the
+build box with the real engine and stream component: not reachable on the
+network address, unlisted device refused, listed device paired through the
+tunnel, grant recorded for that device, removal closed the tunnel and removed
+the engine's certificate, old stream identity refused afterwards, new one
+paired. That run pairs only; the engine there had no usable display for its
+X11 capture setting, so no stream was started. Not done: a stream through this
+path, the hosting service as an installed background service, where it keeps
+the device key, the channel to the window, the friend's request to be accepted,
+and keyboard/mouse limits for guests.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and

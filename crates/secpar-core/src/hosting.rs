@@ -131,6 +131,14 @@ impl Access {
         known.into_iter().filter(|device| self.peer(device, at).is_some()).collect()
     }
 
+    /// Every device the list names, whether or not it may connect right now, and
+    /// the account that owns this hosting device. `None` when there is no list.
+    pub fn listed(&self) -> Option<(String, Vec<Fingerprint>)> {
+        let state = self.state.lock().unwrap();
+        let list = state.list.as_ref()?;
+        Some((list.owner.clone(), list.devices.iter().map(|d| d.fingerprint).chain(list.guests.iter().map(|g| g.fingerprint)).collect()))
+    }
+
     /// When the list in use stops being valid, if there is one.
     pub fn expires_at(&self) -> Option<u64> {
         self.state.lock().unwrap().list.as_ref().map(|l| l.expires_at)

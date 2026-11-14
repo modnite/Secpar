@@ -148,14 +148,35 @@ fn peer_fingerprint(connection: &quinn::Connection) -> Option<Fingerprint> {
     Some(fingerprint(certificates.first()?.as_ref()))
 }
 
+/// Answers a request a connected device sends to the host itself, not to the
+/// engine. It is given the device's certificate fingerprint, which the tunnel
+/// has already checked, and the request; what it returns is sent back.
+pub type Handler = Arc<
+    dyn Fn(Fingerprint, Vec<u8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<u8>> + Send>>
+        + Send
+        + Sync,
+>;
+type SharedHandler = Arc<std::sync::RwLock<Option<Handler>>>;
+/// The largest request or answer on the host's own channel.
+pub const MAX_REQUEST: usize = 8192;
+
+/// Stream "port" for requests to the host itself. Port 0 is the readiness check;
+/// neither is ever an engine port.
+const REQUEST: u16 = 1;
+
 /// The host end. Dropping it stops accepting and closes every connection.
 pub struct Host {
     endpoint: quinn::Endpoint,
     puncher: std::net::UdpSocket,
     allowed: Arc<Allowed>,
     connections: Connections,
+    handler: SharedHandler,
 }
 impl Host {
+    /// Sets who answers requests to the host itself. Without one they get no answer.
+    pub fn on_request(&self, handler: Handler) {
+        *self.handler.write().unwrap() = Some(handler);
+    }
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint
             .local_addr()
@@ -226,16 +247,17 @@ pub fn serve_on(
     )
     .map_err(opened)?;
     let connections = Connections::default();
-    let (accepting, open) = (endpoint.clone(), connections.clone());
+    let handler = SharedHandler::default();
+    let (accepting, open, handling) = (endpoint.clone(), connections.clone(), handler.clone());
     tokio::spawn(async move {
         while let Some(incoming) = accepting.accept().await {
-            let (ports, open) = (ports.clone(), open.clone());
+            let (ports, open, handling) = (ports.clone(), open.clone(), handling.clone());
             tokio::spawn(async move {
                 let Ok(connection) = incoming.await else { return };
                 let Some(device) = peer_fingerprint(&connection) else { return };
                 let id = connection.stable_id();
                 open.lock().unwrap().push((device, connection.clone()));
-                host_connection(connection, engine, ports).await;
+                host_connection(connection, device, handling, engine, ports).await;
                 open.lock().unwrap().retain(|(_, c)| c.stable_id() != id);
             });
         }
@@ -245,16 +267,17 @@ pub fn serve_on(
         puncher,
         allowed,
         connections,
+        handler,
     })
 }
 
-async fn host_connection(connection: quinn::Connection, engine: IpAddr, ports: Ports) {
+async fn host_connection(connection: quinn::Connection, device: Fingerprint, handler: SharedHandler, engine: IpAddr, ports: Ports) {
     let streams = {
         let connection = connection.clone();
         let tcp = ports.tcp.clone();
         async move {
             while let Ok((mut send, mut recv)) = connection.accept_bi().await {
-                let tcp = tcp.clone();
+                let (tcp, handler) = (tcp.clone(), handler.clone());
                 tokio::spawn(async move {
                     let mut port = [0u8; 2];
                     if recv.read_exact(&mut port).await.is_err() {
@@ -264,6 +287,16 @@ async fn host_connection(connection: quinn::Connection, engine: IpAddr, ports: P
                     if port == 0 {
                         let _ = send.write_all(&[1]).await;
                         let _ = send.finish();
+                        return;
+                    }
+                    if port == REQUEST {
+                        let Ok(request) = recv.read_to_end(MAX_REQUEST).await else { return };
+                        let Some(handler) = handler.read().unwrap().clone() else { return };
+                        let answer = handler(device, request).await;
+                        if answer.len() <= MAX_REQUEST {
+                            let _ = send.write_all(&answer).await;
+                            let _ = send.finish();
+                        }
                         return;
                     }
                     if !tcp.contains(&port) {
@@ -342,6 +375,25 @@ pub struct Client {
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Client {
+    /// Asks the host itself something, outside the engine's traffic, and waits
+    /// for its answer. The host knows which device is asking from the tunnel.
+    pub async fn request(&self, request: &[u8]) -> Result<Vec<u8>> {
+        const FAILED: Error = Error("The host did not answer");
+        if request.len() > MAX_REQUEST {
+            return Err(Error("The request is too large"));
+        }
+        let exchange = async {
+            let (mut send, mut recv) = self.connection.open_bi().await.ok()?;
+            send.write_all(&REQUEST.to_be_bytes()).await.ok()?;
+            send.write_all(request).await.ok()?;
+            send.finish().ok()?;
+            recv.read_to_end(MAX_REQUEST).await.ok()
+        };
+        match tokio::time::timeout(Duration::from_secs(30), exchange).await {
+            Ok(Some(answer)) if !answer.is_empty() => Ok(answer),
+            _ => Err(FAILED),
+        }
+    }
     /// Resolves when the tunnel is gone.
     pub async fn closed(&self) {
         self.connection.closed().await;
