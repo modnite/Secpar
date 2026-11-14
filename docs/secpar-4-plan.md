@@ -137,6 +137,16 @@ a real internet path.
 - Secrets live in the system credential store, with a failure to read treated as an
   error shown to the user, never as "no credential".
 
+Built 2026-11-13 (`crates/secpar-core`, identity only): the device identity is a
+certificate and key in the system credential store, used directly as the tunnel
+identity. A store that cannot be read is an error and never produces a new
+identity; a new identity is used only after it was saved and read back; the
+fingerprint is also noted in a plain file, so a key that has really gone is
+reported as missing and only an explicit reset makes the installation a new
+device. Unit tests cover each rule, and a round trip through the real Windows
+credential store passed. Not done: the Linux credential store on a real desktop,
+storage for the host service (which runs without a user session), Android.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and

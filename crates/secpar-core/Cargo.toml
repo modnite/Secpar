@@ -1,0 +1,13 @@
+[package]
+name = "secpar-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+
+[dependencies]
+keyring = { version = "3.6.3", features = ["windows-native", "sync-secret-service", "crypto-rust"] }
+secpar-tunnel = { path = "../secpar-tunnel" }
+
+[dev-dependencies]
+tempfile = "3"
