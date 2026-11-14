@@ -2,10 +2,13 @@
 //!
 //!   secpar-service --state <folder> --channel <name> [--engine <executable>]
 //!                  [--tunnel-port <port>] [--test-account <origin> <address>]
+//!                  [--test-identity]
 //!
 //! With `--engine` this computer hosts. `--channel` is a pipe name on Windows and
 //! a socket file path on Linux. `--test-account` points at a test account
-//! service on this computer instead of the real one.
+//! service on this computer instead of the real one. `--test-identity` uses a
+//! throwaway device identity and leaves the system credential store alone; it is
+//! only accepted together with `--test-account`.
 use secpar_core::{account, identity, store::SystemStore};
 use secpar_gamestream_host::{Capture, Config, Encoder, Host};
 use secpar_hosting::ENGINE_BASE;
@@ -20,7 +23,7 @@ fn fail(message: impl std::fmt::Display) -> ! {
 #[tokio::main]
 async fn main() {
     let mut args = std::env::args().skip(1);
-    let (mut state, mut name, mut engine, mut port, mut test) = (None, None, None, 0u16, None);
+    let (mut state, mut name, mut engine, mut port, mut test, mut throwaway) = (None, None, None, 0u16, None, false);
     while let Some(arg) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| fail(format!("{arg} needs a value")));
         match arg.as_str() {
@@ -29,6 +32,7 @@ async fn main() {
             "--engine" => engine = Some(PathBuf::from(value())),
             "--tunnel-port" => port = value().parse().unwrap_or_else(|_| fail("--tunnel-port needs a number")),
             "--test-account" => test = Some((value(), value())),
+            "--test-identity" => throwaway = true,
             _ => fail(format!("unknown option {arg}")),
         }
     }
@@ -47,7 +51,13 @@ async fn main() {
 
     // The device key lives in the system credential store. If it cannot be read,
     // or was lost, this part stops instead of becoming a new device by itself.
-    let identity = identity::device(&SystemStore, &state.join("device.txt")).unwrap_or_else(|error| fail(format!("device identity: {error:?}")));
+    let identity = if throwaway && test.is_some() {
+        secpar_tunnel::Identity::generate().unwrap_or_else(|error| fail(error.0))
+    } else if throwaway {
+        fail("--test-identity needs --test-account")
+    } else {
+        identity::device(&SystemStore, &state.join("device.txt")).unwrap_or_else(|error| fail(format!("device identity: {error:?}")))
+    };
     println!("device {}", identity::hex(&identity.fingerprint()));
 
     let engine = match engine {

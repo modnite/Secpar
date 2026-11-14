@@ -285,6 +285,29 @@ Linux user service), the program itself with the real credential store and real
 engine, starting the stream component from the window, the friend's request to
 be accepted, and guest keyboard/mouse limits.
 
+**The window signs in (2026-11-14).** `crates/secpar-app` is the window's
+non-drawing side, built as a library the Qt window loads (`secpar_app.dll`): one
+JSON request in, one answer out (`configure`, `state`, `sign_in`, `sign_out`,
+`devices`, `remove_device`). It keeps the session in the system credential
+store and asks the background part for anything that needs the device key.
+
+- Signing in enrols this computer in the same step. Signing in again keeps one
+  device.
+- Signing out takes this computer off the account, so it stops hosting for it.
+- A session the service no longer accepts is forgotten and the sign-in page
+  returns.
+
+The Qt window has a sign-in page (`SignInPage.qml`, `FlatField.qml`) and a
+`Backend` object that makes each call on a worker thread. Computers lists the
+account's other hosting computers; Settings shows the account and its devices.
+Connect is still off: a computer does not yet report where it can be reached.
+
+Checked on Windows: `crates/secpar-app/tests/window.rs` against the local
+account service and a real background part, and the built window run against
+the same, with captures in `docs/screenshots/secpar4/` (sign-in at 800x600 and
+640x400, Computers, Settings: Devices and Account). Not checked: typing into the
+sign-in page by hand, the real credential store from the window, Linux.
+
 ### 3.4 Servers and what they see
 
 The owner runs the account service and relay. Video, sound, input, clipboard and

@@ -9,6 +9,7 @@ Rectangle {
     property string owner      // empty for the user's own computers
     property bool online
     property string route      // "This network", "Direct", "Relay" or empty
+    property string status     // shown instead of the online state when set
     property int previewLimit: 10000   // tallest the preview may be
     signal connectRequested()
 
@@ -63,7 +64,7 @@ Rectangle {
                     Text {
                         Layout.fillWidth: true
                         text: {
-                            const state = tile.online ? (tile.route || "Online") : "Offline"
+                            const state = tile.status || (tile.online ? (tile.route || "Online") : "Offline")
                             return tile.owner ? tile.owner + " · " + state : state
                         }
                         color: Theme.textDim

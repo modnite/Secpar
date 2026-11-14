@@ -13,7 +13,11 @@ Item {
         { name: "Mika's desktop", owner: "Mika", online: true, route: "Relay" },
         { name: "Attic server", owner: "", online: false, route: "" }
     ]
-    readonly property var computers: sampleData ? sample : []
+    // The account's other hosting computers. Whether one is switched on is not
+    // known yet, so Connect stays off and the tile says what is known.
+    readonly property var own: backend.devices.filter(d => d.hosts && !d.this).map(d => (
+        { name: d.name, owner: "", online: false, route: "", status: "On your account" }))
+    readonly property var computers: sampleData ? sample : own
 
     ScrollView {
         anchors.fill: parent
@@ -42,6 +46,7 @@ Item {
                     owner: modelData.owner
                     online: modelData.online
                     route: modelData.route
+                    status: modelData.status || ""
                     previewLimit: grid.previewLimit
                 }
             }

@@ -5,7 +5,7 @@ import QtQuick.Layouts
 // Sections on the left, the chosen section's rows on the right.
 Item {
     id: page
-    property int section: 0
+    property int section: Math.max(0, Math.min(5, startSection))
     readonly property var sections: ["Hosting", "Connecting", "Controllers", "Account", "Devices", "About"]
     // Fictional rows for layout review only (--sample).
     readonly property var sampleRows: [
@@ -18,8 +18,15 @@ Item {
         [["This device", "Layout sample"]],
         []
     ]
+    readonly property var platforms: ({ windows: "Windows", linux: "Linux", android: "Android" })
+    readonly property var accountRows: [["Signed in as", backend.handle]]
+    readonly property var deviceRows: backend.devices.map(d => [
+        d.this ? d.name + " (this computer)" : d.name,
+        (platforms[d.platform] || d.platform) + (d.hosts ? ", hosts" : "")])
     readonly property var rows: section === 5 ? [["Version", appVersion], ["Licence", "GPL-3.0"]]
-                                              : (sampleData ? sampleRows[section] : [])
+                                              : sampleData ? sampleRows[section]
+                                              : section === 3 ? accountRows
+                                              : section === 4 ? deviceRows : []
 
     RowLayout {
         anchors.fill: parent
@@ -97,11 +104,21 @@ Item {
                     }
                 }
             }
+            FlatButton {
+                Layout.topMargin: Theme.gap
+                visible: page.section === 3 && !sampleData
+                text: backend.busy ? "Signing out" : "Sign out"
+                enabled: !backend.busy
+                onClicked: backend.signOut()
+            }
             Text {
-                visible: page.rows.length === 0
-                text: "Sign in to change these settings."
+                Layout.fillWidth: true
+                Layout.topMargin: 6
+                visible: page.section === 3 && !sampleData
+                text: "Signing out takes this computer off your account."
                 color: Theme.textDim
                 font.pixelSize: Theme.smallTextSize
+                wrapMode: Text.WordWrap
             }
             Item { Layout.fillHeight: true }
         }

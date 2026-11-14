@@ -13,6 +13,8 @@ ApplicationWindow {
     color: Theme.background
 
     property int tab: Math.max(0, Math.min(2, startTab))
+    // The layout sample shows the pages as they look when signed in.
+    readonly property bool signedIn: sampleData || backend.signedIn
 
     header: Rectangle {
         height: 48
@@ -36,7 +38,7 @@ ApplicationWindow {
                 font.pixelSize: Theme.smallTextSize
             }
             Repeater {
-                model: ["Computers", "Friends", "Settings"]
+                model: window.signedIn ? ["Computers", "Friends", "Settings"] : []
                 TopTab {
                     required property string modelData
                     required property int index
@@ -63,9 +65,14 @@ ApplicationWindow {
 
     StackLayout {
         anchors.fill: parent
+        visible: window.signedIn
         currentIndex: window.tab
         ComputersPage {}
         FriendsPage {}
         SettingsPage {}
+    }
+    SignInPage {
+        anchors.fill: parent
+        visible: !window.signedIn && backend.loaded
     }
 }
