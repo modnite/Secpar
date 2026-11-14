@@ -113,3 +113,54 @@ async fn a_port_the_host_does_not_offer_is_not_forwarded() {
     // The host drops the stream, so nothing is echoed back.
     assert!(within(stream.read_exact(&mut answer)).await.is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_address_that_answers_is_used() {
+    let (tcp_port, udp_port) = engine().await;
+    let ports = Ports { tcp: vec![tcp_port], udp: vec![udp_port] };
+    let (host_id, device) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let (_host, at) = host(&host_id, Allowed::new([device.fingerprint()]), ports.clone()).await;
+    // Nothing answers on the first address.
+    let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let dead = silent.local_addr().unwrap();
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    let _client = within(connect_on(socket, &[dead, at], &device, host_id.fingerprint(), LISTEN.parse().unwrap(), ports))
+        .await
+        .unwrap();
+    let mut stream = within(TcpStream::connect((LISTEN, tcp_port))).await.unwrap();
+    stream.write_all(b"second").await.unwrap();
+    let mut answer = [0u8; 6];
+    within(stream.read_exact(&mut answer)).await.unwrap();
+    assert_eq!(&answer, b"second");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_device_closes_its_tunnel_and_keeps_it_out() {
+    let (tcp_port, udp_port) = engine().await;
+    let ports = Ports { tcp: vec![tcp_port], udp: vec![udp_port] };
+    let (host_id, device) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let (host, at) = host(&host_id, Allowed::new([device.fingerprint()]), ports.clone()).await;
+    let client = within(connect(at, &device, host_id.fingerprint(), LISTEN.parse().unwrap(), ports.clone()))
+        .await
+        .unwrap();
+    assert_eq!(host.connected(), vec![device.fingerprint()]);
+    host.set_allowed([]);
+    within(client.closed()).await;
+    assert!(host.connected().is_empty());
+    drop(client);
+    let again = within(connect(at, &device, host_id.fingerprint(), LISTEN.parse().unwrap(), ports)).await;
+    assert!(again.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn punching_sends_from_the_tunnel_port() {
+    let (tcp_port, udp_port) = engine().await;
+    let ports = Ports { tcp: vec![tcp_port], udp: vec![udp_port] };
+    let host_id = Identity::generate().unwrap();
+    let (host, at) = host(&host_id, Allowed::new([]), ports).await;
+    let device = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    host.punch(&[device.local_addr().unwrap()]);
+    let mut packet = [0u8; 16];
+    let (_, from) = within(device.recv_from(&mut packet)).await.unwrap();
+    assert_eq!(from.port(), at.port());
+}

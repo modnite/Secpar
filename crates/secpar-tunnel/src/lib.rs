@@ -138,15 +138,50 @@ async fn splice(mut send: quinn::SendStream, mut recv: quinn::RecvStream, tcp: T
     tokio::join!(up, down);
 }
 
+type Connections = Arc<Mutex<Vec<(Fingerprint, quinn::Connection)>>>;
+
+fn peer_fingerprint(connection: &quinn::Connection) -> Option<Fingerprint> {
+    let certificates = connection
+        .peer_identity()?
+        .downcast::<Vec<rustls::pki_types::CertificateDer<'static>>>()
+        .ok()?;
+    Some(fingerprint(certificates.first()?.as_ref()))
+}
+
 /// The host end. Dropping it stops accepting and closes every connection.
 pub struct Host {
     endpoint: quinn::Endpoint,
+    puncher: std::net::UdpSocket,
+    allowed: Arc<Allowed>,
+    connections: Connections,
 }
 impl Host {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint
             .local_addr()
             .map_err(|_| Error("Tunnel has no local address"))
+    }
+    /// Send a small packet to each address from the tunnel's own port, so a
+    /// router in front of this host lets that device's packets in.
+    pub fn punch(&self, candidates: &[SocketAddr]) {
+        for candidate in candidates {
+            let _ = self.puncher.send_to(&[0], candidate);
+        }
+    }
+    /// Replace the allow-list and close the tunnel of every device no longer on it.
+    pub fn set_allowed(&self, devices: impl IntoIterator<Item = Fingerprint>) {
+        self.allowed.set(devices);
+        self.connections.lock().unwrap().retain(|(device, connection)| {
+            let keep = self.allowed.contains(device);
+            if !keep {
+                connection.close(1u32.into(), b"access removed");
+            }
+            keep
+        });
+    }
+    /// Devices with an open tunnel.
+    pub fn connected(&self) -> Vec<Fingerprint> {
+        self.connections.lock().unwrap().iter().map(|(device, _)| *device).collect()
     }
 }
 impl Drop for Host {
@@ -163,22 +198,54 @@ pub async fn serve(
     engine: IpAddr,
     ports: Ports,
 ) -> Result<Host> {
-    let mut config = quinn::ServerConfig::with_crypto(Arc::new(tls::server(identity, allowed)?));
+    let socket =
+        std::net::UdpSocket::bind(bind).map_err(|_| Error("Could not open the tunnel port"))?;
+    serve_on(socket, identity, allowed, engine, ports)
+}
+
+/// Like `serve`, on a socket the caller already owns, for example one whose
+/// public address was discovered for a direct connection. Call inside the runtime.
+pub fn serve_on(
+    socket: std::net::UdpSocket,
+    identity: &Identity,
+    allowed: Arc<Allowed>,
+    engine: IpAddr,
+    ports: Ports,
+) -> Result<Host> {
+    let mut config =
+        quinn::ServerConfig::with_crypto(Arc::new(tls::server(identity, allowed.clone())?));
     config.transport_config(transport());
-    let endpoint =
-        quinn::Endpoint::server(config, bind).map_err(|_| Error("Could not open the tunnel port"))?;
-    let accepting = endpoint.clone();
+    let opened = |_| Error("Could not open the tunnel port");
+    socket.set_nonblocking(true).map_err(opened)?;
+    let puncher = socket.try_clone().map_err(opened)?;
+    let endpoint = quinn::Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(config),
+        socket,
+        Arc::new(quinn::TokioRuntime),
+    )
+    .map_err(opened)?;
+    let connections = Connections::default();
+    let (accepting, open) = (endpoint.clone(), connections.clone());
     tokio::spawn(async move {
         while let Some(incoming) = accepting.accept().await {
-            let ports = ports.clone();
+            let (ports, open) = (ports.clone(), open.clone());
             tokio::spawn(async move {
-                if let Ok(connection) = incoming.await {
-                    host_connection(connection, engine, ports).await;
-                }
+                let Ok(connection) = incoming.await else { return };
+                let Some(device) = peer_fingerprint(&connection) else { return };
+                let id = connection.stable_id();
+                open.lock().unwrap().push((device, connection.clone()));
+                host_connection(connection, engine, ports).await;
+                open.lock().unwrap().retain(|(_, c)| c.stable_id() != id);
             });
         }
     });
-    Ok(Host { endpoint })
+    Ok(Host {
+        endpoint,
+        puncher,
+        allowed,
+        connections,
+    })
 }
 
 async fn host_connection(connection: quinn::Connection, engine: IpAddr, ports: Ports) {
@@ -304,30 +371,64 @@ pub async fn connect(
     } else {
         "[::]:0".parse().unwrap()
     };
-    let endpoint =
-        quinn::Endpoint::client(local).map_err(|_| Error("Could not open a tunnel socket"))?;
+    let socket =
+        std::net::UdpSocket::bind(local).map_err(|_| Error("Could not open a tunnel socket"))?;
+    connect_on(socket, &[host], identity, host_pin, listen, ports).await
+}
+
+/// Like `connect`, on a socket the caller already owns, trying several addresses
+/// for the same host. Addresses are tried in order a quarter of a second apart
+/// (put the LAN address first) and the first one that answers as the expected
+/// host and accepts this device is used.
+pub async fn connect_on(
+    socket: std::net::UdpSocket,
+    candidates: &[SocketAddr],
+    identity: &Identity,
+    host_pin: Fingerprint,
+    listen: IpAddr,
+    ports: Ports,
+) -> Result<Client> {
+    let opened = |_| Error("Could not open a tunnel socket");
+    socket.set_nonblocking(true).map_err(opened)?;
+    let endpoint = quinn::Endpoint::new(
+        quinn::EndpointConfig::default(),
+        None,
+        socket,
+        Arc::new(quinn::TokioRuntime),
+    )
+    .map_err(opened)?;
     let mut config = quinn::ClientConfig::new(Arc::new(tls::client(identity, host_pin)?));
     config.transport_config(transport());
-    let connection = endpoint
-        .connect_with(config, host, "secpar")
-        .map_err(|_| Error("Tunnel address is invalid"))?
-        .await
-        .map_err(|_| Error("Could not reach the host or it is not the expected computer"))?;
 
-    // The host only learns whether it accepts this device after the handshake,
-    // so ask before telling the caller the tunnel is usable.
-    let ready = async {
-        let (mut send, mut recv) = connection.open_bi().await.ok()?;
-        send.write_all(&[0, 0]).await.ok()?;
-        send.finish().ok()?;
-        let mut answer = [0u8; 1];
-        recv.read_exact(&mut answer).await.ok()?;
-        Some(())
-    };
-    match tokio::time::timeout(Duration::from_secs(8), ready).await {
-        Ok(Some(())) => {}
-        _ => return Err(Error("The host did not accept this device")),
+    let mut attempts = tokio::task::JoinSet::new();
+    for (order, &candidate) in candidates.iter().enumerate() {
+        let (endpoint, config) = (endpoint.clone(), config.clone());
+        attempts.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250 * order as u64)).await;
+            let attempt = async {
+                let connection = endpoint.connect_with(config, candidate, "secpar").ok()?.await.ok()?;
+                // The host only learns whether it accepts this device after the
+                // handshake, so ask before calling the tunnel usable.
+                let (mut send, mut recv) = connection.open_bi().await.ok()?;
+                send.write_all(&[0, 0]).await.ok()?;
+                send.finish().ok()?;
+                let mut answer = [0u8; 1];
+                recv.read_exact(&mut answer).await.ok()?;
+                Some(connection)
+            };
+            tokio::time::timeout(Duration::from_secs(8), attempt).await.ok().flatten()
+        });
     }
+    let mut connection = None;
+    while let Some(finished) = attempts.join_next().await {
+        if let Ok(Some(won)) = finished {
+            connection = Some(won);
+            break;
+        }
+    }
+    drop(attempts);
+    let connection = connection
+        .ok_or(Error("Could not reach the host, or it did not accept this device"))?;
 
     let mut tasks = Vec::new();
     for port in ports.tcp {

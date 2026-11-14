@@ -1,6 +1,7 @@
 # Secpar 4: rebuild plan
 
-Status: draft for the owner's approval, 2026-11-13. Nothing here is built yet.
+Status: approved by the owner and in progress since 2026-11-13. What is built and
+checked so far is recorded in sections 3 and 4.
 This replaces the 3.x design. Where it conflicts with older documents, this wins.
 
 ## 1. What Secpar is
@@ -101,11 +102,25 @@ on the container's network address; through the tunnel, pairing and a 16 second
 tests cover delivery, an unlisted device, a wrong host certificate and a port the
 host does not offer.
 
-Still to do for the tunnel: run it over the 3.x connection scheme's sockets
-(hole punching and the relay) instead of a plain address; removing access while a
-connection is open; behaviour on lossy or low-MTU paths, where QUIC's congestion
-control and packet size limits may need tuning for video; measurements at higher
-bitrates.
+Added the same day, with unit tests: the tunnel can run on a socket the caller
+supplies, try several addresses for one host in order and use the first that
+answers, send "punch" packets from its own port to a device's addresses, and
+close a device's open tunnel the moment it leaves the allow-list.
+
+How this maps onto the 3.x scheme (`docs/remote-protocol.md`), which stays:
+
+| 3.x piece | In Secpar 4 |
+| --- | --- |
+| Control messages over LAN or the rendezvous Worker | Kept for signalling: exchanging addresses and the allow-list |
+| One UDP stream socket per side, addresses found by STUN and UPnP | The tunnel's socket, passed to `serve_on` / `connect_on` |
+| Host sends probes to the device's addresses | `Host::punch` |
+| Device tries every host address | `connect_on` with the address list, LAN first |
+| TURN relay when punching fails | Not built yet: needs a socket wrapper that sends through `secpar-network`'s TURN client |
+
+Still to do for the tunnel: the relay wrapper; wiring to the signalling channel;
+behaviour on lossy or low-MTU paths, where QUIC's congestion control and packet
+size limits may need tuning for video; measurements at higher bitrates and over
+a real internet path.
 
 ### 3.3 Identity and access (replacing 3.x pairing)
 
@@ -369,6 +384,47 @@ folder is always `config` beside the executable.
 Pinned sources are in `upstream/pins.json`; `scripts/fetch-upstream.sh` fetches them
 and `--check` confirms each pinned commit exists upstream.
 
+### Desktop app window, first version (2026-11-13)
+
+`desktop-qt/` is the Qt Quick app, built on Windows with MSVC 2022 and Qt 6.12.0
+(`scripts/build-desktop-qt.cmd`). Qt 6.12.0 is the version Moonlight's own Windows
+builds use. It was fetched from download.qt.io with checksums verified, because
+the usual download tool does not yet understand Qt's folder layout from 6.11 on.
+
+What exists: the window with top tabs (Computers, Friends, Settings), the approved
+wordmark with the version beside it, computer tiles two per row at 640 wide,
+a friends list and a settings page with sections on the left. Icons are the pinned
+Lucide set. Two rows of tiles fit without scrolling at 640x400 and 800x600.
+
+It shows no real data yet. Without `--sample` every page is an empty state; with
+it the pages show fictional entries marked "Layout sample". Nothing is connected
+to the tunnel, the engines or an account. Captures from the running program are
+in `docs/screenshots/secpar4/`. Not built or run on Linux yet.
+
+### Windows as the connecting side (2026-11-13)
+
+The pinned, patched Moonlight stream component builds on Windows with MSVC 2022
+and Qt 6.12.0 (`scripts/build-stream-windows.cmd`), using Moonlight's own prebuilt
+Windows libraries (release v19, checksum in the script). Result: `SecparStream.exe`,
+2.8 MB before its libraries.
+
+Stream from the KDE test container on the build box to this PC over the wired LAN,
+20 seconds at 1280x720, 60 fps, H.264: paired by PIN; decoded in hardware
+(D3D11VA on the RTX 2060); 59.1 fps received and rendered; no network loss, 0.03%
+jitter drops; 1 ms latency. Nobody was asked to judge the picture. No sound, input
+or controllers.
+
+Measured size of the Qt parts the app window needs on Windows (`windeployqt`,
+release, no translations): 47.2 MB in 149 files, 18.4 MB zipped. The largest are
+Qt6Core 10.0, Qt6Gui 9.2, Qt6Quick 6.4 and Qt6Qml 5.1 MB.
+
+Open question raised by the owner the same day: Qt or an SDL-based window. In the
+pinned Moonlight source the streaming code is about 24,700 lines in 63 files, 55
+of which use SDL and 14 include a Qt header; the pairing and host communication
+code (about 4,600 lines) uses Qt throughout. The owner then said to stick to the
+plan, so the window stays on Qt and Moonlight's code stays unmodified. The release
+also stays as planned: everything in one release, no reduced first build.
+
 ## 5. Order of work
 
 1. Mock-ups of the main screens (computers, friends, settings, in-stream menu) at
@@ -390,8 +446,9 @@ and `--check` confirms each pinned commit exists upstream.
 
 - If the Linux login screen cannot be made reliable on a given display manager, is
   "reachable after automatic login to a locked session" an acceptable fallback there?
-- Is the old 3.x account database kept (same emails and passwords) or do accounts
-  also start fresh?
+- Decided 2026-11-13: the 3.x account database is kept. Existing emails and
+  passwords continue to work. Devices and pairings still start fresh, as in the
+  "3.x installs" decision above.
 
 ## Sources
 
