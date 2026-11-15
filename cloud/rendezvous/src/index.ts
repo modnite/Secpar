@@ -28,9 +28,10 @@ async function turnCredentials(env: Env): Promise<Response> {
 /** For the account service only, through a service binding: it has already
  * checked who is asking. Not reachable from the internet. */
 export class Turn extends WorkerEntrypoint<Env> {
-  async credentials(): Promise<string | null> {
+  /** The credentials as JSON text, or "!" and why not. */
+  async credentials(): Promise<string> {
     const answer = await turnCredentials(this.env);
-    return answer.ok ? answer.text() : null;
+    return answer.ok ? answer.text() : `!${answer.status}`;
   }
 }
 

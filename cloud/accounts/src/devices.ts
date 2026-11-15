@@ -5,7 +5,7 @@
 import { importX509, exportJWK, jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { EFFECTIVE } from "./settings";
 
-interface Environment { DB: D1Database; PUBLIC_ORIGIN: string; RELAY?: { credentials(): Promise<string | null> } }
+interface Environment { DB: D1Database; PUBLIC_ORIGIN: string; RELAY?: { credentials(): Promise<string> } }
 interface Owner { id: string }
 interface Helpers {
   body(request: Request): Promise<Record<string, unknown>>;
@@ -56,14 +56,15 @@ const second = () => new Promise((done) => setTimeout(done, 1000));
 async function relay(env: Environment, api: Helpers): Promise<Response> {
   if (!env.RELAY) api.fail(503, "relay_not_configured");
   const answer = await env.RELAY.credentials();
-  if (!answer) return api.fail(502, "relay_unavailable");
+  if (answer === "!503") api.fail(503, "relay_not_configured");
+  if (answer.startsWith("!")) api.fail(502, "relay_unavailable");
   type Ice = { urls?: string | string[]; username?: string; credential?: string };
   const { iceServers } = JSON.parse(answer) as { iceServers?: Ice | Ice[] };
   for (const server of [iceServers ?? []].flat()) {
     const url = [server.urls ?? []].flat().find((u) => /^turn:[^?]+:\d+\?transport=udp$/.test(u));
     if (url && server.username && server.credential) return json({ server: url.slice(5).split("?")[0], username: server.username, credential: server.credential });
   }
-  return api.fail(502, "relay_unavailable");
+  return api.fail(502, "relay_answer_not_understood");
 }
 
 /** Reads a device certificate and a token signed with its key. Returns the
