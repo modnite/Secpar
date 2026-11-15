@@ -32,13 +32,18 @@ first in every trade-off.
 - Android to Windows over the home LAN and over cellular data (owner, 2026-11-15).
 - Sound and touch in the phone app (owner, 2026-11-15). Controllers are not tried.
 
+## Checked locally, not by the owner
+
+- Desktop window to the real Sunshine engine on this PC over loopback: the window
+  started the real Moonlight component, it paired through the tunnel, and it
+  received and decoded 1920x1080x60 HEVC with D3D11VA and started the audio
+  stream. The window showed Streaming. Both ends were on one PC, so picture and
+  sound were not judged on a second device.
+
 ## Built but not confirmed
 
 - Controllers in the Android app.
 - The owner's work network. If it blocks UDP, a relay key is needed (see below).
-- Starting the stream from the desktop window after Connect. The path is wired
-  and checked against the local account service with a test-only stand-in for the
-  Moonlight component; it has not been run with the real component and engine.
 - Hosting on Linux through `crates/secpar-hosting`; only container runs so far.
 - The relay path. It is written on both sides and unused, because the relay
   service has no TURN key.
@@ -108,9 +113,9 @@ unknown) and the second, if present, the relay address.
    people use it.
 6. Relay credentials last six hours; a relayed stream longer than that has not
    been thought through.
-7. Desktop window: the stream starts after Connect and one tile keeps its column
-   width. The real Moonlight window with the real engine, previews, the in-stream
-   menu and packaging remain.
+7. Desktop window: the real Moonlight component now streams from the real
+   engine over loopback. A check between two physical devices, previews, the
+   in-stream menu and packaging remain.
 8. Friends and guest access through the new access list: service side exists,
    no screens.
 9. Installers, Linux packaging, updater compatibility with the old versions.
