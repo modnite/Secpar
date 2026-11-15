@@ -804,6 +804,69 @@ pub fn guest_error(v: &Value) -> String {
 }
 
 impl Connected {
+    /// Ask this authenticated host for its managed GameStream engine. The request
+    /// travels on the existing control connection, so discovery, accounts, pairing
+    /// and trust stay Secpar 3's. The engine data path is opened separately.
+    pub async fn gamestream_info(&mut self, id: &str) -> Result<GameStreamInfo, String> {
+        if id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return Err("The engine request identifier is invalid".into());
+        }
+        if !self.caps.iter().any(|cap| cap == "gamestream") {
+            return Err("This computer does not offer the new stream engine.".into());
+        }
+        send(&mut self.socket, json!({"t": "gamestream.info", "id": id})).await?;
+        let wait = async {
+            loop {
+                let value = next(&mut self.socket).await?;
+                if value["id"].as_str() != Some(id) {
+                    // Input, status and media can arrive on this connection; only
+                    // the answer carrying this request id belongs to the call.
+                    continue;
+                }
+                return match value["t"].as_str() {
+                    Some("gamestream.info") => engine_info(id, &value),
+                    Some("gamestream.error") => Err(value["msg"].as_str().unwrap_or("The computer refused the engine request.").to_string()),
+                    _ => continue,
+                };
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(10), wait)
+            .await
+            .map_err(|_| "The computer did not answer the engine request".to_string())?
+    }
+}
+
+/// The engine addresses and pinned host certificate in a `gamestream.info` answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GameStreamInfo {
+    pub http_port: u16,
+    pub https_port: u16,
+    pub certificate_sha256: String,
+}
+
+fn engine_info(id: &str, value: &Value) -> Result<GameStreamInfo, String> {
+    let port = |name: &str| {
+        value[name]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port != 0)
+            .ok_or_else(|| format!("The engine {name} is invalid"))
+    };
+    let certificate = value["certificate_sha256"]
+        .as_str()
+        .filter(|certificate| certificate.len() == 64 && certificate.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        .ok_or("The engine certificate fingerprint is invalid")?;
+    if value["id"].as_str() != Some(id) {
+        return Err("The engine answer has the wrong request identifier".into());
+    }
+    Ok(GameStreamInfo {
+        http_port: port("http_port")?,
+        https_port: port("https_port")?,
+        certificate_sha256: certificate.into(),
+    })
+}
+
+impl Connected {
     /// Connect to a friend's computer with a grant from the account service. The relay is a
     /// public service, so its certificate is checked normally and nothing is pinned. A friend has
     /// no relay ticket, so the returned computer has no TURN route of its own.
@@ -880,6 +943,15 @@ impl Connected {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn engine_info_checks_the_request_id_ports_and_fingerprint() {
+        let certificate = "a".repeat(64);
+        let answer = json!({"t":"gamestream.info","id":"req","http_port":46989,"https_port":46984,"certificate_sha256":certificate});
+        assert_eq!(engine_info("req", &answer).unwrap(), GameStreamInfo { http_port: 46989, https_port: 46984, certificate_sha256: certificate.clone() });
+        assert!(engine_info("other", &answer).is_err());
+        assert!(engine_info("req", &json!({"id":"req","http_port":0,"https_port":46984,"certificate_sha256":certificate})).is_err());
+        assert!(engine_info("req", &json!({"id":"req","http_port":46989,"https_port":46984,"certificate_sha256":"A".repeat(64)})).is_err());
+    }
     use tokio::net::TcpListener;
     #[test]
     fn thumbnail_frames_carry_a_jpeg_after_one_marker_byte() {

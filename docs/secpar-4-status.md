@@ -6,12 +6,32 @@ the owner wants. Update this file after each result the owner confirms.
 
 ## What Secpar 4 is
 
-A rebuild of Secpar for Windows 10/11, Linux and Android (macOS and iOS are out
-of scope). It embeds Sunshine as the hosting engine and Moonlight as the stream
-component, both unmodified at the versions in `upstream/pins.json`, with a small
-Secpar layer around them: a tunnel, one identity per installation, and access
-decided by the account. To the person it is one app; never present the engines
-as separate products.
+A UI and engine update of Secpar 3 for Windows 10/11, Linux and Android. The
+existing 3.x app, its accounts, pairing, relay, connection scheme and feature set
+stay the base. Only the PRS media engine is replaced with Sunshine on the host
+and Moonlight on the client, behind the existing authenticated connection. The
+parallel `secpar-app`/`secpar-service` account, knock and window work is
+prototype, not the shipping path.
+
+Shipping base: `desktop/`, `host/`, `app/`, `crates/secpar-client`,
+`crates/secpar-host-core` and `crates/secpar-network`.
+Reusable engine pieces: `crates/secpar-gamestream-host`,
+`integrations/gamestream`, and the tunnel as the engine data path.
+The new account/device/knock wiring is not the product path.
+
+### Engine integration on the 3.x connection
+
+The 3.x protocol already defines `gamestream.info` and `gamestream.pair` on the
+existing authenticated owner-device connection (`docs/protocol.md`). The host
+core has the authenticated broker in
+`crates/secpar-host-core/src/agent/gamestream.rs` and `engine.rs`. The 3.x client
+now has `Connected::gamestream_info` in `crates/secpar-client/src/control.rs`,
+including response and certificate-fingerprint checks (80 client tests pass).
+
+Next: implement the host's `EngineBackend` over `secpar-gamestream-host`,
+advertise the `gamestream` capability, exchange the tunnel endpoint on the same
+control connection, and launch Moonlight from the 3.x client. No new accounts,
+pairing or relay key.
 
 ## Order of work the owner set
 
