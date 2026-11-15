@@ -24,8 +24,9 @@ const PLATFORMS = ["windows", "linux", "android"];
 const MAX_DEVICES = 50;
 /** How long a host may rely on one signed access list. */
 export const ACCESS_SECONDS = 7 * 24 * 3600;
-/** A hosting device counts as online this long after it last reported in. */
-export const ONLINE_SECONDS = 20 * 60;
+/** A hosting device counts as online this long after it was last heard from.
+ * It waits for knocks all the time, at most half a minute apart. */
+export const ONLINE_SECONDS = 90;
 type Device = { id: string; owner: string; fingerprint: string; name: string; platform: string; hosts: number; created: number; last_seen: number; reach: string | null; reach_seen: number };
 type Reach = { port: number; addresses: string[] };
 const shown = (d: Device) => {
@@ -149,6 +150,8 @@ export async function deviceKeyRoutes(request: Request, env: Environment, api: H
       if (typeof a?.device === "string" && candidates) await q(env, "UPDATE knocks SET answer=? WHERE host=? AND device=?", JSON.stringify(candidates), device.id, a.device).run();
     }
     await q(env, "DELETE FROM knocks WHERE created<?", now() - 120).run();
+    // Waiting here is also how a hosting device shows it is still there.
+    await q(env, "UPDATE devices SET reach_seen=? WHERE id=? AND reach<>''", now(), device.id).run();
     for (let waited = 0; waited < 20; waited++) {
       const rows = await q(env, "SELECT device,candidates FROM knocks WHERE host=? AND taken=0 AND created>?", device.id, now() - 30).all<{ device: string; candidates: string }>();
       if (rows.results.length) {
