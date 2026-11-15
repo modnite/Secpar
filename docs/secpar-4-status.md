@@ -39,6 +39,9 @@ first in every trade-off.
   received and decoded 1920x1080x60 HEVC with D3D11VA and started the audio
   stream. The window showed Streaming. Both ends were on one PC, so picture and
   sound were not judged on a second device.
+- Relay check on this PC: the tunnel socket is seen from the internet (STUN
+  works), but the account service answers `relay_not_configured` with 503. Direct
+  connections are unaffected.
 
 ## Built but not confirmed
 
