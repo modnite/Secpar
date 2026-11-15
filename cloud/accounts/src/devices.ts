@@ -5,7 +5,7 @@
 import { importX509, exportJWK, jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { EFFECTIVE } from "./settings";
 
-interface Environment { DB: D1Database; PUBLIC_ORIGIN: string; TURN_KEY_ID?: string; TURN_KEY_TOKEN?: string }
+interface Environment { DB: D1Database; PUBLIC_ORIGIN: string; RELAY?: { credentials(): Promise<string | null> } }
 interface Owner { id: string }
 interface Helpers {
   body(request: Request): Promise<Record<string, unknown>>;
@@ -51,18 +51,14 @@ function candidatesOf(value: unknown): string[] | null {
 }
 const second = () => new Promise((done) => setTimeout(done, 1000));
 
-/** Credentials for the relay, good for a few hours. The relay only carries
- * the tunnel's encrypted packets. */
+/** Credentials for the relay, good for a few hours, from the relay service
+ * Secpar already runs. The relay only carries the tunnel's encrypted packets. */
 async function relay(env: Environment, api: Helpers): Promise<Response> {
-  if (!env.TURN_KEY_ID || !env.TURN_KEY_TOKEN) api.fail(503, "relay_not_configured");
-  const answer = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${env.TURN_KEY_TOKEN}`, "content-type": "application/json" },
-    body: JSON.stringify({ ttl: 6 * 3600 }),
-  });
-  if (!answer.ok) api.fail(502, "relay_unavailable");
+  if (!env.RELAY) api.fail(503, "relay_not_configured");
+  const answer = await env.RELAY.credentials();
+  if (!answer) return api.fail(502, "relay_unavailable");
   type Ice = { urls?: string | string[]; username?: string; credential?: string };
-  const { iceServers } = (await answer.json()) as { iceServers?: Ice | Ice[] };
+  const { iceServers } = JSON.parse(answer) as { iceServers?: Ice | Ice[] };
   for (const server of [iceServers ?? []].flat()) {
     const url = [server.urls ?? []].flat().find((u) => /^turn:[^?]+:\d+\?transport=udp$/.test(u));
     if (url && server.username && server.credential) return json({ server: url.slice(5).split("?")[0], username: server.username, credential: server.credential });

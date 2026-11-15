@@ -44,9 +44,6 @@ jobs:
       - name: Seed the admission signing key once
         if: inputs.service == 'accounts' || inputs.service == 'both'
         run: node cloud/scripts/cloudflare.mjs signing-key
-      - name: Make the relay key once
-        if: inputs.service == 'accounts' || inputs.service == 'both'
-        run: node cloud/scripts/cloudflare.mjs turn-key
       - name: Configure account email when its secret is available
         if: inputs.service == 'accounts' || inputs.service == 'both'
         env:

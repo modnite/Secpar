@@ -18,6 +18,8 @@
       "migrations_dir": "migrations",
     },
   ],
+  // The relay service's own door for this service; see cloud/rendezvous.
+  "services": [{ "binding": "RELAY", "service": "secpar-rendezvous", "entrypoint": "Turn" }],
   "keep_vars": true,
   "workers_dev": false,
   "routes": [

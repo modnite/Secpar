@@ -10,8 +10,7 @@ export interface Env {
   GRANT_PRIVATE_JWK: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
-  TURN_KEY_ID?: string;
-  TURN_KEY_TOKEN?: string;
+  RELAY?: { credentials(): Promise<string | null> };
 }
 type Account = { id: string; handle: string; name: string; visible: number };
 type Grant = {

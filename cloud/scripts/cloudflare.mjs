@@ -147,30 +147,6 @@ async function signingKey() {
     "Created the Secpar admission signing key in Cloudflare's secret store.",
   );
 }
-// The relay key for Secpar 4, made once and kept only in Cloudflare's secret store.
-async function turnKey() {
-  const id = await account();
-  const path = `/accounts/${id}/workers/scripts/secpar-accounts/secrets`;
-  const secrets = await api(path);
-  if (secrets.some((s) => s.name === "TURN_KEY_TOKEN")) {
-    console.log("Preserved the existing relay key.");
-    return;
-  }
-  let key;
-  try {
-    key = await api(`/accounts/${id}/calls/turn_keys`, "POST", { name: "secpar-accounts" });
-  } catch (error) {
-    console.log(`No relay key was made: ${error.message} Connections that need the relay stay unavailable.`);
-    return;
-  }
-  if (!key?.uid || !key?.key) {
-    console.log("No relay key was made: Cloudflare's answer had no key.");
-    return;
-  }
-  await api(path, "PUT", { name: "TURN_KEY_ID", type: "secret_text", text: key.uid });
-  await api(path, "PUT", { name: "TURN_KEY_TOKEN", type: "secret_text", text: key.key });
-  console.log("Created the relay key in Cloudflare's secret store.");
-}
 async function emailCheck() {
   const key = process.env.SECPAR_RESEND_API_KEY;
   if (!key) {
@@ -215,7 +191,6 @@ try {
   if (process.argv[2] === "prepare") await prepare();
   else if (process.argv[2] === "signing-key") await signingKey();
   else if (process.argv[2] === "email-key") await emailKey();
-  else if (process.argv[2] === "turn-key") await turnKey();
   else if (process.argv[2] === "email-check") await emailCheck();
   else throw new Error("Expected prepare, signing-key, email-check or email-key.");
 } catch (error) {
