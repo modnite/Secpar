@@ -253,3 +253,15 @@ severely hitches on X250. Do not dismiss that as a hardware limit without eviden
 Android audio clipping/hitching remains a distracting post3.19 regression.
 Prioritize its recovery path, preserve video improvements, conserve the reported
 9% remaining weekly usage, and publish non-UI fixes for user testing.
+
+Secpar 4 corrections, 2026-11-14 and 2026-11-15: the owner relies on the Android
+app at work more than anything else and expected it to be developed alongside the
+desktop; put the phone-at-work-to-home-PC use first. Testing and proving every step
+is reinventing the wheel: Moonlight and Sunshine work, and 4 only has to end up
+better than 3. Work lean, show usable results instead of screenshots, and say early
+how long something will take. Usage and cost are tight. Reuse the framework already
+in place (Secpar 3's relay and account services and their keys) instead of building
+separate copies or asking the owner for new manual setup. Agreed order: hosting on
+the Windows PC, the Android app, connecting from outside the home network; then the
+rest. Owner confirmed on 2026-11-15 that the phone reaches the PC on home Wi-Fi and
+on mobile data. Sound, touch and controllers on Android are not yet reported.

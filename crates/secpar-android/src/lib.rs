@@ -188,7 +188,7 @@ impl App {
             }
             let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") else { return failed("no_socket") };
             let direct = secpar_tunnel::connect_on(socket, &addresses, &identity, host, listen, Ports::engine(ENGINE_BASE));
-            match tokio::time::timeout(Duration::from_millis(2500), direct).await {
+            match tokio::time::timeout(Duration::from_millis(1500), direct).await {
                 Ok(Ok(opened)) => {
                     *tunnel = Some(opened);
                     return connected;

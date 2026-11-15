@@ -50,6 +50,9 @@ def main():
             if (folder / name).is_file() and (main_dir / "res" / folder.name).is_dir():
                 shutil.copy2(folder / name, main_dir / "res" / folder.name / name)
 
+    # The icon sits on black.
+    shutil.copy2(here / "app" / "src" / "main" / "res" / "values" / "ic_launcher_background.xml", main_dir / "res" / "values" / "ic_launcher_background.xml")
+
     edit(work / "app" / "build.gradle", [
         ('ndkVersion "29.0.14206865"', f'ndkVersion "{NDK}"'),
         ("        minSdk 21\n", "        minSdk 26\n        ndk { abiFilters 'arm64-v8a' }\n"),
