@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QVariantList>
+#include <QVariantMap>
 #include <functional>
 
 class QTimer;
@@ -24,6 +25,11 @@ class Backend : public QObject
     Q_PROPERTY(QString connectingId MEMBER m_connectingId NOTIFY changed)
     // True while the stream window for the connected computer is running.
     Q_PROPERTY(bool streaming MEMBER m_streaming NOTIFY changed)
+    // Settings → Connecting, and the hosting state Settings → Hosting shows.
+    Q_PROPERTY(QVariantMap preferences MEMBER m_preferences NOTIFY changed)
+    Q_PROPERTY(bool hosting MEMBER m_hosting NOTIFY changed)
+    Q_PROPERTY(int allowedDevices MEMBER m_allowedDevices NOTIFY changed)
+    Q_PROPERTY(QString accessList MEMBER m_accessList NOTIFY changed)
 
 public:
     explicit Backend(const QJsonObject &configuration, const QString &computerName, QObject *parent = nullptr);
@@ -34,6 +40,7 @@ public:
     Q_INVOKABLE void removeDevice(const QString &id);
     Q_INVOKABLE void connectTo(const QString &id);
     Q_INVOKABLE void disconnect();
+    Q_INVOKABLE void setPreference(const QString &key, const QVariant &value);
 
 signals:
     void changed();
@@ -56,6 +63,10 @@ private:
     QString m_connectedId;
     QString m_connectingId;
     bool m_streaming = false;
+    QVariantMap m_preferences;
+    bool m_hosting = false;
+    int m_allowedDevices = 0;
+    QString m_accessList;
     QVariantList m_devices;
     QTimer *m_watch = nullptr;
 };

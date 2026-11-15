@@ -6,6 +6,7 @@
 //! component starts the pairing and the hosting computer completes it when asked
 //! through the tunnel, so nobody types a PIN.
 use base64::{engine::general_purpose::STANDARD, Engine};
+use crate::preferences::Preferences;
 use secpar_service::channel;
 use serde_json::json;
 use std::{
@@ -105,9 +106,9 @@ async fn pair(settings: &Settings, folder: &Path, address: &str, background: &st
 }
 
 /// Pairs if this computer has not paired with `host` before, then starts the
-/// stream. `address` is the tunnel's local end and `background` the background
-/// part's channel.
-pub async fn start(settings: &Settings, host: &str, address: &str, background: &str, running: &Running) -> Result<(), &'static str> {
+/// stream with the chosen quality settings. `address` is the tunnel's local end
+/// and `background` the background part's channel.
+pub async fn start(settings: &Settings, preferences: &Preferences, host: &str, address: &str, background: &str, running: &Running) -> Result<(), &'static str> {
     if !settings.component.is_file() || address.is_empty() {
         return Err("stream_component_missing");
     }
@@ -136,7 +137,7 @@ pub async fn start(settings: &Settings, host: &str, address: &str, background: &
     }
     let (out, err) = log(&folder, "stream.log");
     let child = command(settings, &folder)
-        .args(["stream", address, "Desktop", "--packet-size", "1024", "--display-mode", "windowed", "--absolute-mouse", "--keep-awake", "--frame-pacing", "--capture-system-keys", "fullscreen", "--no-mute-on-focus-loss"])
+        .args(preferences.stream_arguments(address))
         .stdout(out)
         .stderr(err)
         .spawn()
@@ -231,7 +232,7 @@ mod tests {
         let settings = Settings { component: folder.path().join("absent"), data: folder.path().join("data") };
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let running: Running = Default::default();
-        let result = runtime.block_on(start(&settings, "host", "127.0.0.2:46989", "channel", &running));
+        let result = runtime.block_on(start(&settings, &Preferences::default(), "host", "127.0.0.2:46989", "channel", &running));
         assert_eq!(result, Err("stream_component_missing"));
         assert!(!folder.path().join("data").exists());
     }

@@ -42,6 +42,12 @@ first in every trade-off.
 - Relay check on this PC: the tunnel socket is seen from the internet (STUN
   works), but the account service answers `relay_not_configured` with 503. Direct
   connections are unaffected.
+- Desktop Settings now reads and saves the real stream choices on the existing
+  connection path: resolution, frame rate, bitrate, decoder, display mode, audio
+  and mute on focus loss. Settings → Hosting shows the real host state, allowed
+  device count and access-list expiry. The window was run signed in against a
+  local background part; the settings API round-trip and validation are tested.
+  Captures: `settings-connecting-640x400.png` and `settings-hosting-640x400.png`.
 
 ## Built but not confirmed
 

@@ -2,6 +2,7 @@
 
 #include <QJsonArray>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QJsonDocument>
 #include <QSysInfo>
 #include <QThreadPool>
@@ -75,6 +76,8 @@ QString Backend::explain(const QJsonObject &answer)
         return "The stream could not be started on this computer (" + code + ").";
     if (code == "pairing_refused" || code == "pairing_failed")
         return "That computer did not accept this one (" + code + "). Try again.";
+    if (code == "preferences_not_saved" || code.startsWith("invalid_"))
+        return "That setting could not be saved.";
     if (code == "signed_out")
         return QString();
     return "That did not work (" + code + "). Try again.";
@@ -91,6 +94,13 @@ void Backend::takeState(const QJsonObject &state)
     m_handle = state["handle"].toString();
     if (!m_signedIn)
         m_devices.clear();
+    if (state.contains("preferences"))
+        m_preferences = state["preferences"].toObject().toVariantMap();
+    const QJsonObject hosting = state["hosting"].toObject();
+    m_hosting = hosting["hosts"].toBool();
+    m_allowedDevices = hosting["allowed"].toInt();
+    const qint64 expires = hosting["access_expires_at"].toVariant().toLongLong();
+    m_accessList = expires > 0 ? QDateTime::fromSecsSinceEpoch(expires).toString("d MMM yyyy HH:mm") : "Not fetched";
     m_streaming = m_signedIn && state["streaming"].toBool();
     if (!state["connected_to_host"].toBool()) {
         m_connectedId.clear();
@@ -148,6 +158,22 @@ void Backend::disconnect()
     ask({{"do", "disconnect"}}, [this](const QJsonObject &) { m_connectedId.clear(); });
 }
 
+void Backend::setPreference(const QString &key, const QVariant &value)
+{
+    m_message.clear();
+    QJsonObject preferences = QJsonObject::fromVariantMap(m_preferences);
+    if (key == "fps" || key == "bitrate_kbps")
+        preferences[key] = value.toInt();
+    else
+        preferences[key] = QJsonValue::fromVariant(value);
+    ask({{"do", "save_preferences"}, {"preferences", preferences}}, [this](const QJsonObject &answer) {
+        if (answer["ok"].toBool())
+            m_preferences = answer["preferences"].toObject().toVariantMap();
+        else
+            m_message = explain(answer);
+    });
+}
+
 void Backend::loadDevices()
 {
     ask({{"do", "devices"}}, [this](const QJsonObject &answer) {
@@ -193,6 +219,9 @@ void Backend::signOut()
         if (answer["ok"].toBool() || answer["error"].toString() == "signed_out") {
             m_watch->stop();
             m_streaming = false;
+            m_hosting = false;
+            m_allowedDevices = 0;
+            m_accessList.clear();
             m_signedIn = false;
             m_handle.clear();
             m_devices.clear();

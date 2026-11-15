@@ -12,9 +12,14 @@ use secpar_core::{
 use secpar_service::channel;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex, OnceLock},
+};
 
+mod preferences;
 mod stream;
+use preferences::Preferences;
 
 #[derive(Deserialize)]
 #[serde(tag = "do", rename_all = "snake_case")]
@@ -45,6 +50,9 @@ enum Request {
     /// Open a tunnel to one of the account's hosting computers.
     Connect { id: String },
     Disconnect,
+    /// The stream settings shown in Settings → Connecting.
+    Preferences,
+    SavePreferences { preferences: Preferences },
 }
 
 struct App {
@@ -54,6 +62,8 @@ struct App {
     channel: String,
     stream: Option<Arc<stream::Settings>>,
     running: stream::Running,
+    preferences: Mutex<Preferences>,
+    preferences_path: Option<PathBuf>,
 }
 static APP: OnceLock<App> = OnceLock::new();
 /// One request at a time: sign-in and sign-out must not interleave.
@@ -98,6 +108,13 @@ impl App {
             Err(error) => return refused(error),
         };
         let background = self.background(json!({"do": "status"})).await;
+        let preferences = self.preferences.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        let hosting = background.as_ref().map(|status| json!({
+            "hosts": status["hosts"].clone(),
+            "allowed": status["allowed"].clone(),
+            "access_expires_at": status["access_expires_at"].clone(),
+            "tunnel_port": status["tunnel_port"].clone(),
+        }));
         json!({
             "ok": true,
             "signed_in": session.is_some(),
@@ -107,7 +124,23 @@ impl App {
             "device": background.as_ref().map(|b| b["device"].clone()),
             "connected_to_host": background.as_ref().map(|b| b["connected_to_host"].clone()),
             "streaming": self.running.lock().await.is_some(),
+            "hosting": hosting,
+            "preferences": preferences,
         })
+    }
+
+    fn save_preferences(&self, preferences: Preferences) -> Value {
+        let preferences = match preferences.checked() {
+            Ok(preferences) => preferences,
+            Err(field) => return json!({"ok": false, "error": format!("invalid_{field}")}),
+        };
+        if let Some(path) = &self.preferences_path {
+            if preferences.save(path).is_err() {
+                return failed("preferences_not_saved");
+            }
+        }
+        *self.preferences.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = preferences.clone();
+        json!({"ok": true, "preferences": preferences})
     }
 
     /// Enrols this computer: the background part signs, this part hands it in.
@@ -216,7 +249,8 @@ impl App {
                         return json!({"ok": true, "id": id, "streaming": false, "stream_address": answer["stream_address"]});
                     };
                     let address = answer["stream_address"].as_str().unwrap_or_default().to_string();
-                    return match stream::start(settings, &device.fingerprint, &address, &self.channel, &self.running).await {
+                    let preferences = self.preferences.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+                    return match stream::start(settings, &preferences, &device.fingerprint, &address, &self.channel, &self.running).await {
                         Ok(()) => {
                             tokio::spawn(stream::watch(settings.clone(), device.fingerprint.clone(), self.channel.clone(), self.running.clone()));
                             json!({"ok": true, "id": id, "streaming": true})
@@ -260,7 +294,19 @@ fn configure(channel: String, test_account: Option<(String, String)>, memory_sto
         return failed("not_configured");
     };
     let store: Box<dyn SecretStore> = if memory_store { Box::new(MemoryStore::default()) } else { Box::new(SystemStore) };
-    match APP.set(App { runtime, account, store, channel, stream: stream.map(Arc::new), running: Default::default() }) {
+    let preferences_path = stream.as_ref().map(|settings| settings.data.join("preferences.json"));
+    let preferences = preferences_path.as_deref().map(Preferences::load).unwrap_or_default();
+    let app = App {
+        runtime,
+        account,
+        store,
+        channel,
+        stream: stream.map(Arc::new),
+        running: Default::default(),
+        preferences: Mutex::new(preferences),
+        preferences_path,
+    };
+    match APP.set(app) {
         Ok(()) => json!({"ok": true}),
         Err(_) => failed("already_configured"),
     }
@@ -287,6 +333,11 @@ pub fn call(request: &str) -> Value {
             Request::Devices => app.devices().await,
             Request::RemoveDevice { id } => app.remove_device(&id).await,
             Request::Connect { id } => app.connect(&id).await,
+            Request::Preferences => {
+                let preferences = app.preferences.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+                json!({"ok": true, "preferences": preferences})
+            }
+            Request::SavePreferences { preferences } => app.save_preferences(preferences),
             Request::Disconnect => {
                 stream::stop(&app.running).await;
                 app.background(json!({"do": "disconnect"})).await.unwrap_or_else(|| failed("background_not_running"))
