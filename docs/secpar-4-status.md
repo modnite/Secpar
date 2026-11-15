@@ -29,13 +29,15 @@ first in every trade-off.
   pairing, stream.
 - Phone to PC over mobile data, with the home line behind the provider's shared
   address (no port forward possible) and no relay key configured.
+- Android to Windows over the home LAN and over cellular data (owner, 2026-11-15).
 
 ## Built but not confirmed
 
 - Sound, touch and controllers in the Android app. Ask the owner.
 - The owner's work network. If it blocks UDP, a relay key is needed (see below).
-- Starting the stream from the desktop window after Connect
-  (`crates/secpar-app/src/stream.rs`). Compiles, never run.
+- Starting the stream from the desktop window after Connect. The path is wired
+  and checked against the local account service with a test-only stand-in for the
+  Moonlight component; it has not been run with the real component and engine.
 - Hosting on Linux through `crates/secpar-hosting`; only container runs so far.
 - The relay path. It is written on both sides and unused, because the relay
   service has no TURN key.
@@ -100,7 +102,9 @@ unknown) and the second, if present, the relay address.
    people use it.
 6. Relay credentials last six hours; a relayed stream longer than that has not
    been thought through.
-7. Desktop window: one tile fills the row; stream start after Connect not run.
+7. Desktop window: the stream starts after Connect and one tile keeps its column
+   width. The real Moonlight window with the real engine, previews, the in-stream
+   menu and packaging remain.
 8. Friends and guest access through the new access list: service side exists,
    no screens.
 9. Installers, Linux packaging, updater compatibility with the old versions.

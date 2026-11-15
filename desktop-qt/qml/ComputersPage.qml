@@ -16,7 +16,8 @@ Item {
     // The account's other hosting computers.
     readonly property var own: backend.devices.filter(d => d.hosts && !d.this).map(d => (
         { id: d.id, name: d.name, owner: "", online: d.online, route: "",
-          status: backend.connectedId === d.id ? "Connected" : backend.connectingId === d.id ? "Connecting" : "" }))
+          status: backend.connectedId === d.id ? (backend.streaming ? "Streaming" : "Connected")
+                : backend.connectingId === d.id ? "Connecting" : "" }))
     readonly property var computers: sampleData ? sample : own
 
     ScrollView {
@@ -39,8 +40,8 @@ Item {
             Repeater {
                 model: page.computers
                 ComputerTile {
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 1
+                    Layout.fillWidth: false
+                    Layout.preferredWidth: (grid.width - (grid.columns - 1) * Theme.gap) / grid.columns
                     Layout.alignment: Qt.AlignTop
                     name: modelData.name
                     owner: modelData.owner
@@ -48,7 +49,8 @@ Item {
                     route: modelData.route
                     status: modelData.status || ""
                     connected: !sampleData && backend.connectedId === modelData.id
-                    busy: !sampleData && backend.busy
+                    streaming: !sampleData && backend.streaming && backend.connectedId === modelData.id
+                    busy: !sampleData && (backend.busy || (backend.connectedId.length > 0 && backend.connectedId !== modelData.id))
                     onConnectRequested: backend.connectTo(modelData.id)
                     onDisconnectRequested: backend.disconnect()
                     previewLimit: grid.previewLimit

@@ -8,6 +8,8 @@
 #include <QVariantList>
 #include <functional>
 
+class QTimer;
+
 class Backend : public QObject
 {
     Q_OBJECT
@@ -20,6 +22,8 @@ class Backend : public QObject
     // The computer this one has a tunnel to, and the one it is trying to reach.
     Q_PROPERTY(QString connectedId MEMBER m_connectedId NOTIFY changed)
     Q_PROPERTY(QString connectingId MEMBER m_connectingId NOTIFY changed)
+    // True while the stream window for the connected computer is running.
+    Q_PROPERTY(bool streaming MEMBER m_streaming NOTIFY changed)
 
 public:
     explicit Backend(const QJsonObject &configuration, const QString &computerName, QObject *parent = nullptr);
@@ -35,18 +39,23 @@ signals:
     void changed();
 
 private:
-    void ask(const QJsonObject &request, std::function<void(const QJsonObject &)> then);
+    void ask(const QJsonObject &request, std::function<void(const QJsonObject &)> then, bool busy = true);
     void takeState(const QJsonObject &state);
     void loadDevices();
+    void pollState();
+    void shutdown();
     static QString explain(const QJsonObject &answer);
 
     bool m_loaded = false;
     bool m_signedIn = false;
     bool m_busy = false;
+    bool m_polling = false;
     QString m_handle;
     QString m_computer;
     QString m_message;
     QString m_connectedId;
     QString m_connectingId;
+    bool m_streaming = false;
     QVariantList m_devices;
+    QTimer *m_watch = nullptr;
 };

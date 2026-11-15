@@ -1,5 +1,9 @@
 # Secpar
 
+> This working copy is the Secpar 4 rebuild. Start with
+> [docs/secpar-4-plan.md](docs/secpar-4-plan.md); the 3.x notes below describe the
+> previous app and remain for reference.
+
 A fork of [PC Remote](https://github.com/SadikTD/pc-remote) for docked Android use and a growing desktop app family. Secpar focuses on physical keyboard/mouse input, resolution handling and compact, plain interfaces. Android stays client-only. Desktop hosting and connecting on Windows, Linux and macOS is the target; the current platform limits are listed below.
 
 ## Secpar for Windows — Development 8

@@ -12,6 +12,7 @@ Rectangle {
     property string status     // shown instead of the online state when set
     property int previewLimit: 10000   // tallest the preview may be
     property bool connected: false
+    property bool streaming: false
     property bool busy: false
     signal connectRequested()
     signal disconnectRequested()
@@ -67,7 +68,8 @@ Rectangle {
                     Text {
                         Layout.fillWidth: true
                         text: {
-                            const state = tile.status || (tile.online ? (tile.route || "Online") : "Offline")
+                            const state = tile.status || (tile.streaming ? "Streaming"
+                                          : tile.online ? (tile.route || "Online") : "Offline")
                             return tile.owner ? tile.owner + " · " + state : state
                         }
                         color: Theme.textDim

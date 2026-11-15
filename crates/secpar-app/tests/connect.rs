@@ -4,7 +4,9 @@
 //! and tunnel; the engine is a stand-in.
 //!
 //! Start `node cloud/accounts/test/local-server.mjs <port> <file>` and run with
-//! `SECPAR_TEST_ACCOUNTS=<file> cargo test --test connect -- --ignored`.
+//! `SECPAR_TEST_ACCOUNTS=<file> cargo test --features fake-stream --test connect -- --ignored`.
+//! The test-only `fake-stream` component writes the same settings identity as the
+//! real Moonlight component and then stays alive until the window disconnects.
 use secpar_core::account::{Platform, Proof, Service};
 use secpar_hosting::{Engine, Pairing, Pending, Refusal};
 use secpar_service::{channel, Core, Settings};
@@ -61,7 +63,7 @@ fn a_computer_just_signed_in_on_connects_to_the_accounts_hosting_computer() {
 
     // The desktop was set up earlier: enrolled as a hosting computer, and its
     // background part keeps its list current and reports where it is.
-    let (desktop_id, switched_off) = runtime.block_on(async {
+    let (desktop_id, desktop_fingerprint, switched_off) = runtime.block_on(async {
         let settings = |part: &str| Settings { account: service(), state: folder.path().join(part), bind: "127.0.0.1:0".parse().unwrap() };
         let desktop = Core::start(settings("desktop"), Identity::generate().unwrap(), Some(Arc::new(NoEngine))).await.unwrap();
         let laptop = Core::<NoEngine>::start(settings("laptop"), Identity::generate().unwrap(), None).await.unwrap();
@@ -78,11 +80,19 @@ fn a_computer_just_signed_in_on_connects_to_the_accounts_hosting_computer() {
         let off = account.enrol(&session, &Identity::generate().unwrap(), "Attic server", Platform::Linux, true).await.unwrap();
         tokio::spawn(async move { desktop.keep_current().await });
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        (device.id, off.id)
+        (device.id, device.fingerprint, off.id)
     });
 
     // On the laptop, the person opens the window and signs in for the first time.
-    assert_eq!(call(json!({"do": "configure", "channel": lap, "test_account": [origin, address], "memory_store": true}))["ok"], true);
+    let component = option_env!("CARGO_BIN_EXE_fake-stream");
+    assert!(component.is_some(), "run this with --features fake-stream");
+    let data = folder.path().join("data");
+    let mut configuration = json!({"do": "configure", "channel": lap, "test_account": [origin, address], "memory_store": true});
+    if let Some(component) = component {
+        configuration["stream_component"] = json!(component);
+        configuration["data_folder"] = json!(data.to_string_lossy());
+    }
+    assert_eq!(call(configuration)["ok"], true);
     assert_eq!(call(json!({"do": "connect", "id": desktop_id}))["error"], "signed_out");
     let state = call(json!({"do": "sign_in", "email": alice.email, "password": alice.password, "computer": "Laptop"}));
     assert_eq!((state["enrolled"].clone(), state["hosts"].clone()), (json!(true), json!(false)));
@@ -96,13 +106,25 @@ fn a_computer_just_signed_in_on_connects_to_the_accounts_hosting_computer() {
     // laptop existed: being refused makes the desktop fetch a new one.
     let connected = call(json!({"do": "connect", "id": desktop_id}));
     assert_eq!(connected["ok"], true, "{connected}");
-    assert_eq!(connected["stream_address"], "127.0.0.2:46989");
+    assert_eq!(connected["streaming"], true, "{connected}");
     assert_eq!(call(json!({"do": "state"}))["connected_to_host"], true);
+    assert_eq!(call(json!({"do": "state"}))["streaming"], true);
+    // The stream component was started in its own profile for that computer.
+    let profile = data.join("stream").join(&desktop_fingerprint);
+    for _ in 0..50 {
+        if profile.join("stream-running").exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(profile.join("stream-running").exists(), "the stream component did not start");
+    assert!(profile.join("paired").exists(), "the profile was not recorded as paired");
     let status = runtime.block_on(channel::ask(&desk, &json!({"do": "status"}))).unwrap();
     assert_eq!(status["connected_devices"].as_array().unwrap().len(), 1);
 
     assert_eq!(call(json!({"do": "disconnect"}))["ok"], true);
     assert_eq!(call(json!({"do": "state"}))["connected_to_host"], false);
+    assert_eq!(call(json!({"do": "state"}))["streaming"], false);
     // A computer that is off, and one that is not on the account.
     assert_eq!(call(json!({"do": "connect", "id": switched_off}))["error"], "offline");
     assert_eq!(call(json!({"do": "connect", "id": "00000000-0000-4000-8000-000000000000"}))["error"], "device_not_found");

@@ -88,7 +88,7 @@ fn signing_in_enrols_this_computer_and_signing_out_takes_it_off_the_account() {
     }
     let devices = call(json!({"do": "devices"}));
     assert_eq!(devices["devices"].as_array().unwrap().len(), 1);
-    assert_eq!(devices["devices"][0], json!({"id": devices["devices"][0]["id"], "name": "Desktop", "platform": std::env::consts::OS, "hosts": true, "this": true}));
+    assert_eq!(devices["devices"][0], json!({"id": devices["devices"][0]["id"], "name": "Desktop", "platform": std::env::consts::OS, "hosts": true, "online": true, "this": true}));
     let status = runtime.block_on(channel::ask(&name, &json!({"do": "status"}))).unwrap();
     assert!(status["access_expires_at"].as_u64().is_some());
 

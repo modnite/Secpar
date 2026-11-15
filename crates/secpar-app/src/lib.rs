@@ -200,6 +200,9 @@ impl App {
             .map(|a| if a.contains(':') { format!("[{a}]:{}", reach.port) } else { format!("{a}:{}", reach.port) })
             .collect();
         let request = json!({"do": "connect", "host": device.fingerprint, "addresses": addresses});
+        // Connecting to a computer replaces any stream and tunnel already open.
+        stream::stop(&self.running).await;
+        self.background(json!({"do": "disconnect"})).await;
         // A computer that has not heard of this device yet fetches a new list
         // when it is refused, so a second and third try are worth making.
         for attempt in 0..3 {

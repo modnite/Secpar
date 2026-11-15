@@ -1,5 +1,9 @@
 # Secpar delivery record
 
+> Secpar 4 is a rebuild, not a 3.x patch. Its current state, decisions and checked
+> work are in [the Secpar 4 plan](secpar-4-plan.md). This file remains the 3.x
+> release record. The 3.x engine is no longer developed for the product.
+
 ## 3.20.6: desktop identity fixes
 
 Published for Windows and Linux as 3.20.6. Android stays on 3.20.2. Not tested on the laptop.

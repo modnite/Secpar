@@ -330,10 +330,42 @@ Checked on Windows: 67 service tests; `crates/secpar-app/tests/connect.rs`
 computer that is off, an unknown computer); the built window against a stand-in
 hosting computer (`crates/secpar-service/examples/test_host.rs`), with captures
 of Online, Connected and "did not answer". Known gaps: a computer that was
-switched off still shows Online for up to 20 minutes; a single tile fills the
-whole row; only one local address is reported and none for the internet side,
-so this works on one network only; the three tries take about 30 seconds before
-the window says the computer did not answer.
+switched off still shows Online for up to 20 minutes; only one local address is
+reported and none for the internet side, so this works on one network only; the
+three tries take about 30 seconds before the window says the computer did not
+answer.
+
+**The window starts the stream (2026-11-14).** `crates/secpar-app/src/stream.rs`
+runs the private Moonlight component once the tunnel is open, so Connect now
+produces a picture instead of only a tunnel. The large preview tile the plan
+asks for is still the monitor icon; previews remain a later step.
+
+- The component is installed beside the window (`SecparStream.exe` on Windows,
+  `secpar-stream` elsewhere). It runs in a profile per hosting computer under
+  Secpar's data folder, with `portable.dat`, so it never reads or writes an
+  installed Moonlight profile.
+- The first Connect to a computer pairs without a PIN on screen: the component
+  writes its client id and certificate, the window sends them and a one-use PIN
+  to the background part through the tunnel, and the host records the grant for
+  that device. The profile is marked as paired. If the host no longer knows it,
+  the stream ends at once and the next Connect pairs again with a new identity.
+- The stream runs windowed with the packet size, absolute mouse, keep-awake,
+  frame pacing and system-key capture settings this plan asks for. A closed
+  tunnel stops the component; closing the stream window disconnects the tunnel;
+  closing the Secpar window stops both before the process exits.
+- While the stream is live the computer tile reads Streaming with Disconnect.
+  Connecting to another computer ends the first stream and tunnel first.
+
+Checked on Windows against the local account service, real background parts,
+real tunnels and a stand-in hosting engine, with a test-only stand-in for the
+stream component (`--features fake-stream`): sign-in, enrolment, Connect,
+pairing over the tunnel, the component starting in its own profile, state
+reporting `streaming`, and Disconnect ending both. Captures are
+`docs/screenshots/secpar4/computers-streaming-800x600.png` and
+`computers-streaming-640x400.png`. A single tile now keeps one column width
+instead of stretching across the row. Not checked: the real Moonlight window
+with a real engine started from this window, sound, input, Linux, and packaging
+the component and its libraries into the one installer.
 
 ### 3.4 Servers and what they see
 

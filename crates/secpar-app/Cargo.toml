@@ -8,6 +8,17 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Test-only stand-in for the Moonlight stream component. It is never built unless
+# the `fake-stream` feature is requested, so release packages cannot include it.
+[[bin]]
+name = "fake-stream"
+path = "src/bin/fake_stream.rs"
+required-features = ["fake-stream"]
+
+[features]
+default = []
+fake-stream = []
+
 [dependencies]
 secpar-core = { path = "../secpar-core" }
 secpar-service = { path = "../secpar-service" }

@@ -1,9 +1,11 @@
 #include "backend.h"
 
 #include <QJsonArray>
+#include <QCoreApplication>
 #include <QJsonDocument>
 #include <QSysInfo>
 #include <QThreadPool>
+#include <QTimer>
 
 extern "C" {
 char *secpar_app_call(const char *request);
@@ -27,17 +29,26 @@ Backend::Backend(const QJsonObject &configuration, const QString &computerName, 
     QJsonObject request = configuration;
     request["do"] = "configure";
     call(request);
+    // The stream runs in its own window. Check now and then whether it is still
+    // there, so closing that window returns the computer tile to Connect.
+    m_watch = new QTimer(this);
+    m_watch->setInterval(2000);
+    connect(m_watch, &QTimer::timeout, this, &Backend::pollState);
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, &Backend::shutdown);
     refresh();
 }
 
-void Backend::ask(const QJsonObject &request, std::function<void(const QJsonObject &)> then)
+void Backend::ask(const QJsonObject &request, std::function<void(const QJsonObject &)> then, bool busy)
 {
-    m_busy = true;
-    emit changed();
-    QThreadPool::globalInstance()->start([this, request, then = std::move(then)] {
+    if (busy) {
+        m_busy = true;
+        emit changed();
+    }
+    QThreadPool::globalInstance()->start([this, request, then = std::move(then), busy] {
         const QJsonObject answer = call(request);
-        QMetaObject::invokeMethod(this, [this, answer, then] {
-            m_busy = false;
+        QMetaObject::invokeMethod(this, [this, answer, then, busy] {
+            if (busy)
+                m_busy = false;
             then(answer);
             emit changed();
         }, Qt::QueuedConnection);
@@ -80,8 +91,37 @@ void Backend::takeState(const QJsonObject &state)
     m_handle = state["handle"].toString();
     if (!m_signedIn)
         m_devices.clear();
-    if (!state["connected_to_host"].toBool())
+    m_streaming = m_signedIn && state["streaming"].toBool();
+    if (!state["connected_to_host"].toBool()) {
         m_connectedId.clear();
+        m_streaming = false;
+        m_watch->stop();
+    } else if (m_streaming && !m_watch->isActive()) {
+        m_watch->start();
+    }
+}
+
+void Backend::pollState()
+{
+    if (m_polling || m_connectedId.isEmpty())
+        return;
+    m_polling = true;
+    ask({{"do", "state"}}, [this](const QJsonObject &state) {
+        m_polling = false;
+        takeState(state);
+    }, false);
+}
+
+void Backend::shutdown()
+{
+    // The event loop is ending, so this runs here rather than on a worker thread.
+    // A stream must not outlive the window that started it.
+    m_watch->stop();
+    if (m_connectedId.isEmpty())
+        return;
+    call({{"do", "disconnect"}});
+    m_connectedId.clear();
+    m_streaming = false;
 }
 
 void Backend::connectTo(const QString &id)
@@ -90,15 +130,21 @@ void Backend::connectTo(const QString &id)
     m_connectingId = id;
     ask({{"do", "connect"}, {"id", id}}, [this, id](const QJsonObject &answer) {
         m_connectingId.clear();
-        if (answer["ok"].toBool())
+        if (answer["ok"].toBool()) {
             m_connectedId = id;
-        else
+            m_streaming = answer["streaming"].toBool();
+            if (m_streaming)
+                m_watch->start();
+        } else {
             m_message = explain(answer);
+        }
     });
 }
 
 void Backend::disconnect()
 {
+    m_watch->stop();
+    m_streaming = false;
     ask({{"do", "disconnect"}}, [this](const QJsonObject &) { m_connectedId.clear(); });
 }
 
@@ -145,6 +191,8 @@ void Backend::signOut()
     m_message.clear();
     ask({{"do", "sign_out"}}, [this](const QJsonObject &answer) {
         if (answer["ok"].toBool() || answer["error"].toString() == "signed_out") {
+            m_watch->stop();
+            m_streaming = false;
             m_signedIn = false;
             m_handle.clear();
             m_devices.clear();
