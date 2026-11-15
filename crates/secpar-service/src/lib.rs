@@ -86,6 +86,13 @@ impl<E: Engine> Core<E> {
     pub fn tunnel_address(&self) -> Option<SocketAddr> {
         self.hosting.as_ref().and_then(|h| h.tunnel().local_addr().ok())
     }
+    /// For the log: whether this network's internet address was found and
+    /// whether the router passes the tunnel's port through.
+    pub async fn reach_outside(&self) -> Option<(bool, bool)> {
+        let hosting = self.hosting.as_ref()?;
+        let (address, opened) = hosting.reach_outside().await;
+        Some((address.is_some(), opened))
+    }
     /// Keeps the access list and the tunnel current. Returns at once when this
     /// computer does not host; otherwise never.
     pub async fn keep_current(&self) {

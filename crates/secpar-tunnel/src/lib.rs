@@ -171,8 +171,22 @@ pub const MAX_REQUEST: usize = 8192;
 /// neither is ever an engine port.
 const REQUEST: u16 = 1;
 
+pub mod relay;
+pub use relay::Relay;
+
+/// The tunnel's endpoint on `socket`, with the relay available to it.
+fn endpoint(socket: std::net::UdpSocket, server: Option<quinn::ServerConfig>) -> std::io::Result<(quinn::Endpoint, Arc<Relay>)> {
+    use quinn::Runtime;
+    socket.set_nonblocking(true)?;
+    let relay = Relay::new(socket.try_clone()?);
+    let runtime = Arc::new(quinn::TokioRuntime);
+    let socket = Arc::new(relay::Socket { inner: runtime.wrap_udp_socket(socket)?, relay: relay.clone(), waiting: Default::default() });
+    Ok((quinn::Endpoint::new_with_abstract_socket(quinn::EndpointConfig::default(), server, socket, runtime)?, relay))
+}
+
 /// The host end. Dropping it stops accepting and closes every connection.
 pub struct Host {
+    relay: Arc<Relay>,
     endpoint: quinn::Endpoint,
     puncher: std::net::UdpSocket,
     allowed: Arc<Allowed>,
@@ -183,6 +197,10 @@ impl Host {
     /// Sets who answers requests to the host itself. Without one they get no answer.
     pub fn on_request(&self, handler: Handler) {
         *self.handler.write().unwrap() = Some(handler);
+    }
+    /// The relay, for devices that cannot reach this host directly.
+    pub fn relay(&self) -> Arc<Relay> {
+        self.relay.clone()
     }
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint
@@ -249,15 +267,8 @@ pub fn serve_on(
         quinn::ServerConfig::with_crypto(Arc::new(tls::server(identity, allowed.clone())?));
     config.transport_config(transport());
     let opened = |_| Error("Could not open the tunnel port");
-    socket.set_nonblocking(true).map_err(opened)?;
     let puncher = socket.try_clone().map_err(opened)?;
-    let endpoint = quinn::Endpoint::new(
-        quinn::EndpointConfig::default(),
-        Some(config),
-        socket,
-        Arc::new(quinn::TokioRuntime),
-    )
-    .map_err(opened)?;
+    let (endpoint, relay) = endpoint(socket, Some(config)).map_err(opened)?;
     let connections = Connections::default();
     let handler = SharedHandler::default();
     let (accepting, open, handling) = (endpoint.clone(), connections.clone(), handler.clone());
@@ -275,6 +286,7 @@ pub fn serve_on(
         }
     });
     Ok(Host {
+        relay,
         endpoint,
         puncher,
         allowed,
@@ -382,6 +394,7 @@ async fn host_connection(connection: quinn::Connection, device: Fingerprint, han
 
 /// The connecting end. Dropping it closes the tunnel and its local ports.
 pub struct Client {
+    relay: Arc<Relay>,
     connection: quinn::Connection,
     endpoint: quinn::Endpoint,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -422,6 +435,7 @@ impl Drop for Client {
         }
         self.connection.close(0u32.into(), b"");
         self.endpoint.close(0u32.into(), b"");
+        self.relay.stop();
     }
 }
 
@@ -456,15 +470,35 @@ pub async fn connect_on(
     listen: IpAddr,
     ports: Ports,
 ) -> Result<Client> {
-    let opened = |_| Error("Could not open a tunnel socket");
-    socket.set_nonblocking(true).map_err(opened)?;
-    let endpoint = quinn::Endpoint::new(
-        quinn::EndpointConfig::default(),
-        None,
-        socket,
-        Arc::new(quinn::TokioRuntime),
-    )
-    .map_err(opened)?;
+    connect_through(open(socket)?, candidates, identity, host_pin, listen, ports).await
+}
+
+/// A tunnel socket that is open but not connected yet, so its relay can be set
+/// up before connecting. Call `open` inside the runtime.
+pub struct Opened {
+    endpoint: quinn::Endpoint,
+    relay: Arc<Relay>,
+}
+impl Opened {
+    pub fn relay(&self) -> Arc<Relay> {
+        self.relay.clone()
+    }
+}
+pub fn open(socket: std::net::UdpSocket) -> Result<Opened> {
+    let (endpoint, relay) = endpoint(socket, None).map_err(|_| Error("Could not open a tunnel socket"))?;
+    Ok(Opened { endpoint, relay })
+}
+
+/// Like `connect_on`, on a socket from `open`.
+pub async fn connect_through(
+    opened: Opened,
+    candidates: &[SocketAddr],
+    identity: &Identity,
+    host_pin: Fingerprint,
+    listen: IpAddr,
+    ports: Ports,
+) -> Result<Client> {
+    let Opened { endpoint, relay } = opened;
     let mut config = quinn::ClientConfig::new(Arc::new(tls::client(identity, host_pin)?));
     config.transport_config(transport());
 
@@ -499,6 +533,16 @@ pub async fn connect_on(
         .ok_or(Error("Could not reach the host, or it did not accept this device"))?;
 
     let mut tasks = Vec::new();
+    {
+        let relay = relay.clone();
+        tasks.push(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(240)).await;
+                let relay = relay.clone();
+                let _ = tokio::task::spawn_blocking(move || relay.keep()).await;
+            }
+        }));
+    }
     for port in ports.tcp {
         let listener = TcpListener::bind((listen, port))
             .await
@@ -563,6 +607,7 @@ pub async fn connect_on(
         }));
     }
     Ok(Client {
+        relay,
         connection,
         endpoint,
         tasks,

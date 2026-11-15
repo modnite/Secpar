@@ -228,6 +228,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
+name = "log"
+version = "0.4.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+
+[[package]]
 name = "lru-slab"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -517,6 +523,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "secpar-network"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "ring",
+]
+
+[[package]]
 name = "secpar-tunnel"
 version = "0.1.0"
 dependencies = [
@@ -525,6 +539,7 @@ dependencies = [
  "rcgen",
  "ring",
  "rustls",
+ "secpar-network",
  "tokio",
 ]
 

@@ -54,6 +54,17 @@ int main(int argc, char *argv[])
 #endif
     }
     QJsonObject configuration{{"channel", channel}, {"memory_store", sample || args.contains("--memory-store")}};
+    // The stream component is installed beside this program. Its profiles go in
+    // Secpar's own data folder for this person.
+#ifdef Q_OS_WIN
+    const QString component = QDir(QCoreApplication::applicationDirPath()).filePath("SecparStream.exe");
+#else
+    const QString component = QDir(QCoreApplication::applicationDirPath()).filePath("secpar-stream");
+#endif
+    if (QFile::exists(component) && !sample) {
+        configuration["stream_component"] = QDir::toNativeSeparators(component);
+        configuration["data_folder"] = QDir::toNativeSeparators(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));
+    }
     const int test = args.indexOf("--test-account");
     if (test >= 0 && test + 2 < args.size())
         configuration["test_account"] = QJsonArray{args.at(test + 1), args.at(test + 2)};

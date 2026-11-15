@@ -129,6 +129,22 @@ pub struct Reach {
     pub addresses: Vec<String>,
 }
 
+/// What a device needs to use the relay for a few hours.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelayAccess {
+    pub server: String,
+    pub username: String,
+    pub credential: String,
+}
+
+/// A device asking a hosting device to meet it at the relay, or the answer:
+/// the device's fingerprint and the "address:port" to use for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Knock {
+    pub device: String,
+    pub candidates: Vec<String>,
+}
+
 /// A public key the service signs access lists with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Key {
@@ -356,7 +372,20 @@ impl Service {
             return Err(Error::Invalid("The account service address is not usable"));
         }
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let http = reqwest::Client::builder()
+        let builder = reqwest::Client::builder();
+        // Android: check the service's certificate against the bundled list of
+        // certificate authorities instead of asking the system through Java.
+        #[cfg(target_os = "android")]
+        let builder = {
+            let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+            let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .map_err(|_| Error::Invalid("The connection to the account service could not be set up"))?
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            builder.tls_backend_preconfigured(tls)
+        };
+        let http = builder
             .https_only(!local)
             .timeout(Duration::from_secs(20))
             .connect_timeout(Duration::from_secs(10))
@@ -445,6 +474,53 @@ impl Service {
         let signed: Signed = self.json(self.http.post(self.url("/v1/device/access")).json(&body)).await?;
         let list = verify_access(&signed.access, keys, &self.origin, &host, at)?;
         Ok((signed.access, list))
+    }
+
+    /// A request signed with the device key, for a hosting device.
+    async fn as_device<T: DeserializeOwned>(&self, identity: &Identity, path: &str, purpose: &str, answers: &[Knock]) -> Result<T> {
+        #[derive(Deserialize)]
+        struct Time {
+            now: u64,
+        }
+        let Time { now: at } = self.json(self.http.get(self.url("/v1/device/time"))).await?;
+        let claims = serde_json::json!({
+            "iss": "secpar-device", "aud": self.origin, "sub": hex(&identity.fingerprint()),
+            "purpose": purpose, "iat": at, "exp": at + 60, "answers": answers,
+        });
+        let body = Proof { certificate: pem(identity.certificate_der()), proof: token(identity, "secpar-device-request+jwt", claims)? };
+        self.json(self.http.post(self.url(path)).timeout(Duration::from_secs(40)).json(&body)).await
+    }
+    /// Relay access for a hosting device.
+    pub async fn device_relay(&self, identity: &Identity) -> Result<RelayAccess> {
+        self.as_device(identity, "/v1/device/relay", "secpar-relay", &[]).await
+    }
+    /// Hands in answers to earlier knocks, then waits up to twenty seconds for
+    /// devices asking this hosting device to meet them at the relay.
+    pub async fn device_knocks(&self, identity: &Identity, answers: &[Knock]) -> Result<Vec<Knock>> {
+        #[derive(Deserialize)]
+        struct Knocks {
+            knocks: Vec<Knock>,
+        }
+        Ok(self.as_device::<Knocks>(identity, "/v1/device/knocks", "secpar-knocks", answers).await?.knocks)
+    }
+    /// Relay access for the signed-in person's device.
+    pub async fn relay(&self, session: &Session) -> Result<RelayAccess> {
+        self.json(self.http.post(self.url("/v1/devices/relay")).bearer_auth(&session.token)).await
+    }
+    /// Asks the hosting device `host` to meet this device, which is at the
+    /// addresses `at` (direct first, then its relay address if it has one), and
+    /// waits for the host's addresses in the same order.
+    pub async fn knock(&self, session: &Session, host: &str, this: &Fingerprint, at: &[std::net::SocketAddr]) -> Result<Vec<std::net::SocketAddr>> {
+        #[derive(Deserialize)]
+        struct Answer {
+            candidates: Vec<String>,
+        }
+        if host.len() != 36 || !host.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+            return Err(Error::Invalid("Unknown device"));
+        }
+        let body = serde_json::json!({"fingerprint": hex(this), "candidates": at.iter().map(|a| a.to_string()).collect::<Vec<_>>()});
+        let request = self.http.post(self.url(&format!("/v1/devices/{host}/knock"))).bearer_auth(&session.token).timeout(Duration::from_secs(40)).json(&body);
+        Ok(self.json::<Answer>(request).await?.candidates.iter().filter_map(|c| c.parse().ok()).collect())
     }
 
     pub async fn devices(&self, session: &Session) -> Result<Vec<Device>> {

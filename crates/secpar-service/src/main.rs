@@ -82,6 +82,9 @@ async fn main() {
     if let Some(address) = core.tunnel_address() {
         println!("hosting, tunnel on UDP port {}", address.port());
     }
+    if let Some((found, opened)) = core.reach_outside().await {
+        println!("internet address found: {found}; router passes the tunnel port through: {opened}");
+    }
     println!("ready");
 
     let serving = channel::serve(core.clone(), &name);

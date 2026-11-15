@@ -16,9 +16,12 @@ pub trait SecretStore: Send + Sync {
 
 /// The operating system's credential store: Credential Manager on Windows, the
 /// Secret Service (KWallet, GNOME Keyring) on Linux. Separate from Secpar 3's entries.
+#[cfg(not(target_os = "android"))]
 pub struct SystemStore;
+#[cfg(not(target_os = "android"))]
 const SERVICE: &str = "win.secpar.app";
 
+#[cfg(not(target_os = "android"))]
 impl SecretStore for SystemStore {
     fn load(&self, name: &str) -> Result<Option<Vec<u8>>, Unavailable> {
         let entry = keyring::Entry::new(SERVICE, name).map_err(|_| Unavailable)?;
@@ -36,6 +39,39 @@ impl SecretStore for SystemStore {
     fn forget(&self, name: &str) -> Result<(), Unavailable> {
         match keyring::Entry::new(SERVICE, name).and_then(|entry| entry.delete_credential()) {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err(Unavailable),
+        }
+    }
+}
+
+/// Keeps each secret as a file in one folder. For Android, where the folder is
+/// the app's private storage that no other app can read.
+pub struct FileStore(pub std::path::PathBuf);
+impl FileStore {
+    fn path(&self, name: &str) -> Result<std::path::PathBuf, Unavailable> {
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return Err(Unavailable);
+        }
+        Ok(self.0.join(format!("{name}.secret")))
+    }
+}
+impl SecretStore for FileStore {
+    fn load(&self, name: &str) -> Result<Option<Vec<u8>>, Unavailable> {
+        match std::fs::read(self.path(name)?) {
+            Ok(secret) => Ok(Some(secret)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(Unavailable),
+        }
+    }
+    fn save(&self, name: &str, secret: &[u8]) -> Result<(), Unavailable> {
+        let path = self.path(name)?;
+        let part = path.with_extension("part");
+        std::fs::create_dir_all(&self.0).and_then(|_| std::fs::write(&part, secret)).and_then(|_| std::fs::rename(&part, &path)).map_err(|_| Unavailable)
+    }
+    fn forget(&self, name: &str) -> Result<(), Unavailable> {
+        match std::fs::remove_file(self.path(name)?) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err(Unavailable),
         }
     }

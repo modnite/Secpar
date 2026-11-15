@@ -1,6 +1,6 @@
 // PC Remote rendezvous: one Durable Object per PC relays agent frames between the PC's host and
 // its phones, and hands out TURN credentials. Protocol: docs/remote-protocol.md.
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { b64urlDecode, freshTs, hostSig, phoneSig, sameHex } from "./auth";
 import { firstFrameOk, isWelcome, MAX_GUESTS, MAX_PENDING_GUESTS, PENDING_SECONDS } from "./guest";
 
@@ -11,6 +11,29 @@ export interface Env {
 }
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Relay credentials from the TURN key this service holds, or why not. */
+async function turnCredentials(env: Env): Promise<Response> {
+  const { TURN_KEY_ID: id, TURN_KEY_TOKEN: token } = env;
+  if (!id || !token) return new Response("relay not configured", { status: 503 });
+  const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${id}/credentials/generate-ice-servers`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ ttl: 6 * 3600 }),
+  });
+  if (!r.ok) return new Response("relay error", { status: 502 });
+  return new Response(await r.text(), { headers: { "Content-Type": "application/json" } });
+}
+
+/** For the account service only, through a service binding: it has already
+ * checked who is asking. Not reachable from the internet. */
+export class Turn extends WorkerEntrypoint<Env> {
+  /** The credentials as JSON text, or "!" and why not. */
+  async credentials(): Promise<string> {
+    const answer = await turnCredentials(this.env);
+    return answer.ok ? answer.text() : `!${answer.status}`;
+  }
+}
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -107,16 +130,8 @@ export class Room extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private async turn(): Promise<Response> {
-    const { TURN_KEY_ID: id, TURN_KEY_TOKEN: token } = this.env;
-    if (!id || !token) return new Response("relay not configured", { status: 503 });
-    const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${id}/credentials/generate-ice-servers`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ttl: 6 * 3600 }),
-    });
-    if (!r.ok) return new Response("relay error", { status: 502 });
-    return new Response(await r.text(), { headers: { "Content-Type": "application/json" } });
+  private turn(): Promise<Response> {
+    return turnCredentials(this.env);
   }
 
   // A friend's socket. No ticket: the host checks the signed grant in the first frame.

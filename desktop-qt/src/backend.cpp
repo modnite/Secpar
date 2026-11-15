@@ -60,6 +60,10 @@ QString Backend::explain(const QJsonObject &answer)
         return "That computer is off or not connected to the internet.";
     if (code == "not_reachable")
         return "That computer did not answer. Check that both computers are on the same network.";
+    if (code == "stream_component_missing" || code == "stream_component_failed" || code == "data_folder_unusable")
+        return "The stream could not be started on this computer (" + code + ").";
+    if (code == "pairing_refused" || code == "pairing_failed")
+        return "That computer did not accept this one (" + code + "). Try again.";
     if (code == "signed_out")
         return QString();
     return "That did not work (" + code + "). Try again.";

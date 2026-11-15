@@ -12,7 +12,9 @@ use secpar_core::{
 use secpar_service::channel;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+
+mod stream;
 
 #[derive(Deserialize)]
 #[serde(tag = "do", rename_all = "snake_case")]
@@ -26,6 +28,12 @@ enum Request {
         test_account: Option<(String, String)>,
         #[serde(default)]
         memory_store: bool,
+        /// The stream component's executable and Secpar's data folder for this
+        /// person. Without both, Connect opens the tunnel and starts no stream.
+        #[serde(default)]
+        stream_component: Option<String>,
+        #[serde(default)]
+        data_folder: Option<String>,
     },
     State,
     /// Signs in and enrols this computer under the account as `computer`.
@@ -44,6 +52,8 @@ struct App {
     account: Service,
     store: Box<dyn SecretStore>,
     channel: String,
+    stream: Option<Arc<stream::Settings>>,
+    running: stream::Running,
 }
 static APP: OnceLock<App> = OnceLock::new();
 /// One request at a time: sign-in and sign-out must not interleave.
@@ -96,6 +106,7 @@ impl App {
             "hosts": background.as_ref().map(|b| b["hosts"].clone()),
             "device": background.as_ref().map(|b| b["device"].clone()),
             "connected_to_host": background.as_ref().map(|b| b["connected_to_host"].clone()),
+            "streaming": self.running.lock().await.is_some(),
         })
     }
 
@@ -197,7 +208,23 @@ impl App {
             }
             match self.background(request.clone()).await {
                 None => return failed("background_not_running"),
-                Some(answer) if answer["ok"] == true => return json!({"ok": true, "id": id, "stream_address": answer["stream_address"]}),
+                Some(answer) if answer["ok"] == true => {
+                    let Some(settings) = &self.stream else {
+                        return json!({"ok": true, "id": id, "streaming": false, "stream_address": answer["stream_address"]});
+                    };
+                    let address = answer["stream_address"].as_str().unwrap_or_default().to_string();
+                    return match stream::start(settings, &device.fingerprint, &address, &self.channel, &self.running).await {
+                        Ok(()) => {
+                            tokio::spawn(stream::watch(settings.clone(), device.fingerprint.clone(), self.channel.clone(), self.running.clone()));
+                            json!({"ok": true, "id": id, "streaming": true})
+                        }
+                        Err(reason) => {
+                            // No tunnel is left open without a stream using it.
+                            self.background(json!({"do": "disconnect"})).await;
+                            failed(reason)
+                        }
+                    };
+                }
                 Some(_) => {}
             }
         }
@@ -221,7 +248,7 @@ impl App {
     }
 }
 
-fn configure(channel: String, test_account: Option<(String, String)>, memory_store: bool) -> Value {
+fn configure(channel: String, test_account: Option<(String, String)>, memory_store: bool, stream: Option<stream::Settings>) -> Value {
     let account = match &test_account {
         Some((origin, address)) => Service::local_test(origin, address),
         None => Service::new(account::ORIGIN),
@@ -230,7 +257,7 @@ fn configure(channel: String, test_account: Option<(String, String)>, memory_sto
         return failed("not_configured");
     };
     let store: Box<dyn SecretStore> = if memory_store { Box::new(MemoryStore::default()) } else { Box::new(SystemStore) };
-    match APP.set(App { runtime, account, store, channel }) {
+    match APP.set(App { runtime, account, store, channel, stream: stream.map(Arc::new), running: Default::default() }) {
         Ok(()) => json!({"ok": true}),
         Err(_) => failed("already_configured"),
     }
@@ -240,8 +267,12 @@ fn configure(channel: String, test_account: Option<(String, String)>, memory_sto
 pub fn call(request: &str) -> Value {
     let Ok(request) = serde_json::from_str::<Request>(request) else { return failed("unknown_request") };
     let _turn = TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Request::Configure { channel, test_account, memory_store } = request {
-        return configure(channel, test_account, memory_store);
+    if let Request::Configure { channel, test_account, memory_store, stream_component, data_folder } = request {
+        let stream = match (stream_component, data_folder) {
+            (Some(component), Some(data)) => Some(stream::Settings { component: component.into(), data: data.into() }),
+            _ => None,
+        };
+        return configure(channel, test_account, memory_store, stream);
     }
     let Some(app) = APP.get() else { return failed("not_configured") };
     app.runtime.block_on(async {
@@ -253,7 +284,10 @@ pub fn call(request: &str) -> Value {
             Request::Devices => app.devices().await,
             Request::RemoveDevice { id } => app.remove_device(&id).await,
             Request::Connect { id } => app.connect(&id).await,
-            Request::Disconnect => app.background(json!({"do": "disconnect"})).await.unwrap_or_else(|| failed("background_not_running")),
+            Request::Disconnect => {
+                stream::stop(&app.running).await;
+                app.background(json!({"do": "disconnect"})).await.unwrap_or_else(|| failed("background_not_running"))
+            }
         }
     })
 }

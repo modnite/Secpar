@@ -8,9 +8,9 @@
 //! to one device of one account, and is taken away again when that device leaves
 //! the list.
 use secpar_core::{
-    account::{Reach, Service},
+    account::{Knock, Reach, Service},
     hosting::{Access, Peer, Refreshed},
-    identity::hex,
+    identity::{hex, unhex},
 };
 use secpar_tunnel::{Fingerprint, Identity};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,7 @@ use std::{
 };
 
 mod engine;
+pub mod outside;
 #[cfg(test)]
 mod tests;
 
@@ -114,6 +115,12 @@ impl<E: Engine> Inner<E> {
 pub struct Hosting<E: Engine> {
     inner: Arc<Inner<E>>,
     tunnel: secpar_tunnel::Host,
+    /// This network's address on the internet, once found, and whether the
+    /// router agreed to pass the tunnel's port through.
+    outside: std::sync::Mutex<(Option<IpAddr>, bool)>,
+    /// Devices to keep sending small packets to, and until when, so the
+    /// routers in between let their packets in.
+    punching: std::sync::Mutex<Vec<(tokio::time::Instant, SocketAddr)>>,
 }
 impl<E: Engine> Hosting<E> {
     /// Opens the tunnel on `bind` for the devices `access` allows right now, in
@@ -127,7 +134,7 @@ impl<E: Engine> Hosting<E> {
             let answering = answering.clone();
             Box::pin(async move { serde_json::to_vec(&answering.answer(device, request).await).unwrap_or_default() })
         }));
-        Ok(Self { inner, tunnel })
+        Ok(Self { inner, tunnel, outside: Default::default(), punching: Default::default() })
     }
     pub fn tunnel(&self) -> &secpar_tunnel::Host {
         &self.tunnel
@@ -167,7 +174,30 @@ impl<E: Engine> Hosting<E> {
         } else {
             bound.ip()
         };
-        Some(Reach { port: bound.port(), addresses: vec![address.to_string()] })
+        let mut addresses = vec![address.to_string()];
+        // The home address first: it is tried first and is the faster way.
+        if let (Some(public), true) = (self.outside.lock().unwrap().0, bound.ip().is_unspecified()) {
+            addresses.push(public.to_string());
+        }
+        Some(Reach { port: bound.port(), addresses })
+    }
+
+    /// Finds this network's address on the internet and asks the router to pass
+    /// the tunnel's port through. Returns the address, if found, and whether the
+    /// router agreed. Does nothing when the tunnel is bound to one address only.
+    pub async fn reach_outside(&self) -> (Option<IpAddr>, bool) {
+        let Ok(bound) = self.tunnel.local_addr() else { return (None, false) };
+        if !bound.ip().is_unspecified() {
+            return (None, false);
+        }
+        let local = std::net::UdpSocket::bind("0.0.0.0:0").and_then(|probe| probe.connect("192.0.2.1:9").and_then(|_| probe.local_addr()));
+        let opened = match local {
+            Ok(SocketAddr::V4(local)) => outside::open_on_router(*local.ip(), bound.port()).await,
+            _ => false,
+        };
+        let found = (outside::public_address().await, opened);
+        *self.outside.lock().unwrap() = found;
+        found
     }
 
     /// Fetches a new list with the device's own key and applies it.
@@ -205,10 +235,111 @@ impl<E: Engine> Hosting<E> {
     /// connect, at most once in ten seconds: a computer the owner has just
     /// signed in on is not on the old list yet, and should not have to wait.
     pub async fn keep_current(&self, service: &Service, identity: &Identity) {
+        tokio::join!(self.keep_list(service, identity), self.meet(service, identity), self.punch());
+    }
+
+    async fn punch(&self) {
+        loop {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let to: Vec<SocketAddr> = {
+                let mut punching = self.punching.lock().unwrap();
+                punching.retain(|(until, _)| *until > tokio::time::Instant::now());
+                punching.iter().map(|(_, to)| *to).collect()
+            };
+            self.tunnel.punch(&to);
+        }
+    }
+
+    /// Waits for devices that cannot reach this computer directly. Each says
+    /// where it is on the internet and, if it has one, its relay address; this
+    /// computer answers with its own two, sends packets towards the device so
+    /// the routers let it in, and adds the device at the relay. Only devices on
+    /// the access list get an answer, and what then arrives is the tunnel, which
+    /// checks them again. The relay address is given back ten minutes after the
+    /// last use. In both lists the first entry is the direct address
+    /// (0.0.0.0:9 when unknown) and the second, if any, the relay address.
+    async fn meet(&self, service: &Service, identity: &Identity) {
+        let relay = self.tunnel.relay();
+        let mut answers: Vec<Knock> = Vec::new();
+        let mut used = tokio::time::Instant::now();
+        let mut kept = used;
+        loop {
+            let knocks = match service.device_knocks(identity, &answers).await {
+                Ok(knocks) => knocks,
+                Err(_) => {
+                    answers.clear();
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    continue;
+                }
+            };
+            answers.clear();
+            for knock in knocks {
+                let peers: Vec<SocketAddr> = knock.candidates.iter().filter_map(|c| c.parse().ok()).collect();
+                if !unhex(&knock.device).is_some_and(|device| self.inner.access.allowed(now()).contains(&device)) {
+                    // Perhaps a device the list does not have yet.
+                    self.refresh(service, identity).await;
+                    if !unhex(&knock.device).is_some_and(|device| self.inner.access.allowed(now()).contains(&device)) {
+                        continue;
+                    }
+                }
+                let Some(direct) = peers.first().copied() else { continue };
+                // Direct: where this socket is seen from outside, and packets towards the device.
+                let seen = match tokio::net::lookup_host(outside::STUN).await.ok().and_then(|mut found| found.find(SocketAddr::is_ipv4)) {
+                    Some(stun) => {
+                        let asking = relay.clone();
+                        tokio::task::spawn_blocking(move || asking.seen_from_outside(stun)).await.ok().flatten()
+                    }
+                    None => None,
+                };
+                if !direct.ip().is_unspecified() {
+                    self.punching.lock().unwrap().push((tokio::time::Instant::now() + Duration::from_secs(12), direct));
+                }
+                // The relay, when the device has a relay address and this service offers one.
+                if let Some(there) = peers.get(1).copied() {
+                    if relay.address().is_none() {
+                        if let Ok(access) = service.device_relay(identity).await {
+                            if let Some(server) = tokio::net::lookup_host(&access.server).await.ok().and_then(|mut found| found.find(SocketAddr::is_ipv4)) {
+                                let starting = relay.clone();
+                                let _ = tokio::task::spawn_blocking(move || starting.start(server, access.username, access.credential)).await;
+                                kept = tokio::time::Instant::now();
+                            }
+                        }
+                    }
+                    if relay.address().is_some() {
+                        let adding = relay.clone();
+                        let _ = tokio::task::spawn_blocking(move || adding.add(there)).await;
+                    }
+                }
+                let mut candidates = vec![seen.map_or("0.0.0.0:9".to_string(), |a| a.to_string())];
+                candidates.extend(relay.address().filter(|_| peers.len() > 1).map(|a| a.to_string()));
+                if seen.is_none() && candidates.len() < 2 {
+                    continue;
+                }
+                answers.push(Knock { device: knock.device, candidates });
+                used = tokio::time::Instant::now();
+            }
+            if relay.address().is_some() {
+                if !self.tunnel.connected().is_empty() {
+                    used = tokio::time::Instant::now();
+                }
+                if used.elapsed() > Duration::from_secs(600) {
+                    relay.stop();
+                } else if kept.elapsed() > Duration::from_secs(200) {
+                    kept = tokio::time::Instant::now();
+                    let relay = relay.clone();
+                    let _ = tokio::task::spawn_blocking(move || relay.keep()).await;
+                }
+            }
+        }
+    }
+
+    async fn keep_list(&self, service: &Service, identity: &Identity) {
         let mut tick = 0u32;
         let mut knocked = tokio::time::Instant::now() - Duration::from_secs(10);
         loop {
             if tick % 45 == 0 {
+                // Every 15 minutes, so the router's hour never runs out.
+                self.reach_outside().await;
                 self.refresh(service, identity).await;
             } else {
                 self.apply().await;

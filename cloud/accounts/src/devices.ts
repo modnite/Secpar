@@ -5,7 +5,7 @@
 import { importX509, exportJWK, jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { EFFECTIVE } from "./settings";
 
-interface Environment { DB: D1Database; PUBLIC_ORIGIN: string }
+interface Environment { DB: D1Database; PUBLIC_ORIGIN: string; RELAY?: { credentials(): Promise<string> } }
 interface Owner { id: string }
 interface Helpers {
   body(request: Request): Promise<Record<string, unknown>>;
@@ -41,6 +41,30 @@ function reachOf(value: unknown): Reach | null {
   const literal = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}|[0-9a-fA-F:]{2,39})$/;
   if (!addresses.every((a) => typeof a === "string" && literal.test(a))) return null;
   return { port, addresses: addresses as string[] };
+}
+
+/** One to four "address:port" candidates, IPv4, or nothing. */
+function candidatesOf(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null;
+  const one = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}:[1-9]\d{0,4}$/;
+  return value.every((c) => typeof c === "string" && one.test(c)) ? (value as string[]) : null;
+}
+const second = () => new Promise((done) => setTimeout(done, 1000));
+
+/** Credentials for the relay, good for a few hours, from the relay service
+ * Secpar already runs. The relay only carries the tunnel's encrypted packets. */
+async function relay(env: Environment, api: Helpers): Promise<Response> {
+  if (!env.RELAY) api.fail(503, "relay_not_configured");
+  const answer = await env.RELAY.credentials();
+  if (answer === "!503") api.fail(503, "relay_not_configured");
+  if (answer.startsWith("!")) api.fail(502, "relay_unavailable");
+  type Ice = { urls?: string | string[]; username?: string; credential?: string };
+  const { iceServers } = JSON.parse(answer) as { iceServers?: Ice | Ice[] };
+  for (const server of [iceServers ?? []].flat()) {
+    const url = [server.urls ?? []].flat().find((u) => /^turn:[^?]+:\d+\?transport=udp$/.test(u));
+    if (url && server.username && server.credential) return json({ server: url.slice(5).split("?")[0], username: server.username, credential: server.credential });
+  }
+  return api.fail(502, "relay_answer_not_understood");
 }
 
 /** Reads a device certificate and a token signed with its key. Returns the
@@ -107,14 +131,34 @@ export async function deviceKeyRoutes(request: Request, env: Environment, api: H
   const { pathname: path } = new URL(request.url), method = request.method;
   // The service's time, so a device with a wrong clock can still date its proof.
   if (path === "/v1/device/time" && method === "GET") return json({ now: now() });
-  if (path !== "/v1/device/access" || method !== "POST") return null;
+  const purpose = ({ "/v1/device/access": "secpar-access", "/v1/device/knocks": "secpar-knocks", "/v1/device/relay": "secpar-relay" } as Record<string, string>)[path];
+  if (!purpose || method !== "POST") return null;
   await api.limit(request, env, "device_key_access", 120);
   const base = new URL(env.PUBLIC_ORIGIN).origin;
   const { fingerprint, payload } = await proven(await api.body(request), "secpar-device-request+jwt", base, api);
-  if (payload.sub !== fingerprint || payload.purpose !== "secpar-access") api.fail(403, "invalid_device_proof");
+  if (payload.sub !== fingerprint || payload.purpose !== purpose) api.fail(403, "invalid_device_proof");
   const device = await q(env, "SELECT * FROM devices WHERE fingerprint=? AND hosts=1", fingerprint).first<Device>();
   // A removed device and one that never hosted look the same from outside.
   if (!device) api.fail(404, "device_not_found");
+  if (purpose === "secpar-relay") return relay(env, api);
+  if (purpose === "secpar-knocks") {
+    // Answers to earlier knocks first, then wait a while for new ones.
+    const answers = Array.isArray(payload.answers) ? (payload.answers as { device?: unknown; candidates?: unknown }[]).slice(0, 8) : [];
+    for (const a of answers) {
+      const candidates = candidatesOf(a?.candidates);
+      if (typeof a?.device === "string" && candidates) await q(env, "UPDATE knocks SET answer=? WHERE host=? AND device=?", JSON.stringify(candidates), device.id, a.device).run();
+    }
+    await q(env, "DELETE FROM knocks WHERE created<?", now() - 120).run();
+    for (let waited = 0; waited < 20; waited++) {
+      const rows = await q(env, "SELECT device,candidates FROM knocks WHERE host=? AND taken=0 AND created>?", device.id, now() - 30).all<{ device: string; candidates: string }>();
+      if (rows.results.length) {
+        await q(env, "UPDATE knocks SET taken=1 WHERE host=?", device.id).run();
+        return json({ knocks: rows.results.map((k) => ({ device: k.device, candidates: JSON.parse(k.candidates) as string[] })) });
+      }
+      await second();
+    }
+    return json({ knocks: [] });
+  }
   // The request may say where the device can be reached now; without it, nowhere.
   const reach = reachOf(payload.reach);
   await q(env, "UPDATE devices SET reach=?,reach_seen=? WHERE id=?", reach ? JSON.stringify(reach) : "", reach ? now() : 0, device.id).run();
@@ -161,6 +205,31 @@ export async function deviceRoutes(request: Request, env: Environment, me: Owner
   if (path === "/v1/devices" && method === "GET") {
     const rows = await q(env, "SELECT * FROM devices WHERE owner=? ORDER BY created,id", me.id).all<Device>();
     return json({ devices: rows.results.map(shown) });
+  }
+
+  if (path === "/v1/devices/relay" && method === "POST") {
+    await api.limit(request, env, "device_relay", 20);
+    return relay(env, api);
+  }
+
+  // A device of this account asks one of its hosting devices to meet it at the
+  // relay, and waits a short while for that device's relay address.
+  const knock = path.match(/^\/v1\/devices\/([a-f0-9-]{36})\/knock$/);
+  if (knock && method === "POST") {
+    await api.limit(request, env, "device_knock", 20);
+    const b = await api.body(request);
+    const candidates = candidatesOf(b.candidates);
+    if (!candidates || typeof b.fingerprint !== "string") api.fail(400, "invalid_knock");
+    const host = await q(env, "SELECT id FROM devices WHERE id=? AND owner=? AND hosts=1", knock[1], me.id).first<{ id: string }>();
+    const from = await q(env, "SELECT fingerprint FROM devices WHERE fingerprint=? AND owner=?", b.fingerprint as string, me.id).first<{ fingerprint: string }>();
+    if (!host || !from) return api.fail(404, "device_not_found");
+    await q(env, "INSERT INTO knocks(host,device,candidates,created) VALUES(?,?,?,?) ON CONFLICT(host,device) DO UPDATE SET candidates=excluded.candidates,answer=NULL,taken=0,created=excluded.created", host.id, from.fingerprint, JSON.stringify(candidates), now()).run();
+    for (let waited = 0; waited < 15; waited++) {
+      await second();
+      const row = await q(env, "SELECT answer FROM knocks WHERE host=? AND device=?", host.id, from.fingerprint).first<{ answer: string | null }>();
+      if (row?.answer) return json({ candidates: JSON.parse(row.answer) as string[] });
+    }
+    api.fail(504, "host_not_answering");
   }
 
   const one = path.match(/^\/v1\/devices\/([a-f0-9-]{36})(\/access)?$/);

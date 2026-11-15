@@ -10,5 +10,6 @@ bytes = "1"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 ring = "0.17.14"
+secpar-network = { path = "../secpar-network" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
