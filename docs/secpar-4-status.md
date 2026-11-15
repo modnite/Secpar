@@ -30,10 +30,11 @@ first in every trade-off.
 - Phone to PC over mobile data, with the home line behind the provider's shared
   address (no port forward possible) and no relay key configured.
 - Android to Windows over the home LAN and over cellular data (owner, 2026-11-15).
+- Sound and touch in the phone app (owner, 2026-11-15). Controllers are not tried.
 
 ## Built but not confirmed
 
-- Sound, touch and controllers in the Android app. Ask the owner.
+- Controllers in the Android app.
 - The owner's work network. If it blocks UDP, a relay key is needed (see below).
 - Starting the stream from the desktop window after Connect. The path is wired
   and checked against the local account service with a test-only stand-in for the
@@ -87,9 +88,14 @@ unknown) and the second, if present, the relay address.
 
 ## Known gaps, most useful first
 
-1. Hosting only runs while the owner is signed in to Windows. It needs to be a
-   Windows service, as part of an installer. Needs administrator rights and the
-   owner's go-ahead.
+1. Hosting only runs while the owner is signed in to Windows. Verified
+   2026-11-15: `Secpar 4 hosting (test)` has a logon trigger and runs
+   interactively as the owner, so it starts after sign-in and stops at sign-out.
+   The running `Secpar` service is the old installed Secpar 3, not this. A service
+   alone cannot capture the signed-out desktop; the practical choices are
+   automatic sign-in to a locked session (if capture works there) or accepting
+   that the PC stays logged in. Administrator rights and the owner's go-ahead are
+   needed either way.
 2. No relay key on the relay service, so networks that block direct connection
    cannot connect. `relay_not_configured` is the answer today. Setting
    `TURN_KEY_ID` and `TURN_KEY_TOKEN` on the relay service is the owner's step;
