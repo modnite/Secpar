@@ -6,18 +6,16 @@ the owner wants. Update this file after each result the owner confirms.
 
 ## What Secpar 4 is
 
-A UI and engine update of Secpar 3 for Windows 10/11, Linux and Android. The
-existing 3.x app, its accounts, pairing, relay, connection scheme and feature set
-stay the base. Only the PRS media engine is replaced with Sunshine on the host
-and Moonlight on the client, behind the existing authenticated connection. The
-parallel `secpar-app`/`secpar-service` account, knock and window work is
-prototype, not the shipping path.
+Secpar 4 is the product name and version for this update of Secpar 3, for
+Windows 10/11, Linux and Android. It keeps the 3.x app, its accounts, pairing,
+relay, connection scheme and feature set as its base. The PRS media engine is
+replaced with Sunshine on the host and Moonlight on the client, behind the
+existing authenticated connection, and the UI and sound are updated on top.
 
-Shipping base: `desktop/`, `host/`, `app/`, `crates/secpar-client`,
-`crates/secpar-host-core` and `crates/secpar-network`.
-Reusable engine pieces: `crates/secpar-gamestream-host`,
-`integrations/gamestream`, and the tunnel as the engine data path.
-The new account/device/knock wiring is not the product path.
+Secpar 4 is built from the 3.x codebase: `desktop/`, `host/`, `app/`,
+`crates/secpar-client`, `crates/secpar-host-core` and `crates/secpar-network`.
+The parallel `secpar-app`/`secpar-service` account, knock and window code is an
+internal prototype, not the shipping implementation of Secpar 4.
 
 ### Engine integration on the 3.x connection
 
