@@ -8,6 +8,8 @@ import com.limelight.nvstream.http.ComputerDetails
 import com.limelight.nvstream.http.NvHTTP
 import com.limelight.nvstream.http.PairingManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.net.NetworkInterface
 import java.security.MessageDigest
@@ -57,21 +59,34 @@ object EngineLaunch {
             val clientCertificate = crypto.clientCertificate.encoded
             val pin = PairingManager.generatePinString()
 
-            client.pair(fingerprint(clientCertificate), pin, ready.certificate, candidates(ready))
-                .getOrElse { return@withContext Result.failure(it) }
+            // The computer approves this certificate only once Moonlight's own pairing handshake is
+            // waiting in the engine, and that handshake travels through the tunnel. So the approval
+            // is asked for first and answered while the handshake runs, not before it.
+            val approval = async { client.pair(fingerprint(clientCertificate), pin, ready.certificate, candidates(ready)) }
+            // The computer lets this tunnel in as soon as it reads the request.
+            delay(TUNNEL_GRACE_MS)
+            if (approval.isCompleted) approval.await().onFailure { return@withContext Result.failure(it) }
 
             NativeTunnel.open(serdeJsonList(addresses), endpoint.tunnelPort, endpoint.tunnelCertificate)?.let { said ->
                 NativeTunnel.close()
+                approval.cancel()
                 // The tunnel library reports a sentence; short codes keep their own words.
                 return@withContext Result.failure(GamestreamProblem(if (' ' in said) said else problem(said)))
             }
 
-            try {
+            val started = try {
                 start(context, endpoint, crypto, pin, pcName)
             } catch (e: Exception) {
-                NativeTunnel.close()
                 Result.failure(GamestreamProblem(problem(e)))
             }
+            // A device the engine already knows needs no approval; the computer's answer is not waited for.
+            if (started.isSuccess) {
+                approval.cancel()
+                return@withContext started
+            }
+            NativeTunnel.close()
+            // The computer's own answer explains a refusal better than the engine's.
+            approval.await().exceptionOrNull()?.let { Result.failure(it) } ?: started
         }
 
     /** The stream component runs; nothing here keeps the tunnel beyond that. */
@@ -219,4 +234,7 @@ object EngineLaunch {
 
     private fun problem(error: Exception): String =
         error.message?.takeIf { it.isNotBlank() } ?: "The stream did not start."
+
+    /** How long the computer gets to let this device's tunnel in after the pairing request. */
+    private const val TUNNEL_GRACE_MS = 1_500L
 }

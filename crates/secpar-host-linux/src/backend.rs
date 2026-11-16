@@ -212,8 +212,17 @@ impl Backend {
         let Some(runtime) = tokio::runtime::Handle::try_current().ok() else { return };
         runtime.spawn(async move {
             tokio::time::sleep(wait).await;
-            let choice = host.store.lock().unwrap().config().encoder.clone();
-            match Engine::start(&host.directory, &choice).await {
+            // After a restart the engine being replaced may hold its state folder a while longer, and
+            // the engine sometimes crashes while it tests the GPU encoder at start: try again.
+            let mut tries = if wait.is_zero() { 3 } else { 15 };
+            let started = loop {
+                let choice = host.store.lock().unwrap().config().encoder.clone();
+                let result = Engine::start(&host.directory, &choice).await;
+                tries -= 1;
+                if result.is_ok() || tries == 0 { break result; }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            };
+            match started {
                 Ok(engine) => {
                     eprintln!(
                         "secpar: managed engine ready, tunnel on UDP port {}",

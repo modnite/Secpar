@@ -17,3 +17,13 @@
 -keep class com.limelight.nvstream.jni.MoonBridge { *; }
 -keep class com.limelight.binding.input.driver.UsbDriverService { *; }
 -keep class com.pcremote.engine.NativeTunnel { *; }
+# Moonlight creates this device's client certificate through BouncyCastle, which looks its
+# algorithms up by class name. These are Moonlight's own keep rules for it.
+-keep class org.bouncycastle.jcajce.provider.asymmetric.* {*;}
+-keep class org.bouncycastle.jcajce.provider.asymmetric.util.* {*;}
+-keep class org.bouncycastle.jcajce.provider.asymmetric.rsa.* {*;}
+-keep class org.bouncycastle.jcajce.provider.digest.** {*;}
+-keep class org.bouncycastle.jcajce.provider.symmetric.** {*;}
+-keep class org.bouncycastle.jcajce.spec.* {*;}
+-keep class org.bouncycastle.jce.** {*;}
+-keep class sun.misc.Unsafe {*;}

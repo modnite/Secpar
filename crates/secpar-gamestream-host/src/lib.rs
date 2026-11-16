@@ -396,22 +396,31 @@ impl Host {
         {
             return Err(Error("Pairing approval is invalid"));
         }
-        let pending = self.pending().await?;
-        if pending.secpar_identity_binding != 1 {
-            return Err(Error("Bundled host does not support device-bound pairing"));
-        }
-        let matches: Vec<_> = pending
-            .pairings
-            .iter()
-            .filter(|p| {
-                p.client_id == identity.client_id
-                    && p.certificate_sha256 == identity.certificate_sha256
-            })
-            .collect();
-        if matches.len() != 1 {
-            return Err(Error("The expected device has no unique pending pairing"));
-        }
-        let id = &matches[0].id;
+        // The device starts its own pairing handshake while it waits for this approval, so its
+        // request can reach the engine a little after this call: wait for it.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        let id = loop {
+            let pending = self.pending().await?;
+            if pending.secpar_identity_binding != 1 {
+                return Err(Error("Bundled host does not support device-bound pairing"));
+            }
+            let matches: Vec<_> = pending
+                .pairings
+                .iter()
+                .filter(|p| {
+                    p.client_id == identity.client_id
+                        && p.certificate_sha256 == identity.certificate_sha256
+                })
+                .collect();
+            match matches.len() {
+                1 => break matches[0].id.clone(),
+                0 if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await
+                }
+                _ => return Err(Error("The expected device has no unique pending pairing")),
+            }
+        };
+        let id = &id;
         if !is_hex(id, 32) {
             return Err(Error("Host pairing identifier is invalid"));
         }
