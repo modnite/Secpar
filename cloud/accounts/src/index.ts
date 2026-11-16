@@ -31,6 +31,7 @@ const permissions = new Set([
   "mouse",
   "clipboard",
   "files",
+  "browse",
 ]);
 const STATE = "__Host-secpar-oauth";
 const seconds = () => Math.floor(Date.now() / 1000);
@@ -469,7 +470,7 @@ export async function handle(
         deny(403, "friend_access_required");
       const policy = await friendSettings(env, host.owner, me.id);
       // A view only friend never gets keyboard or mouse, whatever the app asks for.
-      const allowed = requested.filter((p) => (p !== "keyboard" || policy.keyboard) && (p !== "mouse" || policy.mouse));
+      const allowed = requested.filter((p) => (p !== "keyboard" || policy.keyboard) && (p !== "mouse" || policy.mouse) && (p !== "browse" || policy.browse));
       if (!allowed.length) deny(403, "input_not_allowed");
       const id = crypto.randomUUID();
       const auto = policy.connect === "always";
@@ -527,7 +528,7 @@ export async function handle(
         if (!approved.every((p) => requested.has(p)))
           deny(400, "cannot_expand_requested_permissions");
         const may = await friendSettings(env, row.owner, row.guest);
-        if (approved.some((p) => (p === "keyboard" && !may.keyboard) || (p === "mouse" && !may.mouse)))
+        if (approved.some((p) => (p === "keyboard" && !may.keyboard) || (p === "mouse" && !may.mouse) || (p === "browse" && !may.browse)))
           deny(400, "input_not_allowed");
         const changed = await q(
           env,

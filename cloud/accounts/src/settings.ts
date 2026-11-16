@@ -6,11 +6,11 @@ const q = (env: Environment, sql: string, ...args: (string | number)[]) => env.D
 
 /** Columns for a query that joins friend_settings as `s`. Add after `COALESCE(s.connect,'ask') AS connect`. */
 export const EFFECTIVE =
-  "COALESCE(s.keyboard,CASE WHEN COALESCE(s.input,'view')='full' THEN 1 ELSE 0 END) AS keyboard,COALESCE(s.mouse,CASE WHEN COALESCE(s.input,'view')='full' THEN 1 ELSE 0 END) AS mouse";
+  "COALESCE(s.keyboard,CASE WHEN COALESCE(s.input,'view')='full' THEN 1 ELSE 0 END) AS keyboard,COALESCE(s.mouse,CASE WHEN COALESCE(s.input,'view')='full' THEN 1 ELSE 0 END) AS mouse,COALESCE(s.browse,0) AS browse";
 
 /** D1 returns 0 and 1. Clients and hosts get real booleans. */
-export function flags<T extends { keyboard?: unknown; mouse?: unknown }>(rows: T[]) {
-  return rows.map((r) => ({ ...r, keyboard: !!r.keyboard, mouse: !!r.mouse }));
+export function flags<T extends { keyboard?: unknown; mouse?: unknown; browse?: unknown }>(rows: T[]) {
+  return rows.map((r) => ({ ...r, keyboard: !!r.keyboard, mouse: !!r.mouse, browse: !!r.browse }));
 }
 
 export async function friendSettings(env: Environment, owner: string, friend: string) {
@@ -19,8 +19,8 @@ export async function friendSettings(env: Environment, owner: string, friend: st
     `SELECT COALESCE(s.input,'view') AS input,COALESCE(s.connect,'ask') AS connect,${EFFECTIVE} FROM (SELECT 1) LEFT JOIN friend_settings s ON s.owner=? AND s.friend=?`,
     owner,
     friend,
-  ).first<{ input: string; connect: string; keyboard: number; mouse: number }>();
-  return { input: row?.input ?? "view", connect: row?.connect ?? "ask", keyboard: !!row?.keyboard, mouse: !!row?.mouse };
+  ).first<{ input: string; connect: string; keyboard: number; mouse: number; browse: number }>();
+  return { input: row?.input ?? "view", connect: row?.connect ?? "ask", keyboard: !!row?.keyboard, mouse: !!row?.mouse, browse: !!row?.browse };
 }
 
 type Body = Record<string, unknown>;
@@ -32,9 +32,11 @@ export async function saveSettings(env: Environment, owner: string, friend: stri
   if (!absent(b.connect) && b.connect !== "ask" && b.connect !== "always") return false;
   if (!absent(b.keyboard) && typeof b.keyboard !== "boolean") return false;
   if (!absent(b.mouse) && typeof b.mouse !== "boolean") return false;
+  if (!absent(b.browse) && typeof b.browse !== "boolean") return false;
   const input = absent(b.input) ? null : (b.input as string), connect = absent(b.connect) ? null : (b.connect as string);
   const keyboard = absent(b.keyboard) ? null : (b.keyboard as boolean), mouse = absent(b.mouse) ? null : (b.mouse as boolean);
-  if (input === null && connect === null && keyboard === null && mouse === null) return false;
+  const browse = absent(b.browse) ? null : (b.browse as boolean);
+  if (input === null && connect === null && keyboard === null && mouse === null && browse === null) return false;
   await q(
     env,
     "INSERT INTO friend_settings(owner,friend,input,connect) VALUES(?,?,COALESCE(NULLIF(?,''),'view'),COALESCE(NULLIF(?,''),'ask')) ON CONFLICT(owner,friend) DO UPDATE SET input=COALESCE(NULLIF(?,''),input),connect=COALESCE(NULLIF(?,''),connect)",
@@ -58,6 +60,11 @@ export async function saveSettings(env: Environment, owner: string, friend: stri
   } else if (input !== null) {
     // The single setting was chosen again. It decides both.
     await q(env, "UPDATE friend_settings SET keyboard=NULL,mouse=NULL WHERE owner=? AND friend=?", owner, friend).run();
+  }
+  if (browse !== null) {
+    await q(env, "UPDATE friend_settings SET browse=? WHERE owner=? AND friend=?", browse ? 1 : 0, owner, friend).run();
+    // Taking browsing away ends a grant that carries it.
+    if (!browse) await q(env, "UPDATE connection_requests SET state='revoked' WHERE owner=? AND guest=? AND state IN ('pending','approved','claimed') AND COALESCE(approved,requested) LIKE '%\"browse\"%'", owner, friend).run();
   }
   const now = await friendSettings(env, owner, friend);
   if (!now.keyboard && !now.mouse) await revokeInputGrants(env, owner, friend);
