@@ -172,13 +172,9 @@ private fun ComputersPage(
     val landscape=LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     LazyVerticalGrid(columns = GridCells.Fixed(if (landscape) 2 else 1), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(start = PageMargin, end = PageMargin, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (account.user == null) item("add", span = { GridItemSpan(maxLineSpan) }) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                GhostButton(stringResource(R.string.pcr_add_pc), a.addPc, compact = true)
-            }
-        }
         if (account.user == null) item("sign-in", span = { GridItemSpan(maxLineSpan) }) { com.pcremote.account.SignInForm(acts, account.busy) }
-        if (rows.isEmpty()) item("empty", span = { GridItemSpan(maxLineSpan) }) { EmptyState(a.addPc.takeIf { account.user == null }) }
+        // Computers come from the account: signed out, the sign-in form is the whole page.
+        if (rows.isEmpty() && account.user != null) item("empty", span = { GridItemSpan(maxLineSpan) }) { EmptyState() }
         items(rows, key = { it.key }) { row ->
             when (row) {
                 is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)
@@ -190,11 +186,10 @@ private fun ComputersPage(
 }
 
 @Composable
-private fun EmptyState(addPc: (() -> Unit)?) {
+private fun EmptyState() {
     val c = LocalMidnight.current
     Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(stringResource(R.string.pcr_no_pcs_title), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-        if (addPc != null) PrimaryButton(stringResource(R.string.pcr_ob_scan), addPc, icon = R.drawable.lucide_scan_qr_code)
     }
 }
 

@@ -49,6 +49,35 @@ fn desktop_user() -> String {
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "secpar".into())
 }
+/// Opens Secpar in the tray at sign-in, through the desktop's autostart folder. The entry runs
+/// the AppImage itself (or this executable outside one).
+fn login_entry(on: bool) -> std::io::Result<()> {
+    let folder = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .ok_or_else(|| std::io::Error::other("no home folder"))?
+        .join("autostart");
+    let file = folder.join("com.secpar.desktop.desktop");
+    if !on {
+        return match std::fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    let program = std::env::var_os("APPIMAGE")
+        .map(std::path::PathBuf::from)
+        .map_or_else(std::env::current_exe, Ok)?;
+    let program = program.to_str().ok_or_else(|| std::io::Error::other("path is not text"))?;
+    // Characters the desktop entry would need escaped are refused rather than escaped.
+    if program.chars().any(|c| c.is_control() || matches!(c, '"' | '\\' | '`' | '$' | '%')) {
+        return Err(std::io::Error::other("path needs quoting"));
+    }
+    std::fs::create_dir_all(&folder)?;
+    std::fs::write(
+        file,
+        format!("[Desktop Entry]\nType=Application\nName=Secpar\nExec=\"{program}\" --hidden\nIcon=com.secpar.desktop\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"),
+    )
+}
 /// The control port. Tests that must not touch a real host on this machine set `SECPAR_HOST_PORT`.
 fn host_port() -> u16 {
     std::env::var("SECPAR_HOST_PORT").ok().and_then(|p| p.parse().ok()).filter(|p| *p != 0).unwrap_or(48999)
@@ -131,7 +160,7 @@ impl Backend {
                 let owner = account.state().await.owner;
                 let presence = {
                     let store = host.store.lock().unwrap();
-                    secpar_host_core::account::Presence::new(store.config().friends, store.id(), crate::rendezvous::url())
+                    secpar_host_core::account::Presence::new(true, store.id(), crate::rendezvous::url())
                 };
                 account.set_presence(presence).await;
                 host.sync_account_owner(owner.clone());
@@ -172,13 +201,19 @@ impl Backend {
     /// Starts the bundled engine and its tunnel in the background. The host
     /// advertises `gamestream` only once both are ready (docs/gamestream-engine.md).
     fn start_engine(host: Arc<Self>) {
+        Self::start_engine_after(host, std::time::Duration::ZERO);
+    }
+    /// `wait` lets a stopped engine let go of its ports before the next one starts.
+    fn start_engine_after(host: Arc<Self>, wait: std::time::Duration) {
         // A build without the bundled engine simply does not offer `gamestream`.
         if !engine::available(&host.directory) {
             return;
         }
         let Some(runtime) = tokio::runtime::Handle::try_current().ok() else { return };
         runtime.spawn(async move {
-            match Engine::start(&host.directory).await {
+            tokio::time::sleep(wait).await;
+            let choice = host.store.lock().unwrap().config().encoder.clone();
+            match Engine::start(&host.directory, &choice).await {
                 Ok(engine) => {
                     eprintln!(
                         "secpar: managed engine ready, tunnel on UDP port {}",
@@ -252,12 +287,37 @@ impl Backend {
             // `displays` stays empty: the portal picks the monitor, so there is nothing to switch here.
             "get_config" => {
                 let pad = uinput::status();
-                Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[],"pad":{"ok":pad.ok,"text":pad.text}}))
+                // The encoders the engine can use here: VA-API needs a render node, NVENC the NVIDIA driver.
+                let vaapi = std::path::Path::new("/dev/dri/renderD128").exists();
+                let nvenc = std::path::Path::new("/dev/nvidia0").exists();
+                let encoders = json!([
+                    {"id":"vaapi","name":"VA-API (Intel, AMD)","available":vaapi,"reason":"No GPU render device found"},
+                    {"id":"nvenc","name":"NVIDIA NVENC","available":nvenc,"reason":"No NVIDIA driver found"},
+                    {"id":"software","name":"Software (x264)","available":true},
+                ]);
+                Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[],"encoders":encoders,"pad":{"ok":pad.ok,"text":pad.text}}))
             }
             "set_config" => {
                 let config: Config = serde_json::from_value(args["config"].clone())
                     .map_err(|_| "Invalid hosting settings")?;
+                let (before, autostart) = {
+                    let store = self.store.lock().unwrap();
+                    (store.config().encoder.clone(), store.config().autostart)
+                };
+                let changed = before != config.encoder;
+                if autostart != config.autostart {
+                    login_entry(config.autostart).map_err(|_| "Could not change the sign-in setting")?;
+                }
                 self.store.lock().unwrap().set_config(config).map_err(|_|"Remote hosting is not enabled on Linux yet")?;
+                // A new encoder needs a new engine. A stream in progress keeps the old one; the
+                // choice applies when hosting next starts.
+                if changed && self.active.count() == 0 {
+                    if let Some(host) = HOST.get().cloned() {
+                        if host.engine.lock().unwrap().take().is_some() {
+                            Self::start_engine_after(host, std::time::Duration::from_secs(2));
+                        }
+                    }
+                }
                 Ok(Value::Null)
             }
             "new_qr" => {
@@ -371,8 +431,9 @@ impl Handlers for Backend {
     fn guests(&self) -> Option<Arc<GuestAdmission>> {
         self.guests.clone()
     }
+    /// Friends are always welcome; each friend's own settings decide what they may do.
     fn guest_refusal(&self) -> Option<&'static str> {
-        (!self.store.lock().unwrap().config().friends).then_some("Friends are switched off on this PC.")
+        None
     }
     fn guest_locked(&self) -> bool {
         crate::lock::locked_or_unknown()

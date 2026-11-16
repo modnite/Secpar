@@ -120,9 +120,9 @@ async fn main() -> Result {
         // With HOSTING_CHECK_STREAM=1 the engine captures the KDE session so a
         // stream can follow; otherwise the cheapest settings that can pair.
         Host::start(if stream {
-            Config { executable, state: root.join("host"), base_port: PORT, capture: Capture::KWin, encoder: Encoder::Automatic, audio_sink: None }
+            Config { executable, state: root.join("host"), base_port: PORT, capture: Capture::KWin, encoder: Encoder::Automatic, audio_sink: None, preset: Default::default(), output: None }
         } else {
-            Config { executable, state: root.join("host"), base_port: PORT, capture: Capture::X11, encoder: Encoder::Software, audio_sink: Some("host_audio".into()) }
+            Config { executable, state: root.join("host"), base_port: PORT, capture: Capture::X11, encoder: Encoder::Software, audio_sink: Some("host_audio".into(), preset: Default::default(), output: None) }
         })
         .await?,
     );

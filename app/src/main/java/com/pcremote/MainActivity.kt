@@ -209,7 +209,8 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         }
-        val start = Routes.start(if (home.store.all().isNotEmpty()) 1 else 0, prefs.getBoolean(PREF_ONBOARDED, false))
+        // No first-run pairing screen: computers come from the account, signed in on the Computers page.
+        val start = Routes.HOME
 
         setContent {
             var themeTick by remember { mutableIntStateOf(0) }
@@ -320,7 +321,7 @@ class MainActivity : ComponentActivity() {
                                     PrimaryAction.CHECKING -> Unit
                                 }
                             },
-                            addPc = { scanQr(this@MainActivity, onUnavailable = ::manualPairing) { raw -> scope.launch { pairing.onScanned(raw) } } },
+                            addPc = {},
                             refresh = { home.stop(); home.start() },
                             rename = { card, name -> home.rename(card.id, name) },
                             remove = { card -> home.remove(card) },
@@ -335,7 +336,7 @@ class MainActivity : ComponentActivity() {
                                 forget = { id -> cards.firstOrNull { it.id == id }?.let { home.remove(it) } },
                                 updates = { startActivity(Intent(this@MainActivity, com.pcremote.update.UpdatesActivity::class.java)) }) })
                         PairingOverlay(pairState,
-                            onRetry = { pairing.reset(); scanQr(this@MainActivity, onUnavailable = ::manualPairing) { raw -> scope.launch { pairing.onScanned(raw) } } },
+                            onRetry = pairing::reset,
                             onDismiss = pairing::reset)
                     }
                 }

@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_port: port,
         capture: Capture::X11,
         encoder: Encoder::Software,
-        audio_sink: Some("host_audio".into()),
+        audio_sink: Some("host_audio".into(), preset: Default::default(), output: None),
     };
     let first = Host::start(config("first", 48989)).await?;
     let fingerprint = first.info.certificate_sha256.clone();

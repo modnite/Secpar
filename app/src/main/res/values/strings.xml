@@ -33,7 +33,7 @@
     <string name="pcr_mode_pad">Gamepad</string>
     <string name="pcr_mode_files">Files</string>
     <string name="pcr_add_pc">Add computer</string>
-    <string name="pcr_no_pcs_title">No computers yet</string>
+    <string name="pcr_no_pcs_title">No computers yet. Sign in to Secpar on a computer with this account and it appears here.</string>
     <string name="pcr_status_online">Online</string>
     <string name="pcr_status_offline">Offline</string>
     <string name="pcr_status_streaming">Streaming</string>
@@ -55,7 +55,7 @@
     <string name="pcr_source">Source code</string>
     <string name="pcr_power">Power</string>
     <string name="pcr_conn_connecting">Connecting to your computer…</string>
-    <string name="pcr_conn_revoked">This device was removed on the host. Scan the code to pair again.</string>
+    <string name="pcr_conn_revoked">This device was removed on that computer.</string>
     <string name="pcr_conn_unreachable">Could not reach your computer. Is it on, and is Secpar running?</string>
     <string name="pcr_conn_unknown_pc">This computer is no longer paired.</string>
     <string name="pcr_remote_hint">Tap to click · two fingers to scroll or right-click · hold to drag</string>
@@ -80,7 +80,7 @@
     <string name="pcr_files_sent">Sent</string>
     <string name="pcr_files_saved">Saved to Downloads/Secpar</string>
     <string name="pcr_files_failed">Failed</string>
-    <string name="pcr_share_no_pc">Pair a computer in Secpar first.</string>
+    <string name="pcr_share_no_pc">Sign in to Secpar to see your computers.</string>
     <string name="pcr_share_choose">Send to which computer?</string>
     <string name="pcr_share_label">Send to computer</string>
     <string name="pcr_pw_lock">Lock</string>

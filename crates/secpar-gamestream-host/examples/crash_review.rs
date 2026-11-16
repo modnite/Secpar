@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_port: 48989,
         capture: Capture::X11,
         encoder: Encoder::Software,
-        audio_sink: None,
+        audio_sink: None, preset: Default::default(), output: None,
     })
     .await?;
     std::fs::write(&pid_file, host.id().ok_or("no pid")?.to_string())?;

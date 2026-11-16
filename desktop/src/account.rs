@@ -471,31 +471,42 @@ impl Panel {
     }
     /// A friend's permissions from Secpar 3, each changed in place: mouse,
     /// keyboard, and when they may connect.
-    fn permission_controls(&mut self, ui: &mut eframe::egui::Ui, friend: &Friend) {
+    /// The friend's controls, drawn in `order` (0 Connect, 1 Keyboard, 2 Mouse, 3 Files). The
+    /// permissions are glyph buttons, named on hover and to screen readers.
+    fn permission_controls(&mut self, ui: &mut eframe::egui::Ui, friend: &Friend, order: &[u8]) {
+        for item in order {
+            match item {
+                0 => self.connect_choice(ui, friend, 112.),
+                item => self.permission_switch(ui, friend, *item),
+            }
+        }
+    }
+    fn permission_switch(&mut self, ui: &mut eframe::egui::Ui, friend: &Friend, item: u8) {
         use eframe::egui;
                 let busy = self.busy;
                 let switch = |ui: &mut egui::Ui, on: bool, icon: crate::icons::Icon, label: &str| -> bool {
-                    let colour = if on { crate::design::TEXT } else { crate::design::MUTED };
-                    let button = egui::Button::new("").selected(on).min_size(egui::vec2(104., crate::design::CONTROL));
+                    let button = egui::Button::new("").selected(on).min_size(egui::vec2(crate::design::CONTROL + 4., crate::design::CONTROL));
                     let response = ui.add_enabled(!busy, button).on_hover_text(if on { format!("{label} allowed") } else { format!("{label} not allowed") });
                     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, !busy, on, label));
                     let rect = response.rect;
-                    crate::icons::paint(ui, icon, egui::Rect::from_center_size(egui::pos2(rect.left() + 18., rect.center().y), egui::vec2(16., 16.)), if on { crate::design::ACCENT } else { crate::design::MUTED });
-                    ui.painter().text(egui::pos2(rect.left() + 32., rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(13.), colour);
+                    crate::icons::paint(ui, icon, egui::Rect::from_center_size(rect.center(), egui::vec2(16., 16.)), if on { crate::design::ACCENT } else { crate::design::MUTED });
                     response.clicked()
                 };
-                if switch(ui, friend.mouse(), crate::icons::Icon::Mouse, "Mouse") {
+                if item == 2 && switch(ui, friend.mouse(), crate::icons::Icon::Mouse, "Mouse") {
                     self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: None, mouse: Some(!friend.mouse()), browse: None }));
                 }
-                if switch(ui, friend.keyboard(), crate::icons::Icon::Keyboard, "Keyboard") {
+                if item == 1 && switch(ui, friend.keyboard(), crate::icons::Icon::Keyboard, "Keyboard") {
                     self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: Some(!friend.keyboard()), mouse: None, browse: None }));
                 }
-                if switch(ui, friend.browse(), crate::icons::Icon::Folder, "Files") {
+                if item == 3 && switch(ui, friend.browse(), crate::icons::Icon::Folder, "Files") {
                     self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: None, mouse: None, browse: Some(!friend.browse()) }));
                 }
+    }
+    fn connect_choice(&mut self, ui: &mut eframe::egui::Ui, friend: &Friend, width: f32) {
+        use eframe::egui;
                 let current = if friend.connect == "always" { "Any time" } else { "Ask first" };
                 egui::ComboBox::from_id_salt(("connect", &friend.id))
-                    .width(104.)
+                    .width(width - 8.)
                     .selected_text(current)
                     .show_ui(ui, |ui| {
                         for (value, label) in [("always", "Any time"), ("ask", "Ask first")] {
@@ -811,11 +822,6 @@ impl Panel {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("This computer").size(15.).strong());
-                ui.label(
-                    egui::RichText::new("Friend sharing off")
-                        .size(12.)
-                        .color(design::MUTED),
-                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if cfg!(windows)
                         && ui
@@ -1083,7 +1089,7 @@ impl Panel {
                             ui.separator();
                         }
                         // A narrow window puts a friend's permissions on their own line.
-                        let narrow = ui.available_width() < 680.;
+                        let narrow = ui.available_width() < 520.;
                         ui.horizontal(|ui| {
                             let (avatar, _) =
                                 ui.allocate_exact_size(egui::vec2(32., 32.), egui::Sense::hover());
@@ -1105,7 +1111,7 @@ impl Panel {
                                 egui::FontId::proportional(14.),
                                 crate::design::ACCENT,
                             );
-                            let controls = if friend.state == "accepted" && !narrow { 490. } else { 128. };
+                            let controls = if friend.state == "accepted" && !narrow { 300. } else { 128. };
                             ui.allocate_ui_with_layout(egui::vec2((ui.available_width()-controls).max(48.),32.),egui::Layout::left_to_right(egui::Align::Center),|ui| {
                                 ui.add(egui::Label::new(&friend.handle).truncate());
                             });
@@ -1134,7 +1140,7 @@ impl Panel {
                                         }
                                     });
                                     if friend.state == "accepted" && !narrow {
-                                        self.permission_controls(ui, &friend);
+                                        self.permission_controls(ui, &friend, &[3, 2, 1, 0]);
                                     }
                                     if friend.state == "pending" {
                                         if friend.requester != own {
@@ -1157,9 +1163,10 @@ impl Panel {
                             );
                         });
                         if friend.state == "accepted" && narrow {
+                            // One row under the name, in the same order as on a wide window.
                             ui.horizontal(|ui| {
                                 ui.add_space(40.);
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.permission_controls(ui, &friend));
+                                self.permission_controls(ui, &friend, &[0, 1, 2, 3]);
                             });
                         }
                     }
@@ -1260,7 +1267,7 @@ impl Api {
                 "request_not_found" => "This request is no longer available.",
                 "friend_access_required" => "You are not friends with this person any more.",
                 "access_expired_or_revoked" => "Access was removed or the request ran out.",
-                "host_not_sharing" => "This computer is offline or is not sharing with friends.",
+                "host_not_sharing" => "That computer is offline, or it needs the latest Secpar.",
                 "grant_not_available" => "This request was already used. Ask again.",
                 "intended_guest_required" => "This request belongs to someone else.",
                 "invalid_permissions" => "Choose what you want to do first.",

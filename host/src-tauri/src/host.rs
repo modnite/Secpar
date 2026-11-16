@@ -114,8 +114,9 @@ impl Handlers for Host {
         self.guests.clone()
     }
 
+    /// Friends are always welcome; each friend's own settings decide what they may do.
     fn guest_refusal(&self) -> Option<&'static str> {
-        (!self.store.lock().unwrap().config().friends).then_some("Friends are switched off on this PC.")
+        None
     }
 
     fn guest_session(&self, gate: &Gate, guest: &str, out: Outbox) -> Option<Box<dyn Session>> {

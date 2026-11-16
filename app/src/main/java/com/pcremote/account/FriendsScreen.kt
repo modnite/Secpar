@@ -1,5 +1,9 @@
 package com.pcremote.account
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.selection.toggleable
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -193,24 +197,23 @@ private fun FriendRow(friend: Friend, ownId: String, working: Boolean, acts: Acc
                 val value = if (i == 0) "always" else "ask"
                 if (value != friend.connect) acts.friendSetting(friend.id, null, value)
             }, Modifier.weight(1f))
-            PermissionToggle(R.drawable.lucide_keyboard, "Keyboard", friend.keyboard, Modifier.weight(1f)) { acts.friendInput(friend.id, !friend.keyboard, null) }
-            PermissionToggle(R.drawable.lucide_mouse, "Mouse", friend.mouse, Modifier.weight(1f)) { acts.friendInput(friend.id, null, !friend.mouse) }
-            PermissionToggle(R.drawable.lucide_folder, "Files", friend.browse, Modifier.weight(1f)) { acts.friendBrowse(friend.id, !friend.browse) }
+            PermissionToggle(R.drawable.lucide_keyboard, "Keyboard", friend.keyboard, Modifier) { acts.friendInput(friend.id, !friend.keyboard, null) }
+            PermissionToggle(R.drawable.lucide_mouse, "Mouse", friend.mouse, Modifier) { acts.friendInput(friend.id, null, !friend.mouse) }
+            PermissionToggle(R.drawable.lucide_folder, "Files", friend.browse, Modifier) { acts.friendBrowse(friend.id, !friend.browse) }
         }
     }
 }
 
-/** One permission as a toggle: glyph and word, filled when allowed. */
+/** One permission as a glyph toggle, outlined in the accent colour when allowed. The word is for screen readers. */
 @Composable
 private fun PermissionToggle(@androidx.annotation.DrawableRes icon: Int, label: String, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val c = LocalMidnight.current
-    Row(modifier.height(32.dp).clip(com.pcremote.ui.theme.MidnightShapes.control).background(if (on) c.surfaceHigh else c.surface)
+    Box(modifier.size(width = 44.dp, height = 32.dp).clip(com.pcremote.ui.theme.MidnightShapes.control).background(if (on) c.surfaceHigh else c.surface)
         .border(1.dp, if (on) c.accent else c.controlBorder, com.pcremote.ui.theme.MidnightShapes.control)
-        .clickable(role = androidx.compose.ui.semantics.Role.Switch, onClickLabel = label) { onClick() }
-        .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        Icon(painterResource(icon), null, tint = if (on) c.accent else c.textDim, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(label, color = if (on) c.text else c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+        .toggleable(value = on, role = androidx.compose.ui.semantics.Role.Switch) { onClick() }
+        .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center) {
+        Icon(painterResource(icon), null, tint = if (on) c.accent else c.textDim, modifier = Modifier.size(18.dp))
     }
 }
 

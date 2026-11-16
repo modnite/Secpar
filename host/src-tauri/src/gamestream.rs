@@ -50,6 +50,8 @@ struct Inner {
     /// `gamestream/` in the host data directory.
     state: PathBuf,
     addresses: Addresses,
+    /// The owner's encoder, preset and display, as they were when hosting started.
+    picture: Picture,
     /// Set once the supervisor and the tunnel are both ready.
     parts: Mutex<Option<Parts>>,
     grants: Mutex<Vec<Grant>>,
@@ -69,9 +71,17 @@ struct Grant {
     fingerprint: String,
 }
 
+/// The owner's picture settings handed to the engine.
+#[derive(Clone, Default)]
+pub struct Picture {
+    pub encoder: String,
+    pub preset: String,
+    pub display: String,
+}
+
 /// Starts the engine in the background. A failure leaves the host as it was,
 /// with PRS untouched and no `gamestream` capability.
-pub fn start(data_dir: &Path, addresses: Addresses) -> Managed {
+pub fn start(data_dir: &Path, addresses: Addresses, picture: Picture) -> Managed {
     let state = data_dir.join("gamestream");
     let managed = Managed {
         inner: Arc::new(Inner {
@@ -80,6 +90,7 @@ pub fn start(data_dir: &Path, addresses: Addresses) -> Managed {
             grants: Mutex::new(read_grants(&state.join(GRANTS))),
             state,
             addresses,
+            picture,
             parts: Mutex::new(None),
         }),
     };
@@ -238,8 +249,10 @@ impl Managed {
             state,
             base_port: BASE_PORT,
             capture: Capture::Automatic,
-            encoder: Encoder::Automatic,
+            encoder: Encoder::from_choice(&inner.picture.encoder),
             audio_sink: None,
+            preset: secpar_gamestream_host::Preset::from_choice(&inner.picture.preset),
+            output: Some(inner.picture.display.clone()).filter(|d| !d.is_empty()),
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -538,6 +551,7 @@ mod tests {
                 grants: Mutex::new(read_grants(&state.join(GRANTS))),
                 state: state.to_path_buf(),
                 addresses: Arc::new(Vec::new),
+                picture: Picture::default(),
                 parts: Mutex::new(None),
             }),
         }
