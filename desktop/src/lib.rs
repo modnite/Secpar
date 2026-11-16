@@ -36,6 +36,9 @@ mod tray_review;
 pub use tray_review::run as run_tray_review;
 #[cfg(windows)]
 mod tray;
+#[cfg(target_os = "linux")]
+#[path = "tray_linux.rs"]
+mod tray;
 mod updates;
 mod vault;
 use eframe::egui::{
@@ -169,8 +172,8 @@ fn review_size() -> [f32; 2] {
     }
     [DEFAULT_SIZE.0, DEFAULT_SIZE.1]
 }
-/// Compact vertical desktop layout. Streaming still uses the full viewport.
-const DEFAULT_SIZE: (f32, f32) = (420., 680.);
+/// The desktop window opens wide enough for tiles side by side and full settings rows.
+const DEFAULT_SIZE: (f32, f32) = (800., 600.);
 fn initial_status() -> String {
     #[cfg(feature = "ui-review")]
     if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.ends_with("-sample")) {
@@ -211,7 +214,7 @@ struct App {
     review_shot: bool,
     #[cfg(feature="ui-review")]
     review_commands: Option<mpsc::Receiver<Command>>,
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     tray: Option<tray::Tray>,
     updates: updates::Panel,
     client: client_settings::Settings,
@@ -331,7 +334,7 @@ impl App {
             review_shot: false,
             #[cfg(feature="ui-review")]
             review_commands: None,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             tray: tray::Tray::new(cc),
             updates: updates::Panel::new(cc.egui_ctx.clone()),
             hosting: hosting::Panel::new(cc.egui_ctx.clone()),
@@ -355,7 +358,8 @@ impl App {
             audio_error: None,
             clipboard: None,
             notice: None,
-            connection_error: None,
+            // A review run can show the connection notice with a sample message.
+            connection_error: if cfg!(feature = "ui-review") { std::env::var("SECPAR_REVIEW_ERROR").ok() } else { None },
             texture: None,
             gpu: cc.gl.as_ref().and_then(gpu::new),
             gpu_live: false,
@@ -823,10 +827,14 @@ impl App {
                     // A windowed stream takes the stream's shape at half its size; the window's own
                     // size comes back when the stream ends.
                     // A maximised or full-screen window is left as it is.
+                    // Wayland often leaves the window's rectangles unreported; egui's own area is the
+                    // window's inner size there.
+                    #[allow(deprecated)]
+                    let area = ctx.screen_rect().size();
                     let now = ctx.input(|i| {
                         let v = i.viewport();
                         if v.maximized == Some(true) || v.fullscreen == Some(true) { return None; }
-                        Some((v.outer_rect.map(|r| r.min), v.inner_rect?.size()))
+                        Some((v.outer_rect.map(|r| r.min), v.inner_rect.map_or(area, |r| r.size())))
                     });
                     if let (true, true, Some(now)) = (first, width > 0 && height > 0, now) {
                         self.before_stream = Some(now);
@@ -1110,7 +1118,7 @@ impl eframe::App for App {
         self.leave_fullscreen_if_idle(ctx);
         #[cfg(windows)]
         self.manage_key_hook(ctx);
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some(tray) = &self.tray {
             tray.set_connected(self.command.is_some());
             if tray.take_disconnect() && self.command.is_some() {
@@ -1153,7 +1161,7 @@ impl eframe::App for App {
         }
         self.updates.tick(ctx);
         self.updates.window(ctx, self.command.is_some());
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if self
             .tray
             .as_ref()
@@ -1336,18 +1344,36 @@ impl eframe::App for App {
         }
         if self.command.is_none() {
             if let Some(error)=self.connection_error.clone() {
-                egui::TopBottomPanel::top("connection-error").show(ctx,|ui|{
-                    ui.horizontal_wrapped(|ui|{
+                // A flat notice under the tabs: the message on the left, its actions on the right.
+                egui::TopBottomPanel::top("connection-error")
+                    .show_separator_line(false)
+                    .frame(egui::Frame::new().fill(Color32::from_rgb(17, 21, 28)).inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 4 }))
+                    .show(ctx,|ui|{
+                    let frame=egui::Frame::new().fill(Color32::from_rgb(38, 24, 28)).stroke(egui::Stroke::new(1_f32,Color32::from_rgb(92, 46, 52)))
+                        .corner_radius(7).inner_margin(egui::Margin { left: 14, right: 8, top: 8, bottom: 8 });
+                    let shown=frame.show(ui,|ui|{
+                        ui.set_width(ui.available_width());
                         let friendly=if self.guest_error {None} else {friendly_error(&error)};
-                        if friendly.is_some() {ui.label(egui::RichText::new(START_FAILED_TITLE).strong().color(design::BAD));}
-                        ui.colored_label(design::BAD,friendly.unwrap_or(&error));
-                        if !self.guest_error && ui.small_button("Retry").clicked() {
-                            self.connection_error=None;
-                            if self.computer.is_some() {self.start(ctx);}
-                        }
-                        if ui.small_button("Copy error").clicked(){ui.ctx().copy_text(error);}
-                        if ui.small_button("Dismiss").clicked(){self.connection_error=None;}
+                        let retry=!self.guest_error;
+                        let actions=if retry {80.+2.*design::CONTROL+28.} else {2.*design::CONTROL+20.};
+                        ui.horizontal(|ui|{
+                            ui.allocate_ui_with_layout(egui::vec2((ui.available_width()-actions).max(80.),0.),egui::Layout::top_down(egui::Align::Min),|ui|{
+                                if friendly.is_some() {ui.label(egui::RichText::new(START_FAILED_TITLE).strong().color(design::TEXT));}
+                                ui.add(egui::Label::new(egui::RichText::new(friendly.unwrap_or(&error)).color(design::BAD)).wrap());
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                if design::icon_button(ui,icons::Icon::Close,"Dismiss").clicked(){self.connection_error=None;}
+                                if design::icon_button(ui,icons::Icon::Copy,"Copy the error").clicked(){ui.ctx().copy_text(error.clone());}
+                                if retry && ui.add(egui::Button::new("Retry").min_size(egui::vec2(80.,design::CONTROL))).clicked() {
+                                    self.connection_error=None;
+                                    if self.computer.is_some() {self.start(ctx);}
+                                }
+                            });
+                        });
                     });
+                    // The red edge marks it as a problem without colouring the whole notice.
+                    let r=shown.response.rect;
+                    ui.painter().rect_filled(egui::Rect::from_min_max(r.min+egui::vec2(1.,6.),egui::pos2(r.left()+4.,r.bottom()-6.)),1.,design::BAD);
                 });
             }
         }

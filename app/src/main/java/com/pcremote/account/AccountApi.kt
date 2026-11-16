@@ -62,7 +62,7 @@ class AccountException(val kind: AccountError, detail: String? = null) : Excepti
     AccountError.BAD_NAME -> "Enter a username of 3 to 30 letters, numbers or underscores."
     AccountError.INPUT_NOT_ALLOWED -> "This friend may not use the keyboard or mouse."
     AccountError.REQUEST_ANSWERED -> "This request was already answered or has expired."
-    AccountError.HOST_NOT_SHARING -> "This computer is not letting friends connect right now."
+    AccountError.HOST_NOT_SHARING -> "That computer is offline, or it needs the latest Secpar."
     AccountError.GRANT_NOT_AVAILABLE -> "This request was already used. Ask again."
     AccountError.ACCESS_ENDED -> "Access to this computer ended or is not allowed."
     AccountError.UNAVAILABLE -> "Computer pairing is no longer available."

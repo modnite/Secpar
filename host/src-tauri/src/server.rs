@@ -61,7 +61,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let guests = account.as_ref().ok().map(|a| secpar_host_core::agent::GuestAdmission::new(a.clone()));
     let net = Arc::new(Mutex::new(net::NetStatus::default()));
     // The bundled engine starts in the background; host startup never waits for it.
-    let engine = crate::gamestream::start(&dir, engine_addresses(net.clone()));
+    let picture = {
+        let store = store.lock().unwrap();
+        let config = store.config();
+        crate::gamestream::Picture { encoder: config.encoder.backend.clone(), preset: config.encoder.preset.clone(), display: config.display.clone() }
+    };
+    let engine = crate::gamestream::start(&dir, engine_addresses(net.clone()), picture);
     let host = Arc::new(crate::host::Host::new(store.clone(), guests, engine.clone(), net.clone()));
     let (outgoing, net) = (host.outgoing.clone(), host.net.clone());
     if store.lock().unwrap().config().anywhere {
@@ -116,7 +121,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             let owner = account.state().await.owner;
             let presence = {
                 let store = app.store.lock().unwrap();
-                secpar_host_core::account::Presence::new(store.config().friends, store.pc_id(), crate::remote::url())
+                secpar_host_core::account::Presence::new(true, store.pc_id(), crate::remote::url())
             };
             account.set_presence(presence).await;
             let revoked = app.store.lock().unwrap().set_account_owner(owner.clone());

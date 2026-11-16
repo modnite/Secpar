@@ -112,7 +112,7 @@ async fn main() -> Result {
         base_port: port,
         capture: Capture::X11,
         encoder: Encoder::Software,
-        audio_sink: Some("host_audio".into()),
+        audio_sink: Some("host_audio".into(), preset: Default::default(), output: None),
     })
     .await?;
     println!("Patched host started with stdin-provisioned management credentials.");
@@ -212,7 +212,7 @@ async fn main() -> Result {
         base_port: port,
         capture: Capture::X11,
         encoder: Encoder::Software,
-        audio_sink: Some("host_audio".into()),
+        audio_sink: Some("host_audio".into(), preset: Default::default(), output: None),
     })
     .await?;
     let left = host.enrolled().await?;

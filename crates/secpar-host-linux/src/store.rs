@@ -103,10 +103,24 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
+/// The engine's encoder and how it trades speed for quality.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EncoderChoice {
+    pub backend: String,
+    pub preset: String,
+}
+impl Default for EncoderChoice {
+    fn default() -> Self {
+        Self { backend: "auto".into(), preset: "fast".into() }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub autostart: bool,
+    pub encoder: EncoderChoice,
     pub display: String,
     pub max_quality: String,
     pub allow_files: bool,
@@ -122,6 +136,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             autostart: false,
+            encoder: EncoderChoice::default(),
             display: String::new(),
             max_quality: "auto".into(),
             allow_files: true,

@@ -16,7 +16,7 @@
 //! certificate to that authenticated device.
 
 use crate::store;
-use secpar_gamestream_host::{Capture, ClientIdentity, Config, Encoder, Host};
+use secpar_gamestream_host::{Capture, ClientIdentity, Config, Encoder, Host, Preset};
 use secpar_host_core::agent::{
     engine::{Broker, ClientTunnel, EngineBackend, EngineInfo},
     BoxFut, Outbox, Session,
@@ -337,7 +337,7 @@ pub struct Engine {
 impl Engine {
     /// Starts the bundled engine, then the tunnel. The first start can take up
     /// to a minute while the engine looks for capture and encoder support.
-    pub async fn start(data: &Path) -> Result<Self, &'static str> {
+    pub async fn start(data: &Path, choice: &store::EncoderChoice) -> Result<Self, &'static str> {
         let executable = match executable(data) {
             Some(executable) => executable,
             None => {
@@ -352,8 +352,11 @@ impl Engine {
             state: data.join("gamestream"),
             base_port: BASE_PORT,
             capture: capture(),
-            encoder: Encoder::Automatic,
+            encoder: Encoder::from_choice(&choice.backend),
             audio_sink: None,
+            preset: Preset::from_choice(&choice.preset),
+            // The portal or KWin decides which screen is shared.
+            output: None,
         };
         let host = Host::start(config).await.map_err(|error| error.0)?;
         // The tunnel only opens once the engine is ready, so an advertised
@@ -627,7 +630,7 @@ mod tests {
         let _env = ENV.lock().unwrap();
         let data = directory("missing");
         assert_eq!(
-            Engine::start(&data).await.err(),
+            Engine::start(&data, &Default::default()).await.err(),
             Some("The bundled streaming engine is not installed")
         );
     }

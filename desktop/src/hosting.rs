@@ -517,24 +517,29 @@ impl Panel {
         }
         back
     }
-    /// Linux hosting settings: what paired devices may do, and whether a gamepad can be offered.
-    /// Display choice, quality limit, router ports and tray start are not available on Linux yet.
+    /// Linux hosting settings: the encoder, what paired devices may do, and whether a gamepad can
+    /// be offered. The screen is picked in the system's sharing prompt, so there is no display row.
     fn linux_settings_ui(&mut self, ui: &mut egui::Ui) {
         let config = self.settings["config"].clone();
         let pad_ok = self.settings["pad"]["ok"].as_bool().unwrap_or(false);
         let pad_text = self.settings["pad"]["text"].as_str().unwrap_or("Gamepad status unknown").to_string();
         ui.add_enabled_ui(self.state.is_some() && !self.busy, |ui| {
             ui.spacing_mut().item_spacing.y = 8.;
+            design::group(ui, "Picture", |ui| {
+                self.encoder_ui(ui, &config);
+            });
             design::group(ui, "Who can use it", |ui| {
                 self.setting_toggle(ui, &config, "allow_files", "Receive and browse files", "Allow paired devices to send files to this computer and to browse it.");
                 self.setting_toggle(ui, &config, "allow_clip", "Share clipboard", "Allow clipboard exchange with paired devices.");
-                self.setting_toggle(ui, &config, "friends", "Let friends connect", "Friends you added still need your approval unless you set them to connect at any time.");
                 self.setting_toggle(ui, &config, "previews", "Show previews of this screen", "Your other devices and your friends see a small still of this screen. Off keeps it private.");
 
                 if !pad_ok {ui.horizontal(|ui| {
                     design::dot(ui,design::MUTED);
                     ui.label(egui::RichText::new(pad_text).size(12.).color(design::MUTED));
                 });}
+            });
+            design::group(ui, "Startup", |ui| {
+                self.setting_toggle(ui, &config, "autostart", "Start in tray", "Open Secpar in the tray when you sign in, so this computer can be reached.");
             });
         });
     }
@@ -559,7 +564,7 @@ impl Panel {
                     if response.clicked() {backend=id.into();}
                     if !enabled {response.on_hover_text(choice["reason"].as_str().unwrap_or("Unavailable on this GPU"));}
                 }
-            }).response.on_hover_text("Changes apply to new connections.");
+            }).response.on_hover_text(if cfg!(windows) {"Applies when Secpar next starts."} else {"Applies to the next connection."});
         });
         let effective=if backend=="auto" {choices.iter().find(|c|c["available"].as_bool()==Some(true)).and_then(|c|c["id"].as_str()).unwrap_or("")}else{&backend};
         let labels=if effective.contains("nvenc") {["P1 · fastest","P4 · balanced","P7 · highest quality"]}
@@ -603,22 +608,12 @@ impl Panel {
                     });
                 });
                 if display != old { self.send(Command::Patch(json!({"display":display}))); }
-                let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
-                let old = quality.clone();
-                let choices = [("auto", "No limit"), ("battery", "1280 × 720 · 30 fps"), ("smooth", "1920 × 1080 · 60 fps"), ("sharp", "2560 × 1440 · 60 fps"), ("2160p60", "3840 × 2160 · 60 fps")];
-                let label = choices.iter().find(|(value,_)| *value == quality).map(|(_,label)| *label).unwrap_or("Custom");
-                design::row(ui, "Quality limit", |ui| {
-                    egui::ComboBox::from_id_salt("host-quality").width(width).selected_text(label).show_ui(ui, |ui| {
-                        for (value,label) in choices { ui.selectable_value(&mut quality,value.into(),label); }
-                    });
-                });
-                if quality != old { self.send(Command::Patch(json!({"max_quality":quality}))); }
                 self.encoder_ui(ui, &config);
+                ui.label(egui::RichText::new("Display and encoder changes apply when Secpar next starts.").size(12.).color(design::MUTED));
             });
             design::group(ui, "Who can use it", |ui| {
                 self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
                 self.setting_toggle(ui,&config,"allow_clip","Share clipboard","Allow clipboard exchange with paired devices.");
-                self.setting_toggle(ui,&config,"friends","Let friends connect","Friends you added still need your approval unless you set them to connect at any time.");
                 self.setting_toggle(ui,&config,"previews","Show previews of this screen","Your other devices and your friends see a small still of this screen. Off keeps it private.");
                 if let Some(ok @ false) = self.settings["pad"]["ok"].as_bool() {
                     ui.horizontal(|ui| {

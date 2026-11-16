@@ -168,7 +168,7 @@ async fn failed_credential_helper_is_reaped_and_private_state_can_be_retried() {
         base_port: 48989,
         capture: Capture::Automatic,
         encoder: Encoder::Automatic,
-        audio_sink: None,
+        audio_sink: None, preset: Default::default(), output: None,
     };
     for _ in 0..2 {
         assert!(matches!(

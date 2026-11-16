@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         base_port,
         capture: Capture::Automatic,
         encoder: Encoder::Automatic,
-        audio_sink: None,
+        audio_sink: None, preset: Default::default(), output: None,
     };
     let host = Host::start(config()).await?;
     let fingerprint = host.info.certificate_sha256.clone();

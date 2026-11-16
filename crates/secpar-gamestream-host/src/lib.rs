@@ -40,11 +40,45 @@ pub enum Capture {
     /// KDE Plasma on Wayland, through KWin's own screen capture.
     KWin,
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum Encoder {
     #[default]
     Automatic,
     Software,
+    Nvenc,
+    Quicksync,
+    Amd,
+    Vaapi,
+}
+impl Encoder {
+    /// The owner's choice in Secpar's settings, by the ids both hosts use.
+    pub fn from_choice(id: &str) -> Self {
+        match id {
+            "software" | "media-foundation" => Self::Software,
+            "nvenc" | "ffmpeg-nvenc" => Self::Nvenc,
+            "ffmpeg-qsv" | "quicksync" => Self::Quicksync,
+            "ffmpeg-amf" | "amd" => Self::Amd,
+            "vaapi" => Self::Vaapi,
+            _ => Self::Automatic,
+        }
+    }
+}
+/// Speed against picture quality, as Secpar's settings name it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Preset {
+    #[default]
+    Fast,
+    Balanced,
+    Quality,
+}
+impl Preset {
+    pub fn from_choice(id: &str) -> Self {
+        match id {
+            "balanced" => Self::Balanced,
+            "quality" => Self::Quality,
+            _ => Self::Fast,
+        }
+    }
 }
 pub struct Config {
     /// Trusted bundled executable, never a path obtained from a remote message.
@@ -55,6 +89,9 @@ pub struct Config {
     pub capture: Capture,
     pub encoder: Encoder,
     pub audio_sink: Option<String>,
+    pub preset: Preset,
+    /// The display to stream; `None` is the engine's own choice (the primary display).
+    pub output: Option<String>,
 }
 impl Config {
     fn validate(&self) -> Result<()> {
@@ -102,8 +139,28 @@ impl Config {
         if matches!(self.capture, Capture::X11) {
             text.push_str("capture = x11\n");
         }
-        if matches!(self.encoder, Encoder::Software) {
-            text.push_str("encoder = software\nsw_preset = ultrafast\nsw_tune = zerolatency\n");
+        let (sw, nv, qsv, amd) = match self.preset {
+            Preset::Fast => ("ultrafast", 1, "veryfast", "speed"),
+            Preset::Balanced => ("superfast", 4, "medium", "balanced"),
+            Preset::Quality => ("veryfast", 7, "slower", "quality"),
+        };
+        let name = match self.encoder {
+            Encoder::Automatic => None,
+            Encoder::Software => Some("software"),
+            Encoder::Nvenc => Some("nvenc"),
+            Encoder::Quicksync => Some("quicksync"),
+            Encoder::Amd => Some("amdvce"),
+            Encoder::Vaapi => Some("vaapi"),
+        };
+        if let Some(name) = name {
+            text.push_str(&format!("encoder = {name}\n"));
+        }
+        text.push_str(&format!(
+            "sw_preset = {sw}\nsw_tune = zerolatency\nnvenc_preset = {nv}\nqsv_preset = {qsv}\namd_quality = {amd}\n"
+        ));
+        if let Some(output) = self.output.as_deref().filter(|o| !o.is_empty()) {
+            config_value(output)?;
+            text.push_str(&format!("output_name = {output}\n"));
         }
         if let Some(sink) = &self.audio_sink {
             text.push_str(&format!("audio_sink = {sink}\n"));

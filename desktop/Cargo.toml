@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "4.0.0"
+version = "4.0.5"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
@@ -81,6 +81,8 @@ required-features = ["ui-review"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 raw-window-handle = "0.6.2"
+# The tray icon, as a StatusNotifierItem over D-Bus: KDE shows it natively, with no GTK.
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
 wayland-client = { version = "=0.31.15", features = ["system", "dlopen"] }
 wayland-protocols = { version = "=0.32.13", features = ["client", "unstable"] }
 secpar-host-linux = { path = "../crates/secpar-host-linux" }

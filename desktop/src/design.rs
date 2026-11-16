@@ -65,6 +65,13 @@ pub fn primary(text: &str) -> egui::Button<'_> {
         .stroke(Stroke::NONE)
         .min_size(egui::vec2(144., CONTROL))
 }
+/// A square button showing one Lucide glyph, named on hover and to screen readers.
+pub fn icon_button(ui: &mut egui::Ui, icon: crate::icons::Icon, label: &str) -> egui::Response {
+    let response = ui.add(egui::Button::new("").min_size(egui::vec2(CONTROL, CONTROL))).on_hover_text(label);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    crate::icons::paint(ui, icon, egui::Rect::from_center_size(response.rect.center(), egui::vec2(16., 16.)), MUTED);
+    response
+}
 pub fn dot(ui: &mut egui::Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(8., 8.), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 3., color);
