@@ -49,6 +49,39 @@ fn desktop_user() -> String {
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "secpar".into())
 }
+/// Runs one power action for the signed-in user's session.
+fn power(action: &str) -> Result<(), &'static str> {
+    let session = std::env::var("XDG_SESSION_ID").unwrap_or_default();
+    let session_ok = !session.is_empty() && session.chars().all(|c| c.is_ascii_alphanumeric());
+    let (program, args): (&str, Vec<&str>) = match action {
+        "lock" if session_ok => ("loginctl", vec!["lock-session", session.as_str()]),
+        "lock" => ("loginctl", vec!["lock-sessions"]),
+        "sleep" => ("systemctl", vec!["suspend"]),
+        "restart" => ("systemctl", vec!["reboot"]),
+        "shutdown" => ("systemctl", vec!["poweroff"]),
+        "signout" if session_ok => ("loginctl", vec!["terminate-session", session.as_str()]),
+        "signout" => return Err("unsupported"),
+        _ => return Err("bad_request"),
+    };
+    let ok = std::process::Command::new(program)
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if ok { Ok(()) } else { Err("failed") }
+}
+/// The Picture setting's limits, the same as the Windows host's: a size and frame rate a device
+/// may ask for at most. `auto` leaves the request as it is.
+fn quality_limit(profile: &str, w: u32, h: u32, fps: u32) -> (u32, u32, u32) {
+    let (mw, mh, mfps) = match profile {
+        "battery" => (1280, 720, 30),
+        "smooth" => (1920, 1080, 60),
+        "sharp" => (2560, 1440, 60),
+        "2160p60" => (3840, 2160, 60),
+        _ => return (w, h, fps),
+    };
+    (if w == 0 { mw } else { w.min(mw) }, if h == 0 { mh } else { h.min(mh) }, fps.min(mfps))
+}
 /// Opens Secpar in the tray at sign-in, through the desktop's autostart folder. The entry runs
 /// the AppImage itself (or this executable outside one).
 fn login_entry(on: bool) -> std::io::Result<()> {
@@ -205,6 +238,12 @@ impl Backend {
     }
     /// `wait` lets a stopped engine let go of its ports before the next one starts.
     fn start_engine_after(host: Arc<Self>, wait: std::time::Duration) {
+        // The bundled Sunshine build crashes on Linux (free(): invalid pointer, SIGSEGV), so
+        // Linux hosts stream with Secpar's own engine and do not offer `gamestream`.
+        // SECPAR_LINUX_ENGINE=1 turns it back on for testing.
+        if std::env::var_os("SECPAR_LINUX_ENGINE").is_none() {
+            return;
+        }
         // A build without the bundled engine simply does not offer `gamestream`.
         if !engine::available(&host.directory) {
             return;
@@ -304,7 +343,8 @@ impl Backend {
                     {"id":"nvenc","name":"NVIDIA NVENC","available":nvenc,"reason":"No NVIDIA driver found"},
                     {"id":"software","name":"Software (x264)","available":true},
                 ]);
-                Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[],"encoders":encoders,"pad":{"ok":pad.ok,"text":pad.text}}))
+                Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[],"encoders":encoders,"pad":{"ok":pad.ok,"text":pad.text},"system":engine::system_state(),
+                    "system_running":self.engine.lock().unwrap().as_ref().is_some_and(|e| e.system)}))
             }
             "set_config" => {
                 let config: Config = serde_json::from_value(args["config"].clone())
@@ -313,21 +353,19 @@ impl Backend {
                     let store = self.store.lock().unwrap();
                     (store.config().encoder.clone(), store.config().autostart)
                 };
-                let changed = before != config.encoder;
                 if autostart != config.autostart {
                     login_entry(config.autostart).map_err(|_| "Could not change the sign-in setting")?;
                 }
+                // The encoder is read when the engine starts, the next time Secpar opens. Restarting
+                // the engine here cannot work: every connected device's session holds the running one.
+                let _ = before;
                 self.store.lock().unwrap().set_config(config).map_err(|_|"Remote hosting is not enabled on Linux yet")?;
-                // A new encoder needs a new engine. A stream in progress keeps the old one; the
-                // choice applies when hosting next starts.
-                if changed && self.active.count() == 0 {
-                    if let Some(host) = HOST.get().cloned() {
-                        if host.engine.lock().unwrap().take().is_some() {
-                            Self::start_engine_after(host, std::time::Duration::from_secs(2));
-                        }
-                    }
-                }
                 Ok(Value::Null)
+            }
+            "system_setup" => {
+                tokio::task::spawn_blocking(engine::run_system_setup).await.map_err(|_| "Setup stopped")??;
+                // The system engine is used from the next start of Secpar.
+                Ok(json!({"system":engine::system_state()}))
             }
             "new_qr" => {
                 let addresses = stream::local_addresses();
@@ -402,7 +440,7 @@ impl Handlers for Backend {
         Box::pin(async move { pc })
     }
     fn caps(&self) -> Vec<String> {
-        let mut caps: Vec<String> = ["stream", "input", "clip", "media", "files", "fsbrowse", "fsbatch"].map(String::from).to_vec();
+        let mut caps: Vec<String> = ["stream", "input", "clip", "media", "files", "fsbrowse", "fsbatch", "power"].map(String::from).to_vec();
         if thumb::available() {
             caps.push("thumb".into());
         }
@@ -619,6 +657,12 @@ impl Session for OwnerSession {
                 }
                 None
             }
+            // The same power actions as the Windows host, through systemd-logind, which lets the
+            // signed-in user lock, sleep, sign out, restart and shut down without root.
+            ClientMsg::Power { a } => match power(&a) {
+                Ok(()) => Some(ServerMsg::Ok { of: "power".into() }),
+                Err(code) => Some(ServerMsg::error(code, "power action failed", Some("power"))),
+            },
             ClientMsg::MediaCmd { c, v } => match Cmd::parse(&c, v) {
                 Ok(cmd) => {
                     let media = self.media.clone();
@@ -730,16 +774,23 @@ impl Session for OwnerSession {
                 cands,
                 ..
             } => {
+                // Settings › Picture on this computer: a quality limit caps what the device asks
+                // for, and the encoder choice is tried first.
+                let config = self.store.lock().unwrap().config().clone();
+                let fps = if fps == 0 { 60 } else { fps.clamp(1, 120) };
+                let (w, h, fps) = quality_limit(&config.max_quality, w, h, fps);
                 self.start(Options {
                     width: w,
                     height: h,
-                    fps: if fps == 0 { 60 } else { fps.clamp(1, 120) },
+                    fps,
                     kbps: if max_kbps == 0 {
                         12000
                     } else {
                         max_kbps.clamp(1000, 50000)
                     },
                     codecs,
+                    encoder: config.encoder.backend.clone(),
+                    preset: config.encoder.preset.clone(),
                     candidates: cands
                         .iter()
                         .take(16)

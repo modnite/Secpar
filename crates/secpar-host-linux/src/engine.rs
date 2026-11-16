@@ -61,8 +61,81 @@ pub fn executable(data: &Path) -> Option<PathBuf> {
         let path = PathBuf::from(path);
         return (path.is_absolute() && path.is_file()).then_some(path);
     }
+    if let Some(system) = system_engine() {
+        return Some(system);
+    }
     let bundled = data.join("engine").join("sunshine");
     bundled.is_file().then_some(bundled)
+}
+
+/// Where Settings' one-time system setup puts a root-owned copy of the engine, allowed to
+/// capture the screen straight from the driver (desktop/packaging/system-setup.sh).
+pub const SYSTEM_ENGINE: &str = "/usr/local/lib/secpar/engine";
+
+/// The system copy, when root owns it and it is this version's engine. An older copy is
+/// left unused until the setup runs again.
+pub fn system_engine() -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let dir = Path::new(SYSTEM_ENGINE);
+    let exe = dir.join("sunshine");
+    let meta = std::fs::metadata(&exe).ok()?;
+    if meta.uid() != 0 || !meta.is_file() {
+        return None;
+    }
+    if let Some(from) = packaged() {
+        let have = layout(dir);
+        if !layout(&from).iter().all(|(path, size)| have.get(path) == Some(size)) {
+            return None;
+        }
+    }
+    Some(exe)
+}
+
+/// `ready`, `outdated` (made by an earlier version) or `missing`.
+pub fn system_state() -> &'static str {
+    if system_engine().is_some() {
+        "ready"
+    } else if Path::new(SYSTEM_ENGINE).join("sunshine").exists() {
+        "outdated"
+    } else {
+        "missing"
+    }
+}
+
+/// Runs the system setup as root through pkexec, which asks for the owner's password.
+/// The packaged engine and its libraries are staged in a private temporary folder first,
+/// because root cannot read inside the AppImage's user mount.
+pub fn run_system_setup() -> Result<(), String> {
+    let from = packaged().ok_or("This build has no stream engine to set up")?;
+    let stage = std::env::temp_dir().join(format!("secpar-setup-{}", store::hex(&store::random::<8>())));
+    let result = (|| -> Result<(), String> {
+        let engine = stage.join("engine");
+        std::fs::create_dir_all(&stage).map_err(|_| "Could not prepare the setup")?;
+        let mut budget = Budget { files: 0, bytes: 0 };
+        copy_directory(&from, &engine, &mut budget, 0).map_err(|e| e.to_string())?;
+        // The libraries AppRun points the engine at; the privileged copy finds them in lib/.
+        let libs = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.parent()?.join("lib"))).ok_or("No package libraries")?;
+        std::fs::create_dir_all(engine.join("lib")).map_err(|_| "Could not prepare the setup")?;
+        for name in ["libssl.so.4", "libcrypto.so.4", "libminiupnpc.so.21"] {
+            std::fs::copy(libs.join(name), engine.join("lib").join(name)).map_err(|_| "The package is missing an engine library")?;
+        }
+        let script = stage.join("system-setup.sh");
+        std::fs::write(&script, include_str!("../../../desktop/packaging/system-setup.sh")).map_err(|_| "Could not prepare the setup")?;
+        let out = std::process::Command::new("pkexec")
+            .arg("/bin/sh")
+            .arg(&script)
+            .arg(&engine)
+            .output()
+            .map_err(|_| "pkexec is not installed on this computer".to_string())?;
+        match out.status.code() {
+            Some(0) => Ok(()),
+            // pkexec: the password prompt was dismissed or refused.
+            Some(126) | Some(127) => Err("Setup was cancelled".into()),
+            _ => Err(String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("Setup failed").to_string()),
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&stage);
+    result
 }
 
 /// The `engine/` folder the package shipped, next to the app executable.
@@ -352,6 +425,8 @@ pub struct Engine {
     tunnel: Arc<Tunnel>,
     /// Display names for the engine's own client list, by Secpar device.
     names: Mutex<HashMap<String, String>>,
+    /// The root-owned copy from the system setup is the one running.
+    pub system: bool,
 }
 
 impl Engine {
@@ -360,7 +435,8 @@ impl Engine {
     pub async fn start(data: &Path, choice: &store::EncoderChoice) -> Result<Self, &'static str> {
         // The package's engine folder is copied into the data directory, because the
         // engine wants a writable working folder; an update replaces an older copy.
-        if std::env::var_os("SECPAR_ENGINE_PATH").is_none() {
+        let system = std::env::var_os("SECPAR_ENGINE_PATH").is_none() && system_engine().is_some();
+        if std::env::var_os("SECPAR_ENGINE_PATH").is_none() && !system {
             install(data)?;
         }
         let executable = executable(data).ok_or(NO_ENGINE)?;
@@ -368,7 +444,9 @@ impl Engine {
             executable,
             state: data.join("gamestream"),
             base_port: BASE_PORT,
-            capture: capture(),
+            // The system copy may read the screen from the driver: faster, and it still
+            // shows the lock screen. The user's copy goes through the desktop's capture.
+            capture: if system { Capture::Kms } else { capture() },
             encoder: Encoder::from_choice(&choice.backend),
             audio_sink: None,
             preset: Preset::from_choice(&choice.preset),
@@ -383,6 +461,7 @@ impl Engine {
             host: Arc::new(host),
             tunnel: Arc::new(tunnel),
             names: Mutex::new(HashMap::new()),
+            system,
         })
     }
     pub fn tunnel(&self) -> &Tunnel {

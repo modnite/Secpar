@@ -12,6 +12,9 @@ pub struct VideoOptions {
     pub fps: u32,
     pub kbps: u32,
     pub codecs: Vec<String>,
+    /// Settings › Picture: `auto`, `vaapi`, `nvenc` or `software`, and `fast`, `balanced` or `quality`.
+    pub encoder: String,
+    pub preset: String,
 }
 pub struct EncodedFrame {
     pub data: Vec<u8>,
@@ -81,7 +84,8 @@ fn candidates(options: &VideoOptions) -> Vec<Encoder> {
     }
     // Hardware candidates are exhausted before choosing a CPU encoder.
     if options.codecs.iter().any(|c| c == "h264") {
-        result.push(Encoder{factory:"x264enc",codec:"h264",raw:"I420",properties:format!("tune=zerolatency speed-preset=ultrafast bitrate={kbps} key-int-max={gop} bframes=0 byte-stream=true aud=true")});
+        let speed = match options.preset.as_str() { "balanced" => "superfast", "quality" => "veryfast", _ => "ultrafast" };
+        result.push(Encoder{factory:"x264enc",codec:"h264",raw:"I420",properties:format!("tune=zerolatency speed-preset={speed} bitrate={kbps} key-int-max={gop} bframes=0 byte-stream=true aud=true")});
         result.push(Encoder {
             factory: "openh264enc",
             codec: "h264",
@@ -91,6 +95,15 @@ fn candidates(options: &VideoOptions) -> Vec<Encoder> {
                 kbps * 1000
             ),
         });
+    }
+    // The owner's choice is tried first; the others stay behind it so a stream still starts.
+    let family = |factory: &str| match factory {
+        "vah264enc" | "vaapih264enc" | "vah265enc" | "vaapih265enc" => "vaapi",
+        "nvh264enc" | "nvh265enc" => "nvenc",
+        _ => "software",
+    };
+    if options.encoder != "auto" {
+        result.sort_by_key(|e| family(e.factory) != options.encoder.as_str());
     }
     // SECPAR_ENCODER=<gstreamer element> forces one encoder (for comparing them on a machine).
     if let Ok(only) = std::env::var("SECPAR_ENCODER") {
@@ -468,7 +481,7 @@ impl Drop for Capture {
 mod tests {
     use super::*;
     fn sample_options() -> VideoOptions {
-        VideoOptions { width: 0, height: 0, fps: 60, kbps: 8000, codecs: vec!["h264".into()] }
+        VideoOptions { width: 0, height: 0, fps: 60, kbps: 8000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() }
     }
     #[test]
     fn dmabuf_frames_convert_on_the_gpu_and_system_frames_on_the_cpu() {
@@ -522,7 +535,7 @@ mod tests {
     fn portal_resize_live() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let portal = test_portal(&rt);
-        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()] };
+        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
         let mut capture = Capture::start(portal.clone(), options).expect("capture");
         let native = capture.size();
         let wait = |capture: &mut Capture, ok: &dyn Fn(u32, u32) -> bool| {
@@ -594,7 +607,7 @@ mod tests {
         }
         let rt = tokio::runtime::Runtime::new().unwrap();
         let portal = test_portal(&rt);
-        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()] };
+        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
         let mut capture = Capture::start(portal.clone(), options).expect("capture");
         let (name, size) = (capture.encoder_name(), capture.size());
         let (mut frames, mut bytes, mut worst) = (0u32, 0usize, Duration::ZERO);
@@ -620,7 +633,7 @@ mod tests {
         let portal = test_portal(&rt);
         gst::init().unwrap();
         let base = format!("pipewiresrc fd={} path={} do-timestamp=true", portal.fd(), portal.node_id);
-        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 6000, codecs: vec!["h264".into()] };
+        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 6000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
         let mut worked = 0;
         for variant in source_variants(&base, options.fps, (portal.width, portal.height)) {
             let label = variant.split(" ! ").skip(1).collect::<Vec<_>>().join(" ! ");
@@ -674,7 +687,7 @@ mod tests {
     }
     #[test]
     fn the_running_stream_changes_size_and_comes_back_to_the_display_size() {
-        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()] });
+        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() });
         assert_eq!(capture.size(), (320, 180));
         assert_eq!(capture.set_size_in_place((160, 90)), Some((160, 90)));
         assert!(wait_for_size(&mut capture, 160, 90), "frames at the smaller size");
@@ -683,7 +696,7 @@ mod tests {
     }
     #[test]
     fn a_new_chain_takes_over_without_touching_the_display_size() {
-        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()] });
+        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() });
         let native = capture.native;
         assert_eq!(capture.set_size_by_new_chain((160, 90)), Some((160, 90)));
         assert_eq!(capture.native, native, "a small picture does not redefine the display");
@@ -695,7 +708,7 @@ mod tests {
     #[test]
     fn a_size_change_never_reaches_the_pipewire_source() {
         gst::init().unwrap();
-        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()] };
+        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
         let encoder = candidates(&options).pop().unwrap();
         let pipeline = gst::parse::launch(&description("videotestsrc name=fake_source is-live=true pattern=ball ! video/x-raw,width=320,height=180", &encoder, &options, (320, 180)))
             .unwrap()
@@ -737,7 +750,7 @@ mod tests {
     #[test]
     fn the_encoder_is_told_the_source_is_live() {
         gst::init().unwrap();
-        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()] };
+        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
         let encoder = candidates(&options).pop().unwrap();
         // not a live source: the answer upstream is "not live", as pipewiresrc gives while it negotiates
         let pipeline = gst::parse::launch(&description("videotestsrc", &encoder, &options, (320, 180))).unwrap().downcast::<gst::Pipeline>().unwrap();
@@ -764,6 +777,8 @@ mod tests {
             fps: 60,
             kbps: 2000,
             codecs: vec!["h264".into()],
+            encoder: "auto".into(),
+            preset: "fast".into(),
         };
         let candidate = candidates(&options).pop().unwrap();
         let text = description("videotestsrc", &candidate, &options, (320, 180));

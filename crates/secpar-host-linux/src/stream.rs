@@ -91,6 +91,9 @@ pub struct Options {
     pub fps: u32,
     pub kbps: u32,
     pub codecs: Vec<String>,
+    /// Settings › Picture: the encoder tried first and the software encoder's speed.
+    pub encoder: String,
+    pub preset: String,
     pub candidates: Vec<SocketAddr>,
     pub audio: bool,
     /// Where to get TURN credentials for a relay of our own; None until this host has relay access.
@@ -218,6 +221,8 @@ impl Stream {
             fps: options.fps,
             kbps: options.kbps,
             codecs: options.codecs,
+            encoder: options.encoder,
+            preset: options.preset,
         };
         let mut capture = tokio::task::spawn_blocking(move || Capture::start(p, video_options))
             .await

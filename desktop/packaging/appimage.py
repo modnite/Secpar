@@ -39,6 +39,12 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     if (exe/"engine"/"assets").is_dir() and not assets.exists():
         assets.parent.mkdir(parents=True);shutil.move(str(exe/"engine"/"assets"),str(assets))
     if not (assets/"shaders"/"opengl"/"ConvertY.frag").is_file():raise RuntimeError("The engine's shaders are missing")
+    # The system setup gives a root-owned copy of the engine capture permissions. Linux then
+    # ignores LD_LIBRARY_PATH for it, so the engine also looks in a fixed folder the setup fills.
+    # The user's own copy still finds its libraries through AppRun's LD_LIBRARY_PATH first.
+    patchelf=shutil.which("patchelf")
+    if not patchelf:raise RuntimeError("patchelf is needed to build the AppImage")
+    subprocess.run([patchelf,"--set-rpath","/usr/local/lib/secpar/engine/lib",str(exe/"engine"/"sunshine")],check=True)
     for name in ENGINE_LIBS:
         staged=exe/"engine"/name
         if not staged.is_file():raise RuntimeError("Missing bundled engine library "+name)
