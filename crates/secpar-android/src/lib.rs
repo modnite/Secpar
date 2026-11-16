@@ -5,13 +5,15 @@
 //!
 //! Android connects only. The identity and the session are kept in the app's
 //! private folder, which other apps cannot read.
+mod tunnel;
+
 use jni::{
     objects::{JClass, JString},
     sys::jstring,
     JNIEnv,
 };
 use secpar_core::{
-    account::{self, Error, Platform, Service, Session},
+    account::{self, Device, Error, FriendChange, Platform, Service, Session},
     identity,
     store::FileStore,
 };
@@ -29,6 +31,13 @@ use std::{
 const ENGINE_BASE: u16 = 46989;
 /// Nothing else in the app listens here, so the tunnel's local end is plain loopback.
 const LOCAL: &str = "127.0.0.1";
+/// The widest still a card asks for unless it says otherwise. A card shows it at
+/// about 64 dp, so this is already more than one screen needs.
+const PREVIEW_WIDTH: u32 = 320;
+/// How long one still may take. The direct attempt gives up quickly and the
+/// meeting path is what a phone away from home needs, so this is long enough for
+/// that and no longer: a card that gets nothing keeps its glyph.
+const PREVIEW_WAIT: Duration = Duration::from_secs(15);
 
 #[derive(Deserialize)]
 #[serde(tag = "do", rename_all = "snake_case")]
@@ -44,8 +53,36 @@ enum Request {
     SignIn { email: String, password: String, name: String },
     SignOut,
     Devices,
+    /// Takes another device off the account, such as an old record of this phone.
+    RemoveDevice { id: String },
+    /// Everyone on the account's friend list, including waiting requests.
+    Friends,
+    /// Asks the account named `handle` to be friends.
+    AddFriend { handle: String },
+    /// Accepts a request from the account `id`.
+    AcceptFriend { id: String },
+    /// Removes a friend, or turns down a request.
+    RemoveFriend { id: String },
+    /// Changes what the account `id` may do on this account's computers. Parts
+    /// that are left out stay as they are; the answer carries the saved values.
+    FriendSettings {
+        id: String,
+        #[serde(default)]
+        connect: Option<String>,
+        #[serde(default)]
+        input: Option<String>,
+        #[serde(default)]
+        keyboard: Option<bool>,
+        #[serde(default)]
+        mouse: Option<bool>,
+    },
     /// Opens the tunnel to one of the account's hosting computers.
     Connect { id: String },
+    /// A still of one of the account's hosting computers for its card on the
+    /// Computers tab, at most `max_width` pixels wide. It answers the hosting
+    /// computer's own answer: `{"ok":true,"jpeg":…,"width":…,"height":…,"at":…}`
+    /// or `{"ok":false,"err":"not_available"}`.
+    Preview { id: String, #[serde(default)] max_width: Option<u32> },
     /// Has the connected computer complete the pairing the app has just started.
     Pair { client_id: String, certificate_sha256: String, pin: String },
     Disconnect,
@@ -64,12 +101,24 @@ static TURN: Mutex<()> = Mutex::new(());
 fn failed(code: &str) -> Value {
     json!({"ok": false, "error": code})
 }
+/// What a card is told when there is no still to show, in the same shape the
+/// hosting computer itself uses.
+fn no_preview() -> Value {
+    json!({"ok": false, "err": "not_available"})
+}
 fn refused(error: Error) -> Value {
     match error {
         Error::Unreachable => failed("unreachable"),
         Error::Refused { code, message, .. } => json!({"ok": false, "error": code, "message": message}),
         Error::Invalid(_) => failed("invalid_answer"),
         Error::Store(_) => failed("store_unavailable"),
+    }
+}
+/// A friend action's answer: a mistake caught before sending keeps its own wording.
+fn rejected(error: Error) -> Value {
+    match error {
+        Error::Invalid(message) => json!({"ok": false, "error": "invalid", "message": message}),
+        other => refused(other),
     }
 }
 
@@ -91,6 +140,14 @@ impl App {
             return failed("signed_out");
         }
         refused(error)
+    }
+    /// The same, for a friend action: an invalid value keeps its own wording.
+    fn friend_gone(&self, error: Error) -> Value {
+        if matches!(error, Error::Refused { status: 401, .. }) {
+            let _ = account::forget_session(&self.store);
+            return failed("signed_out");
+        }
+        rejected(error)
     }
 
     async fn state(&self) -> Value {
@@ -143,6 +200,24 @@ impl App {
         }
     }
 
+    async fn remove_device(&self, id: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        // Never this phone itself: signing out does that.
+        let mine = self.identity().ok().map(|i| identity::hex(&i.fingerprint()));
+        if let (Some(mine), Ok(devices)) = (&mine, self.account.devices(&session).await) {
+            if devices.iter().any(|d| d.id == id && &d.fingerprint == mine) {
+                return failed("this_device");
+            }
+        }
+        match self.account.remove(&session, id).await {
+            Ok(()) => self.devices().await,
+            Err(error) => self.gone(error),
+        }
+    }
+
     async fn devices(&self) -> Value {
         let session = match self.session() {
             Ok(session) => session,
@@ -161,38 +236,96 @@ impl App {
         }
     }
 
-    async fn connect(&self, id: &str) -> Value {
-        let (session, identity) = match (self.session(), self.identity()) {
-            (Ok(session), Ok(identity)) => (session, identity),
-            (Err(answer), _) | (_, Err(answer)) => return answer,
+    async fn friends(&self) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
         };
-        let devices = match self.account.devices(&session).await {
-            Ok(devices) => devices,
-            Err(error) => return self.gone(error),
+        match self.account.friends(&session).await {
+            Ok(friends) => json!({
+                "ok": true,
+                "friends": friends.iter().map(|f| json!({
+                    "id": f.id, "handle": f.handle, "name": f.name, "state": f.state,
+                    // A request this account sent waits for the other side to answer.
+                    "incoming": f.state == "pending" && f.requester != session.user.id,
+                    "input": f.input, "connect": f.connect,
+                    "keyboard": f.keyboard, "mouse": f.mouse,
+                })).collect::<Vec<_>>(),
+            }),
+            Err(error) => self.gone(error),
+        }
+    }
+
+    async fn add_friend(&self, handle: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
         };
-        let Some(device) = devices.iter().find(|d| d.id == id) else { return failed("device_not_found") };
-        let (Some(reach), Some(host)) = (&device.reach, identity::unhex(&device.fingerprint)) else { return failed("offline") };
+        match self.account.request_friend(&session, handle).await {
+            Ok(()) => json!({"ok": true}),
+            Err(error) => self.friend_gone(error),
+        }
+    }
+
+    async fn accept_friend(&self, id: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.accept_friend(&session, id).await {
+            Ok(()) => json!({"ok": true}),
+            Err(error) => self.friend_gone(error),
+        }
+    }
+
+    async fn remove_friend(&self, id: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.remove_friend(&session, id).await {
+            Ok(()) => json!({"ok": true}),
+            Err(error) => self.friend_gone(error),
+        }
+    }
+
+    async fn save_friend_settings(&self, id: &str, change: FriendChange) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.save_friend_settings(&session, id, &change).await {
+            Ok(settings) => json!({
+                "ok": true,
+                "settings": {
+                    "input": settings.input, "connect": settings.connect,
+                    "keyboard": settings.keyboard, "mouse": settings.mouse,
+                },
+            }),
+            Err(error) => self.friend_gone(error),
+        }
+    }
+
+    /// Opens a tunnel to `device` that carries `ports`, direct first and then by
+    /// meeting it across the internet. Nothing is kept: the caller decides
+    /// whether the tunnel becomes the stream's or is used once and dropped.
+    async fn reach(&self, session: &Session, identity: &Identity, device: &Device, ports: Ports) -> Result<secpar_tunnel::Client, &'static str> {
+        let (Some(reach), Some(host)) = (&device.reach, identity::unhex(&device.fingerprint)) else { return Err("offline") };
         let addresses: Vec<SocketAddr> = reach.addresses.iter().filter_map(|a| a.parse().ok()).map(|ip| SocketAddr::new(ip, reach.port)).collect();
         if addresses.is_empty() {
-            return failed("offline");
+            return Err("offline");
         }
-        let mut tunnel = self.tunnel.lock().await;
-        *tunnel = None;
+        let Ok(listen) = LOCAL.parse() else { return Err("no_socket") };
         // A computer that has not heard of this device yet fetches a new list
         // when it is refused, so a second and third try are worth making.
-        let connected = json!({"ok": true, "address": LOCAL, "port": ENGINE_BASE, "host": device.fingerprint, "name": device.name});
-        let Ok(listen) = LOCAL.parse() else { return failed("no_socket") };
         for attempt in 0..3 {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
-            let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") else { return failed("no_socket") };
-            let direct = secpar_tunnel::connect_on(socket, &addresses, &identity, host, listen, Ports::engine(ENGINE_BASE));
+            let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") else { return Err("no_socket") };
+            let direct = secpar_tunnel::connect_on(socket, &addresses, identity, host, listen, ports.clone());
             match tokio::time::timeout(Duration::from_millis(1500), direct).await {
-                Ok(Ok(opened)) => {
-                    *tunnel = Some(opened);
-                    return connected;
-                }
+                Ok(Ok(opened)) => return Ok(opened),
                 // Answered and refused: worth another try. No answer at all:
                 // not on the same network, so go through the relay.
                 Ok(Err(_)) => continue,
@@ -203,8 +336,8 @@ impl App {
         // Meet the computer across the internet: tell it where this device is
         // seen from outside, and its relay address if the service offers a relay;
         // it answers with its own. Direct first, the relay as the fallback.
-        let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") else { return failed("no_socket") };
-        let Ok(opened) = secpar_tunnel::open(socket) else { return failed("no_socket") };
+        let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") else { return Err("no_socket") };
+        let Ok(opened) = secpar_tunnel::open(socket) else { return Err("no_socket") };
         let relay = opened.relay();
         let first = |name: String| async move { tokio::net::lookup_host(name).await.ok().and_then(|mut found| found.find(SocketAddr::is_ipv4)) };
         let seen = match first("stun.cloudflare.com:3478".into()).await {
@@ -215,21 +348,21 @@ impl App {
             None => None,
         };
         let mut own_relay = None;
-        if let Ok(access) = self.account.relay(&session).await {
+        if let Ok(access) = self.account.relay(session).await {
             if let Some(server) = first(access.server.clone()).await {
                 let starting = relay.clone();
                 own_relay = tokio::task::spawn_blocking(move || starting.start(server, access.username, access.credential)).await.ok().flatten();
             }
         }
         if seen.is_none() && own_relay.is_none() {
-            return failed("no_internet_path");
+            return Err("no_internet_path");
         }
-        let Ok(nowhere) = "0.0.0.0:9".parse::<SocketAddr>() else { return failed("no_socket") };
+        let Ok(nowhere) = "0.0.0.0:9".parse::<SocketAddr>() else { return Err("no_socket") };
         let mut here = vec![seen.unwrap_or(nowhere)];
         here.extend(own_relay);
-        let there = match self.account.knock(&session, &device.id, &identity.fingerprint(), &here).await {
+        let there = match self.account.knock(session, &device.id, &identity.fingerprint(), &here).await {
             Ok(there) if !there.is_empty() => there,
-            _ => return failed("computer_not_answering"),
+            _ => return Err("computer_not_answering"),
         };
         let mut candidates: Vec<SocketAddr> = there.first().copied().filter(|a| !a.ip().is_unspecified()).into_iter().collect();
         if let (Some(_), Some(host_relay)) = (own_relay, there.get(1).copied()) {
@@ -238,14 +371,60 @@ impl App {
             candidates.push(host_relay);
         }
         if candidates.is_empty() {
-            return failed("no_internet_path");
+            return Err("no_internet_path");
         }
-        match secpar_tunnel::connect_through(opened, &candidates, &identity, host, listen, Ports::engine(ENGINE_BASE)).await {
+        secpar_tunnel::connect_through(opened, &candidates, identity, host, listen, ports).await.map_err(|_| "not_reachable")
+    }
+
+    async fn connect(&self, id: &str) -> Value {
+        let (session, identity) = match (self.session(), self.identity()) {
+            (Ok(session), Ok(identity)) => (session, identity),
+            (Err(answer), _) | (_, Err(answer)) => return answer,
+        };
+        let devices = match self.account.devices(&session).await {
+            Ok(devices) => devices,
+            Err(error) => return self.gone(error),
+        };
+        let Some(device) = devices.iter().find(|d| d.id == id) else { return failed("device_not_found") };
+        let mut tunnel = self.tunnel.lock().await;
+        *tunnel = None;
+        match self.reach(&session, &identity, device, Ports::engine(ENGINE_BASE)).await {
             Ok(opened) => {
                 *tunnel = Some(opened);
-                connected
+                json!({"ok": true, "address": LOCAL, "port": ENGINE_BASE, "host": device.fingerprint, "name": device.name})
             }
-            Err(_) => failed("not_reachable"),
+            Err(code) => failed(code),
+        }
+    }
+
+    /// A still of one of the account's own computers, for its card. The request
+    /// travels on the app channel of a tunnel opened for this one question, so a
+    /// preview never takes the port a stream needs and never disturbs the stream's
+    /// own tunnel. Whatever the hosting computer answers is passed on unchanged.
+    async fn preview(&self, id: &str, max_width: Option<u32>) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        let Ok(identity) = self.identity() else { return no_preview() };
+        let devices = match self.account.devices(&session).await {
+            Ok(devices) => devices,
+            Err(error) => return self.gone(error),
+        };
+        let Some(device) = devices.iter().find(|d| d.id == id) else { return no_preview() };
+        let width = max_width.unwrap_or(PREVIEW_WIDTH).clamp(64, 1920);
+        let asking = async {
+            let tunnel = self.reach(&session, &identity, device, Ports { tcp: Vec::new(), udp: Vec::new() }).await.map_err(|_| "unreachable")?;
+            let request = serde_json::to_vec(&json!({"app": {"preview": {"max_width": width}}})).map_err(|_| "request")?;
+            let answer = tunnel.app_request(&request).await.map_err(|_| "no_answer")?;
+            serde_json::from_slice::<Value>(&answer).map_err(|_| "bad_answer")
+        };
+        match tokio::time::timeout(PREVIEW_WAIT, asking).await {
+            Ok(Ok(answer)) if answer.get("jpeg").and_then(Value::as_str).is_some_and(|jpeg| !jpeg.is_empty()) => answer,
+            // The computer answered with nothing to show, and says why.
+            Ok(Ok(answer)) => json!({"ok": false, "err": answer.get("err").cloned().unwrap_or_else(|| "empty".into())}),
+            Ok(Err(why)) => json!({"ok": false, "err": why}),
+            Err(_) => json!({"ok": false, "err": "timed_out"}),
         }
     }
 
@@ -280,8 +459,11 @@ fn configure(folder: String, test_account: Option<(String, String)>) -> Value {
 
 fn call(request: &str) -> Value {
     let Ok(request) = serde_json::from_str::<Request>(request) else { return failed("unknown_request") };
-    // Pairing runs while the app's own pairing call is waiting, so it does not queue behind it.
-    let _turn = if matches!(request, Request::Pair { .. }) { None } else { Some(TURN.lock().unwrap_or_else(|p| p.into_inner())) };
+    // These two do not touch the stream's tunnel or the signed-in session's
+    // place in line: pairing runs while the app's own pairing call waits, and a
+    // preview runs on its own short tunnel beside whatever else is happening.
+    let alone = matches!(request, Request::Pair { .. } | Request::Preview { .. });
+    let _turn = if alone { None } else { Some(TURN.lock().unwrap_or_else(|p| p.into_inner())) };
     if let Request::Configure { folder, test_account } = request {
         return configure(folder, test_account);
     }
@@ -293,7 +475,16 @@ fn call(request: &str) -> Value {
             Request::SignIn { email, password, name } => app.sign_in(&email, &password, &name).await,
             Request::SignOut => app.sign_out().await,
             Request::Devices => app.devices().await,
+            Request::RemoveDevice { id } => app.remove_device(&id).await,
+            Request::Friends => app.friends().await,
+            Request::AddFriend { handle } => app.add_friend(&handle).await,
+            Request::AcceptFriend { id } => app.accept_friend(&id).await,
+            Request::RemoveFriend { id } => app.remove_friend(&id).await,
+            Request::FriendSettings { id, connect, input, keyboard, mouse } => {
+                app.save_friend_settings(&id, FriendChange { input, connect, keyboard, mouse }).await
+            }
             Request::Connect { id } => app.connect(&id).await,
+            Request::Preview { id, max_width } => app.preview(&id, max_width).await,
             Request::Pair { client_id, certificate_sha256, pin } => app.pair(&client_id, &certificate_sha256, &pin).await,
             Request::Disconnect => {
                 *app.tunnel.lock().await = None;

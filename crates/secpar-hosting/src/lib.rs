@@ -7,6 +7,7 @@
 //! pairing over the tunnel's own channel. So the engine's pairing is always tied
 //! to one device of one account, and is taken away again when that device leaves
 //! the list.
+use base64::Engine as _;
 use secpar_core::{
     account::{Knock, Reach, Service},
     hosting::{Access, Peer, Refreshed},
@@ -30,6 +31,9 @@ mod tests;
 /// The engine's base port on every Secpar hosting computer. Chosen away from the
 /// usual range of this engine family, so it runs beside an installed one.
 pub const ENGINE_BASE: u16 = 46989;
+
+/// How often the clipboard is looked at while a device is connected.
+pub const CLIPBOARD_TICK: Duration = Duration::from_millis(500);
 
 pub type Pending<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -57,13 +61,187 @@ pub trait Engine: Send + Sync + 'static {
     fn revoke<'a>(&'a self, owner: &'a str, device: &'a str) -> Pending<'a, bool>;
     /// The `(owner, device)` pairs that hold a grant now.
     fn granted(&self) -> Pending<'_, Vec<(String, String)>>;
+    /// Changes the size of the stream this computer is hosting. `Ok(false)`
+    /// means no stream was running. A stand-in engine has no stream to change.
+    fn resolution(&self, _width: u32, _height: u32) -> Pending<'_, Result<bool, Refusal>> {
+        Box::pin(async { Err(Refusal::Failed) })
+    }
 }
 
 #[derive(Deserialize)]
 enum Request {
     #[serde(rename = "pair")]
     Pair(Pairing),
+    /// Anything on the app channel: the clipboard now, files and monitors later.
+    #[serde(rename = "app")]
+    App(App),
 }
+/// What a device may ask for on the app channel.
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum App {
+    Clipboard(ClipboardRequest),
+    File(FileRequest),
+    Resolution(ResolutionRequest),
+    Preview(PreviewRequest),
+}
+/// `{"width": 1280, "height": 720}`: the size the connected device wants the
+/// running stream to have. The session survives; only the picture changes size.
+#[derive(Deserialize)]
+struct ResolutionRequest {
+    width: u32,
+    height: u32,
+}
+/// `{"max_width": 480}`: a still of this computer's screen, for the device's
+/// list of computers. The width is the most it may have; the answer keeps the
+/// screen's own shape.
+#[derive(Deserialize)]
+struct PreviewRequest {
+    #[serde(default)]
+    max_width: Option<u32>,
+}
+/// One clipboard request: `{"get": true}` for the text this computer holds, or
+/// `{"set": "..."}` for text from the other computer.
+#[derive(Deserialize)]
+struct ClipboardRequest {
+    #[serde(default)]
+    get: bool,
+    #[serde(default)]
+    set: Option<String>,
+}
+/// One piece of a file the other computer is sending:
+/// `{"name": "report.pdf", "size": 700000, "offset": 0, "data": "<base64>"}`.
+/// The pieces arrive in order, each with the offset it belongs at.
+#[derive(Deserialize)]
+struct FileRequest {
+    name: String,
+    size: u64,
+    offset: u64,
+    data: String,
+}
+
+/// The most a file may be, in bytes. Anything larger is refused.
+pub const MAX_FILE: u64 = 2 * 1024 * 1024 * 1024;
+/// How many of a file's bytes travel in one app channel frame.
+pub const FILE_CHUNK: usize = 256 * 1024;
+/// The longest base64 text one frame may carry, so a frame stays well inside
+/// the channel's own limit.
+pub const MAX_FILE_FRAME: usize = 512 * 1024;
+
+/// Whether a name a sending computer announced can be written on this computer:
+/// one name, no folders, no characters the file systems refuse, and nothing
+/// that stands for a place rather than a file.
+pub fn file_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && name != "."
+        && name != ".."
+        && name.trim() == name
+        && !name.ends_with('.')
+        && !name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+}
+
+/// What this computer holds of a file that is arriving.
+pub struct Progress {
+    /// The bytes stored so far, which the sending computer checks its offset against.
+    pub received: u64,
+    /// The name the file was saved under, once its last piece has arrived.
+    pub saved: Option<String>,
+}
+
+/// Where files from another computer are written. The hosting side checks the
+/// name, the size and the offsets; this decides where the bytes go.
+pub trait Files: Send + Sync + 'static {
+    /// Stores one piece of an arriving file from the device `from`. `None`
+    /// refuses it, which the sending computer is told.
+    fn receive(&self, from: &str, name: &str, total: u64, offset: u64, data: &[u8]) -> Option<Progress>;
+}
+
+/// Files that are refused, for a computer that takes none.
+pub struct NoFiles;
+impl Files for NoFiles {
+    fn receive(&self, _: &str, _: &str, _: u64, _: u64, _: &[u8]) -> Option<Progress> {
+        None
+    }
+}
+
+/// This computer's clipboard, as the hosting side uses it. It is only called
+/// while a device is connected and the person allows clipboard sharing, so an
+/// implementation may open the OS clipboard when `attach` says a device arrived.
+pub trait Clipboard: Send + Sync + 'static {
+    /// The text worth sharing now: one this computer copied while a device was
+    /// connected. Text that was already in the clipboard is never returned.
+    fn text(&self) -> Option<String>;
+    /// Puts text from another computer into this one's clipboard. False if it
+    /// could not be done. Must not block: the tunnel's answer waits on it.
+    fn set(&self, text: &str) -> bool;
+    /// A device connected (`true`) or the last one left. Watching the OS
+    /// clipboard may start or stop here.
+    fn attach(&self, _connected: bool) {}
+    /// Called about twice a second while a device is connected.
+    fn poll(&self) {}
+}
+
+/// A clipboard that shares nothing, for a computer that does not use one.
+pub struct NoClipboard;
+impl Clipboard for NoClipboard {
+    fn text(&self) -> Option<String> {
+        None
+    }
+    fn set(&self, _: &str) -> bool {
+        false
+    }
+}
+
+/// The widest still a device may ask for. A wider request is answered at this
+/// width, which keeps the answer well inside the app channel's frame.
+pub const MAX_PREVIEW_WIDTH: u32 = 1024;
+/// A request narrower than this is answered at this width.
+pub const MIN_PREVIEW_WIDTH: u32 = 16;
+/// The width answered when a device gives none.
+pub const DEFAULT_PREVIEW_WIDTH: u32 = 480;
+/// How long a still is kept, so repeated requests do not capture again.
+pub const PREVIEW_TTL: Duration = Duration::from_secs(5);
+/// The largest base64 picture an answer may carry. Four thirds of the picture
+/// itself, so this leaves the JSON well under the channel's 1 MiB frame.
+pub const MAX_PREVIEW_FRAME: usize = 512 * 1024;
+
+/// The width a request is answered at: the one asked for, kept between
+/// `MIN_PREVIEW_WIDTH` and `MAX_PREVIEW_WIDTH`, and `DEFAULT_PREVIEW_WIDTH` when
+/// the request gives none.
+pub fn preview_width(max_width: Option<u32>) -> u32 {
+    max_width.filter(|width| *width > 0).unwrap_or(DEFAULT_PREVIEW_WIDTH).clamp(MIN_PREVIEW_WIDTH, MAX_PREVIEW_WIDTH)
+}
+
+/// One still of this computer's screen, as another computer's list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Still {
+    /// The picture as JPEG bytes.
+    pub jpeg: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// When it was taken, in seconds since the epoch.
+    pub at: u64,
+}
+
+/// This computer's screen, for the owner's own devices. It is asked only when
+/// one of them asks for a still over an open tunnel, and not again within
+/// `PREVIEW_TTL`, so nothing is captured while no device is connected.
+pub trait Previews: Send + Sync + 'static {
+    /// The primary display at most `max_width` pixels wide. `None` when there is
+    /// nothing to capture now: a locked screen, no display, or a system whose
+    /// capture path Secpar does not use yet.
+    fn still(&self, max_width: u32) -> Option<Still>;
+}
+
+/// A screen that cannot be shown, for a computer with no capture path.
+pub struct NoPreviews;
+impl Previews for NoPreviews {
+    fn still(&self, _max_width: u32) -> Option<Still> {
+        None
+    }
+}
+
 /// What a device hears back on the tunnel's own channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,8 +261,41 @@ fn now() -> u64 {
 struct Inner<E> {
     access: Arc<Access>,
     engine: Arc<E>,
+    clipboard: Arc<dyn Clipboard>,
+    files: Arc<dyn Files>,
+    previews: Arc<dyn Previews>,
+    /// The last still taken, and when, so a device that asks again soon after
+    /// is given the same one instead of another capture.
+    preview: std::sync::Mutex<Option<Cached>>,
+}
+/// A still that was taken for the width a device asked for.
+struct Cached {
+    width: u32,
+    still: Still,
+    taken: std::time::Instant,
 }
 impl<E: Engine> Inner<E> {
+    /// The still for this request: the one taken less than `PREVIEW_TTL` ago at
+    /// the same width, or a new capture. `None` when there is nothing to show.
+    /// Only a connected device can ask, so no device connected means no capture.
+    async fn preview(&self, max_width: Option<u32>) -> Option<Still> {
+        let width = preview_width(max_width);
+        if let Ok(cache) = self.preview.lock() {
+            if let Some(cached) = cache.as_ref() {
+                if cached.width == width && cached.taken.elapsed() < PREVIEW_TTL {
+                    return Some(cached.still.clone());
+                }
+            }
+        }
+        let previews = self.previews.clone();
+        // Capturing blocks the thread that takes the picture, never the runner.
+        let still = tokio::task::spawn_blocking(move || previews.still(width)).await.ok().flatten()?;
+        if let Ok(mut cache) = self.preview.lock() {
+            *cache = Some(Cached { width, still: still.clone(), taken: std::time::Instant::now() });
+        }
+        Some(still)
+    }
+
     async fn answer(&self, device: Fingerprint, request: Vec<u8>) -> Answer {
         let Ok(Request::Pair(pairing)) = serde_json::from_slice(&request) else { return Answer::Unknown };
         // The tunnel let this device in, but the list may have changed since.
@@ -109,6 +320,88 @@ impl<E: Engine> Inner<E> {
         }
         Answer::Failed
     }
+
+    /// Answers one request on the app channel. Clipboard text is shared with the
+    /// owner's own devices and friends who may use the keyboard; files are taken
+    /// from the owner's own devices only.
+    async fn app(&self, device: Fingerprint, request: Vec<u8>) -> serde_json::Value {
+        let refused = |code: &str| serde_json::json!({"ok": false, "error": code});
+        let Ok(Request::App(app)) = serde_json::from_slice(&request) else { return refused("unknown") };
+        // The tunnel let this device in, but the list may have changed since.
+        let Some(peer) = self.access.peer(&device, now()) else { return refused("not_allowed") };
+        let (own, keyboard) = match peer {
+            Peer::Own { .. } => (true, true),
+            Peer::Guest { keyboard, .. } => (false, keyboard),
+        };
+        match app {
+            App::Clipboard(ClipboardRequest { get, set }) => {
+                if !keyboard {
+                    return refused("not_allowed");
+                }
+                if let Some(text) = set {
+                    if !secpar_clipboard::valid(&text) {
+                        return refused("too_large");
+                    }
+                    return serde_json::json!({"ok": self.clipboard.set(&text)});
+                }
+                if get {
+                    return serde_json::json!({"ok": true, "text": self.clipboard.text()});
+                }
+                refused("unknown")
+            }
+            App::File(file) => {
+                // A friend's device is not sent files in this first cut.
+                if !own {
+                    return refused("not_allowed");
+                }
+                if !file_name_ok(&file.name) {
+                    return refused("bad_name");
+                }
+                if file.size == 0 || file.size > MAX_FILE || file.data.len() > MAX_FILE_FRAME {
+                    return refused("too_large");
+                }
+                let Ok(data) = base64::engine::general_purpose::STANDARD.decode(&file.data) else { return refused("bad_data") };
+                if data.is_empty() || data.len() > FILE_CHUNK {
+                    return refused("too_large");
+                }
+                if file.offset.checked_add(data.len() as u64).is_none_or(|end| end > file.size) {
+                    return refused("too_large");
+                }
+                match self.files.receive(&hex(&device), &file.name, file.size, file.offset, &data) {
+                    Some(Progress { received, saved: Some(saved) }) => serde_json::json!({"ok": true, "received": received, "saved": saved}),
+                    Some(Progress { received, saved: None }) => serde_json::json!({"ok": true, "received": received}),
+                    None => refused("not_saved"),
+                }
+            }
+            App::Resolution(ResolutionRequest { width, height }) => {
+                // The size of the picture on this computer is the owner's to
+                // change; a friend watching is not given it.
+                if !own {
+                    return refused("not_allowed");
+                }
+                match self.engine.resolution(width, height).await {
+                    Ok(streaming) => serde_json::json!({"ok": true, "streaming": streaming}),
+                    Err(_) => refused("not_changed"),
+                }
+            }
+            App::Preview(PreviewRequest { max_width }) => {
+                // This computer's screen is shown to the owner's own devices
+                // only, like files. A friend watching is not given a still.
+                if !own {
+                    return serde_json::json!({"ok": false, "err": "not_allowed"});
+                }
+                let Some(still) = self.preview(max_width).await else {
+                    return serde_json::json!({"ok": false, "err": "not_available"});
+                };
+                let jpeg = base64::engine::general_purpose::STANDARD.encode(&still.jpeg);
+                // A picture this large would not fit the channel's frame.
+                if jpeg.len() > MAX_PREVIEW_FRAME || still.width > MAX_PREVIEW_WIDTH {
+                    return serde_json::json!({"ok": false, "err": "not_available"});
+                }
+                serde_json::json!({"ok": true, "jpeg": jpeg, "width": still.width, "height": still.height, "at": still.at})
+            }
+        }
+    }
 }
 
 /// A running hosting side. Dropping it closes the tunnel.
@@ -124,15 +417,24 @@ pub struct Hosting<E: Engine> {
 }
 impl<E: Engine> Hosting<E> {
     /// Opens the tunnel on `bind` for the devices `access` allows right now, in
-    /// front of an engine that listens on `engine_ip` with `ports`.
-    pub async fn start(bind: SocketAddr, identity: &Identity, access: Arc<Access>, engine: Arc<E>, engine_ip: IpAddr, ports: secpar_tunnel::Ports) -> secpar_tunnel::Result<Self> {
+    /// front of an engine that listens on `engine_ip` with `ports`, with
+    /// `clipboard` as the text this computer shares, `files` as where files
+    /// from another computer are written, and `previews` as this computer's
+    /// screen.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start(bind: SocketAddr, identity: &Identity, access: Arc<Access>, engine: Arc<E>, clipboard: Arc<dyn Clipboard>, files: Arc<dyn Files>, previews: Arc<dyn Previews>, engine_ip: IpAddr, ports: secpar_tunnel::Ports) -> secpar_tunnel::Result<Self> {
         let allowed = secpar_tunnel::Allowed::new(access.allowed(now()));
         let tunnel = secpar_tunnel::serve(bind, identity, allowed, engine_ip, ports).await?;
-        let inner = Arc::new(Inner { access, engine });
+        let inner = Arc::new(Inner { access, engine, clipboard, files, previews, preview: Default::default() });
         let answering = inner.clone();
         tunnel.on_request(Arc::new(move |device, request| {
             let answering = answering.clone();
             Box::pin(async move { serde_json::to_vec(&answering.answer(device, request).await).unwrap_or_default() })
+        }));
+        let sharing = inner.clone();
+        tunnel.on_app(Arc::new(move |device, request| {
+            let sharing = sharing.clone();
+            Box::pin(async move { serde_json::to_vec(&sharing.app(device, request).await).unwrap_or_default() })
         }));
         Ok(Self { inner, tunnel, outside: Default::default(), punching: Default::default() })
     }
@@ -235,7 +537,28 @@ impl<E: Engine> Hosting<E> {
     /// connect, at most once in ten seconds: a computer the owner has just
     /// signed in on is not on the old list yet, and should not have to wait.
     pub async fn keep_current(&self, service: &Service, identity: &Identity) {
-        tokio::join!(self.keep_list(service, identity), self.meet(service, identity), self.punch());
+        tokio::join!(self.keep_list(service, identity), self.meet(service, identity), self.punch(), self.keep_clipboard());
+    }
+
+    /// Watches this computer's clipboard while a device is connected, so the
+    /// clipboard can be answered with text this computer copies now. Nothing is
+    /// read while no device is connected. Never returns.
+    pub async fn keep_clipboard(&self) {
+        let mut watching = false;
+        loop {
+            tokio::time::sleep(CLIPBOARD_TICK).await;
+            if self.tunnel.connected().is_empty() {
+                if watching {
+                    watching = false;
+                    self.inner.clipboard.attach(false);
+                }
+                continue;
+            }
+            watching = true;
+            // Starts watching again if sharing was switched off and on meanwhile.
+            self.inner.clipboard.attach(true);
+            self.inner.clipboard.poll();
+        }
     }
 
     async fn punch(&self) {
@@ -369,5 +692,104 @@ pub async fn request_pairing(tunnel: &secpar_tunnel::Client, pairing: &Pairing) 
     match tunnel.request(&request).await {
         Ok(answer) => serde_json::from_slice(&answer).unwrap_or(Answer::Failed),
         Err(_) => Answer::Failed,
+    }
+}
+
+/// The text in the other computer's clipboard, if it has copied anything since
+/// this computer connected. `None` when it has nothing to share yet, or did not
+/// answer. Text that was already there before connecting is never returned.
+pub async fn clipboard_text(tunnel: &secpar_tunnel::Client) -> Option<String> {
+    let request = serde_json::to_vec(&serde_json::json!({ "app": { "clipboard": { "get": true } } })).ok()?;
+    let answer: serde_json::Value = serde_json::from_slice(&tunnel.app_request(&request).await.ok()?).ok()?;
+    // A device that may not share gets no text key at all.
+    Some(answer.get("text")?.as_str()?.to_string())
+}
+
+/// Puts text in the other computer's clipboard. False when it refused, for
+/// example because this device may not use the keyboard, the text is too large,
+/// or the other computer could not write it.
+pub async fn set_clipboard(tunnel: &secpar_tunnel::Client, text: &str) -> bool {
+    let Ok(request) = serde_json::to_vec(&serde_json::json!({ "app": { "clipboard": { "set": text } } })) else { return false };
+    match tunnel.app_request(&request).await {
+        Ok(answer) => serde_json::from_slice::<serde_json::Value>(&answer).is_ok_and(|answer| answer["ok"] == true),
+        Err(_) => false,
+    }
+}
+
+/// Asks the computer this one is connected to for a different stream size. The
+/// stream keeps running; the picture changes size and the decoder reconfigures
+/// from the next sequence header. `Ok(true)` means it is changing, `Ok(false)`
+/// that no stream is running there, and `Err` why it refused.
+pub async fn set_resolution(tunnel: &secpar_tunnel::Client, width: u32, height: u32) -> Result<bool, &'static str> {
+    let request = serde_json::json!({ "app": { "resolution": { "width": width, "height": height } } });
+    let request = serde_json::to_vec(&request).map_err(|_| "unknown")?;
+    let answer = tunnel.app_request(&request).await.map_err(|_| "no_answer")?;
+    let answer: serde_json::Value = serde_json::from_slice(&answer).map_err(|_| "unknown")?;
+    if answer["ok"] != true {
+        return Err(match answer["error"].as_str() {
+            Some("not_allowed") => "not_allowed",
+            Some("not_changed") => "not_changed",
+            _ => "unknown",
+        });
+    }
+    Ok(answer["streaming"] == true)
+}
+
+/// The still of the other computer's screen, for a tile in this computer's list
+/// of computers. `None` when it has none to give now (a locked screen, no
+/// capture path there, no answer) or when this device may not see it.
+pub async fn preview(tunnel: &secpar_tunnel::Client, max_width: u32) -> Option<Still> {
+    let request = serde_json::json!({ "app": { "preview": { "max_width": max_width } } });
+    let request = serde_json::to_vec(&request).ok()?;
+    let answer = tunnel.app_request(&request).await.ok()?;
+    let answer: serde_json::Value = serde_json::from_slice(&answer).ok()?;
+    if answer["ok"] != true {
+        return None;
+    }
+    let jpeg = base64::engine::general_purpose::STANDARD.decode(answer["jpeg"].as_str()?).ok()?;
+    if jpeg.len() < 4 || jpeg[..2] != [0xFF, 0xD8] || jpeg[jpeg.len() - 2..] != [0xFF, 0xD9] {
+        return None;
+    }
+    Some(Still {
+        jpeg,
+        width: u32::try_from(answer["width"].as_u64()?).ok()?,
+        height: u32::try_from(answer["height"].as_u64()?).ok()?,
+        at: answer["at"].as_u64().unwrap_or(0),
+    })
+}
+
+/// What the other computer answered about one piece of a file.
+pub struct Sent {
+    /// The bytes it holds of the file after this piece, or `None` when it
+    /// refused the piece. The refusal code says why.
+    pub received: Option<u64>,
+    /// The name it saved the file under, once the last piece arrived.
+    pub saved: Option<String>,
+    /// Why the piece was refused, in the words the hosting side uses.
+    pub error: Option<String>,
+}
+impl Sent {
+    fn refused(code: &str) -> Self {
+        Self { received: None, saved: None, error: Some(code.into()) }
+    }
+}
+
+/// Sends one piece of a file to the other computer, which answers with how much
+/// of the file it holds (`{"ok": true, "received": N}`). Only the owner's own
+/// devices are given files; a friend's device answers `not_allowed`.
+pub async fn send_file_chunk(tunnel: &secpar_tunnel::Client, name: &str, size: u64, offset: u64, data: &[u8]) -> Sent {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    let request = serde_json::json!({ "app": { "file": { "name": name, "size": size, "offset": offset, "data": encoded } } });
+    let Ok(request) = serde_json::to_vec(&request) else { return Sent::refused("unknown") };
+    match tunnel.app_request(&request).await {
+        Ok(answer) => match serde_json::from_slice::<serde_json::Value>(&answer) {
+            Ok(answer) if answer["ok"] == true => match answer["received"].as_u64() {
+                Some(received) => Sent { received: Some(received), saved: answer["saved"].as_str().map(str::to_owned), error: None },
+                None => Sent::refused("unknown"),
+            },
+            Ok(answer) => Sent::refused(answer["error"].as_str().unwrap_or("unknown")),
+            Err(_) => Sent::refused("unknown"),
+        },
+        Err(_) => Sent::refused("no_answer"),
     }
 }

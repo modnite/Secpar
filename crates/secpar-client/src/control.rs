@@ -842,6 +842,29 @@ pub struct GameStreamInfo {
     pub http_port: u16,
     pub https_port: u16,
     pub certificate_sha256: String,
+    /// The port of the host's tunnel to its engine, when the host offers one.
+    pub tunnel_port: Option<u16>,
+    /// The host's tunnel certificate pin, lowercase hex DER.
+    pub tunnel_certificate_sha256: Option<String>,
+    /// IP addresses for `tunnel_port`, LAN first.
+    pub tunnel_addresses: Vec<String>,
+}
+
+/// The client's side of `gamestream.pair`: the stream component's identity, the
+/// same PIN the component was started with, and this device's tunnel identity.
+/// The host approves the component's certificate and lets the tunnel in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GameStreamPairing {
+    pub client_id: String,
+    pub certificate_sha256: String,
+    pub pin: String,
+    pub tunnel_certificate_sha256: String,
+    pub tunnel_candidates: Vec<String>,
+}
+
+/// A lowercase SHA-256 fingerprint: 64 hex characters.
+pub(crate) fn is_fingerprint(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn engine_info(id: &str, value: &Value) -> Result<GameStreamInfo, String> {
@@ -854,16 +877,103 @@ fn engine_info(id: &str, value: &Value) -> Result<GameStreamInfo, String> {
     };
     let certificate = value["certificate_sha256"]
         .as_str()
-        .filter(|certificate| certificate.len() == 64 && certificate.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        .filter(|certificate| is_fingerprint(certificate))
         .ok_or("The engine certificate fingerprint is invalid")?;
     if value["id"].as_str() != Some(id) {
         return Err("The engine answer has the wrong request identifier".into());
     }
+    // Older hosts answer without the tunnel. They are still usable, but the
+    // caller says plainly that this computer has no stream path yet.
+    let tunnel_port = value["tunnel_port"].as_u64().and_then(|port| u16::try_from(port).ok()).filter(|port| *port != 0);
+    let tunnel_certificate_sha256 = value["tunnel_certificate_sha256"].as_str().filter(|pin| is_fingerprint(pin)).map(str::to_string);
+    let tunnel_addresses: Vec<String> = value["tunnel_addresses"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .filter(|address| address.parse::<std::net::IpAddr>().is_ok())
+                .take(8)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(GameStreamInfo {
         http_port: port("http_port")?,
         https_port: port("https_port")?,
         certificate_sha256: certificate.into(),
+        tunnel_port,
+        tunnel_certificate_sha256,
+        tunnel_addresses,
     })
+}
+
+impl Connected {
+    /// Enroll this device's stream component with the host's engine. It travels on
+    /// the control connection that already proves who this device is, so there is
+    /// no PIN prompt and no separate account.
+    pub async fn gamestream_pair(&mut self, id: &str, pairing: &GameStreamPairing) -> Result<(), String> {
+        let request_id = |id: &str| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        };
+        if !request_id(id) {
+            return Err("The engine request identifier is invalid".into());
+        }
+        if !self.caps.iter().any(|cap| cap == "gamestream") {
+            return Err("This computer does not offer the new stream engine.".into());
+        }
+        if pairing.client_id.is_empty() || pairing.client_id.len() > 128 || pairing.client_id.chars().any(char::is_control) {
+            return Err("The stream component identity is invalid".into());
+        }
+        if !is_fingerprint(&pairing.certificate_sha256) {
+            return Err("The stream component certificate is invalid".into());
+        }
+        if pairing.pin.len() != 4 || !pairing.pin.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("The pairing PIN is invalid".into());
+        }
+        if !is_fingerprint(&pairing.tunnel_certificate_sha256) {
+            return Err("This device's tunnel identity is invalid".into());
+        }
+        if pairing.tunnel_candidates.len() > 8
+            || pairing.tunnel_candidates.iter().any(|candidate| candidate.parse::<SocketAddr>().is_err())
+        {
+            return Err("This device's tunnel addresses are invalid".into());
+        }
+        send(
+            &mut self.socket,
+            json!({
+                "t": "gamestream.pair",
+                "id": id,
+                "client_id": pairing.client_id,
+                "certificate_sha256": pairing.certificate_sha256,
+                "pin": pairing.pin,
+                "tunnel_certificate_sha256": pairing.tunnel_certificate_sha256,
+                "tunnel_candidates": pairing.tunnel_candidates,
+            }),
+        )
+        .await?;
+        let wait = async {
+            loop {
+                let value = next(&mut self.socket).await?;
+                if value["id"].as_str() != Some(id) {
+                    continue;
+                }
+                return match value["t"].as_str() {
+                    Some("gamestream.paired") => Ok(()),
+                    Some("gamestream.error") => Err(value["msg"]
+                        .as_str()
+                        .filter(|msg| !msg.trim().is_empty())
+                        .unwrap_or("The computer refused the stream engine")
+                        .to_string()),
+                    _ => continue,
+                };
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(15), wait)
+            .await
+            .map_err(|_| "The computer did not answer the stream pairing".to_string())?
+    }
 }
 
 impl Connected {
@@ -947,10 +1057,114 @@ mod tests {
     fn engine_info_checks_the_request_id_ports_and_fingerprint() {
         let certificate = "a".repeat(64);
         let answer = json!({"t":"gamestream.info","id":"req","http_port":46989,"https_port":46984,"certificate_sha256":certificate});
-        assert_eq!(engine_info("req", &answer).unwrap(), GameStreamInfo { http_port: 46989, https_port: 46984, certificate_sha256: certificate.clone() });
+        assert_eq!(
+            engine_info("req", &answer).unwrap(),
+            GameStreamInfo {
+                http_port: 46989,
+                https_port: 46984,
+                certificate_sha256: certificate.clone(),
+                tunnel_port: None,
+                tunnel_certificate_sha256: None,
+                tunnel_addresses: vec![],
+            },
+            "a host without a tunnel is still a valid answer"
+        );
         assert!(engine_info("other", &answer).is_err());
         assert!(engine_info("req", &json!({"id":"req","http_port":0,"https_port":46984,"certificate_sha256":certificate})).is_err());
         assert!(engine_info("req", &json!({"id":"req","http_port":46989,"https_port":46984,"certificate_sha256":"A".repeat(64)})).is_err());
+    }
+    #[test]
+    fn engine_info_reads_the_tunnel_when_the_host_offers_one() {
+        let pin = "b".repeat(64);
+        let answer = json!({"t":"gamestream.info","id":"req","http_port":46989,"https_port":46984,
+            "certificate_sha256":"a".repeat(64),"tunnel_port":51234,"tunnel_certificate_sha256":pin,
+            "tunnel_addresses":["192.168.1.20","not-an-address","203.0.113.7"]});
+        let info = engine_info("req", &answer).unwrap();
+        assert_eq!(info.tunnel_port, Some(51234));
+        assert_eq!(info.tunnel_certificate_sha256.as_deref(), Some(pin.as_str()));
+        assert_eq!(info.tunnel_addresses, ["192.168.1.20", "203.0.113.7"], "only addresses are kept");
+        let plain = json!({"id":"req","http_port":46989,"https_port":46984,"certificate_sha256":"a".repeat(64),
+            "tunnel_port":0,"tunnel_certificate_sha256":"ABC","tunnel_addresses":"x"});
+        let info = engine_info("req", &plain).unwrap();
+        assert_eq!((info.tunnel_port, info.tunnel_certificate_sha256, info.tunnel_addresses), (None, None, vec![]));
+    }
+    fn pairing() -> GameStreamPairing {
+        GameStreamPairing {
+            client_id: "0123456789ABCDEF".into(),
+            certificate_sha256: "a".repeat(64),
+            pin: "1234".into(),
+            tunnel_certificate_sha256: "b".repeat(64),
+            tunnel_candidates: vec!["192.168.1.30:54321".into()],
+        }
+    }
+    async fn engine_server(replies: Vec<Value>) -> (Socket, tokio::task::JoinHandle<Value>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let first = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            for reply in replies {
+                ws.send(Message::text(reply.to_string())).await.unwrap();
+            }
+            serde_json::from_str(&first).unwrap()
+        });
+        let socket = open(&format!("ws://{addr}/v1"), None).await.unwrap();
+        (socket, task)
+    }
+    fn engine_connected(socket: Socket) -> Connected {
+        Connected {
+            socket,
+            computer: Computer { id: "pc1".into(), name: "Test PC".into(), hosts: vec![], port: 0, fingerprint: [0; 32], token: String::new(), relay: None },
+            direct_host: None,
+            caps: vec!["gamestream".into()],
+            route_log: vec![],
+        }
+    }
+    #[tokio::test]
+    async fn pairing_sends_the_component_and_this_devices_tunnel_identity() {
+        let (socket, server) = engine_server(vec![json!({"t":"gamestream.paired","id":"p1"})]).await;
+        let mut connected = engine_connected(socket);
+        connected.gamestream_pair("p1", &pairing()).await.unwrap();
+        let sent = server.await.unwrap();
+        assert_eq!(sent["t"], "gamestream.pair");
+        assert_eq!(sent["id"], "p1");
+        assert_eq!(sent["client_id"], "0123456789ABCDEF");
+        assert_eq!(sent["certificate_sha256"], "a".repeat(64));
+        assert_eq!(sent["pin"], "1234");
+        assert_eq!(sent["tunnel_certificate_sha256"], "b".repeat(64));
+        assert_eq!(sent["tunnel_candidates"], json!(["192.168.1.30:54321"]));
+    }
+    #[tokio::test]
+    async fn pairing_surfaces_the_hosts_refusal_in_plain_words() {
+        let (socket, server) = engine_server(vec![json!({"t":"pong"}), json!({"t":"gamestream.error","id":"p1","code":"busy","msg":"This computer is already streaming"})]).await;
+        let mut connected = engine_connected(socket);
+        let error = connected.gamestream_pair("p1", &pairing()).await.unwrap_err();
+        assert_eq!(error, "This computer is already streaming");
+        server.await.unwrap();
+        let (socket, server) = engine_server(vec![json!({"t":"gamestream.error","id":"p1","code":"busy"})]).await;
+        let mut connected = engine_connected(socket);
+        assert_eq!(connected.gamestream_pair("p1", &pairing()).await.unwrap_err(), "The computer refused the stream engine");
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn bad_pairing_values_never_reach_the_connection() {
+        let (socket, server) = engine_server(vec![]).await;
+        let mut connected = engine_connected(socket);
+        for mutate in [
+            |p: &mut GameStreamPairing| p.client_id.clear(),
+            |p: &mut GameStreamPairing| p.certificate_sha256 = "A".repeat(64),
+            |p: &mut GameStreamPairing| p.pin = "12345".into(),
+            |p: &mut GameStreamPairing| p.tunnel_certificate_sha256 = "g".repeat(64),
+            |p: &mut GameStreamPairing| p.tunnel_candidates = vec!["not an address".into()],
+        ] {
+            let mut bad = pairing();
+            mutate(&mut bad);
+            assert!(connected.gamestream_pair("p1", &bad).await.is_err());
+        }
+        assert!(connected.gamestream_pair("bad id", &pairing()).await.is_err());
+        drop(connected);
+        server.abort();
     }
     use tokio::net::TcpListener;
     #[test]

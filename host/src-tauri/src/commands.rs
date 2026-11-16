@@ -223,18 +223,18 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
         "host_account_install" => {
             let state = app.account.as_ref().map_err(Clone::clone)?.install(arg(&args, "registration")?).await?;
             let revoked = app.store.lock().unwrap().set_account_owner(state.owner.clone());
-            for device in revoked { app.agent.revoke(&device); }
+            for device in revoked { app.revoke(&device); }
             to_value(state)
         }
         "host_account_unlink" => {
             let state = app.account.as_ref().map_err(Clone::clone)?.unlink().await?;
             let revoked = app.store.lock().unwrap().set_account_owner(None);
-            for device in revoked { app.agent.revoke(&device); }
+            for device in revoked { app.revoke(&device); }
             to_value(state)
         }
         "new_qr" => to_value(new_qr(&app)),
         "revoke" => {
-            app.agent.revoke(&arg::<String>(&args, "id")?);
+            app.revoke(&arg::<String>(&args, "id")?);
             Ok(Value::Null)
         }
         "host_friends" => to_value(app.account.as_ref().map_err(Clone::clone)?.friend_rows().await?),

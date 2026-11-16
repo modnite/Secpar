@@ -24,4 +24,7 @@ impl Engine for Host {
             pairs
         })
     }
+    fn resolution(&self, width: u32, height: u32) -> Pending<'_, Result<bool, Refusal>> {
+        Box::pin(async move { Host::resolution(self, width, height).await.map_err(|_| Refusal::Failed) })
+    }
 }

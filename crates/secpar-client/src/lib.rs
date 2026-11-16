@@ -2,6 +2,7 @@
 pub mod connlog;
 pub mod control;
 pub mod files;
+pub mod gamestream;
 pub mod pairing;
 pub mod receiver;
 pub mod route;

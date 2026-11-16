@@ -19,6 +19,7 @@ use std::{
 
 mod preferences;
 mod stream;
+pub mod update;
 use preferences::Preferences;
 
 #[derive(Deserialize)]
@@ -47,12 +48,90 @@ enum Request {
     SignOut,
     Devices,
     RemoveDevice { id: String },
+    /// Removes every extra record that shares a name with another, keeping one
+    /// and never this computer. For stale records from older versions.
+    RemoveDuplicateDevices,
+    /// The account's friends and the requests waiting for an answer.
+    Friends,
+    /// What one friend may do on this account's computers.
+    FriendSettings { id: String },
+    /// Changes a friend's permissions. Only the parts that are given are sent.
+    SaveFriendSettings {
+        id: String,
+        #[serde(default)]
+        input: Option<String>,
+        #[serde(default)]
+        connect: Option<String>,
+        #[serde(default)]
+        keyboard: Option<bool>,
+        #[serde(default)]
+        mouse: Option<bool>,
+    },
+    /// Asks the account named by `handle` to be friends.
+    RequestFriend { handle: String },
+    AcceptFriend { id: String },
+    RemoveFriend { id: String },
     /// Open a tunnel to one of the account's hosting computers.
     Connect { id: String },
     Disconnect,
     /// The stream settings shown in Settings → Connecting.
     Preferences,
     SavePreferences { preferences: Preferences },
+    /// Send the file at this path to the computer this one is connected to.
+    SendFile { path: String },
+    /// How far the files this computer sends have got, and the last file that
+    /// arrived here from another computer.
+    Transfers,
+    /// A still of one of the account's computers, for its tile. `host` is that
+    /// computer's certificate fingerprint and `addresses` where it can be
+    /// reached. Answered as the background part answered:
+    /// `{"ok": true, "jpeg", "width", "height", "at"}` or `{"ok": false, "err"}`.
+    Preview {
+        host: String,
+        max_width: u32,
+        #[serde(default)]
+        addresses: Vec<String>,
+    },
+    /// The version of this copy and the asset a release would install here.
+    UpdateState,
+    /// Asks the release feed whether a newer release exists.
+    UpdateCheck,
+    /// Downloads the newest release, checks it, and installs it over this copy.
+    UpdateInstall,
+}
+
+/// Answers an update request on a runtime of its own, so it works whether or
+/// not the window has been set up yet.
+fn update_call(request: Request) -> Value {
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+        return failed("unreachable");
+    };
+    let current = update::CURRENT;
+    match request {
+        Request::UpdateState => json!({
+            "ok": true,
+            "current": current,
+            "supported": update::asset_name().is_some(),
+        }),
+        Request::UpdateCheck => match runtime.block_on(update::check()) {
+            Ok(Some(release)) => json!({
+                "ok": true,
+                "current": current,
+                "available": {
+                    "version": release.version,
+                    "tag": release.tag,
+                    "size": release.size,
+                },
+            }),
+            Ok(None) => json!({"ok": true, "current": current, "available": null}),
+            Err(error) => json!({"ok": false, "error": error}),
+        },
+        Request::UpdateInstall => match runtime.block_on(update::install()) {
+            Ok(version) => json!({"ok": true, "version": version}),
+            Err(error) => json!({"ok": false, "error": error}),
+        },
+        _ => failed("unknown_request"),
+    }
 }
 
 struct App {
@@ -76,7 +155,8 @@ fn refused(error: Error) -> Value {
     match error {
         Error::Unreachable => failed("unreachable"),
         Error::Refused { code, message, .. } => json!({"ok": false, "error": code, "message": message}),
-        Error::Invalid(_) => failed("invalid_answer"),
+        // The sentence is written for the person when it is checked here.
+        Error::Invalid(text) => json!({"ok": false, "error": "invalid_answer", "message": text}),
         Error::Store(_) => failed("store_unavailable"),
     }
 }
@@ -129,7 +209,7 @@ impl App {
         })
     }
 
-    fn save_preferences(&self, preferences: Preferences) -> Value {
+    async fn save_preferences(&self, preferences: Preferences) -> Value {
         let preferences = match preferences.checked() {
             Ok(preferences) => preferences,
             Err(field) => return json!({"ok": false, "error": format!("invalid_{field}")}),
@@ -140,6 +220,8 @@ impl App {
             }
         }
         *self.preferences.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = preferences.clone();
+        // The background part keeps the clipboard in step, so it hears at once.
+        self.background(json!({"do": "clipboard", "on": preferences.share_clipboard})).await;
         json!({"ok": true, "preferences": preferences})
     }
 
@@ -206,6 +288,9 @@ impl App {
                 "ok": true,
                 "devices": devices.iter().map(|d| json!({
                     "id": d.id, "name": d.name, "platform": d.platform, "hosts": d.hosts, "online": d.online,
+                    "fingerprint": d.fingerprint,
+                    // Where a still or a stream can be asked for, empty when offline.
+                    "addresses": d.reach.as_ref().map(reach_addresses).unwrap_or_default(),
                     "this": mine.as_ref().is_some_and(|m| *m == d.fingerprint.as_str()),
                 })).collect::<Vec<_>>(),
             }),
@@ -227,11 +312,7 @@ impl App {
         };
         let Some(device) = devices.iter().find(|d| d.id == id) else { return failed("device_not_found") };
         let Some(reach) = &device.reach else { return failed("offline") };
-        let addresses: Vec<String> = reach
-            .addresses
-            .iter()
-            .map(|a| if a.contains(':') { format!("[{a}]:{}", reach.port) } else { format!("{a}:{}", reach.port) })
-            .collect();
+        let addresses = reach_addresses(reach);
         let request = json!({"do": "connect", "host": device.fingerprint, "addresses": addresses});
         // Connecting to a computer replaces any stream and tunnel already open.
         stream::stop(&self.running).await;
@@ -283,6 +364,149 @@ impl App {
             Err(error) => refused(error),
         }
     }
+
+    async fn remove_duplicates(&self) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        // Removing the wrong record would take this computer off its own account,
+        // so without the background part's identity nothing is removed.
+        let Some(mine) = self.background(json!({"do": "status"})).await.and_then(|status| status["device"].as_str().map(str::to_owned)) else {
+            return failed("background_not_running");
+        };
+        let devices = match self.account.devices(&session).await {
+            Ok(devices) => devices,
+            Err(error) if self.expired(&error) => return failed("signed_out"),
+            Err(error) => return refused(error),
+        };
+        let ids = duplicate_ids(&devices, &mine);
+        for id in &ids {
+            if let Err(error) = self.account.remove(&session, id).await {
+                return refused(error);
+            }
+        }
+        if !ids.is_empty() {
+            self.background(json!({"do": "refresh"})).await;
+        }
+        json!({"ok": true, "removed": ids.len()})
+    }
+
+    async fn friends(&self) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.friends(&session).await {
+            Ok(friends) => json!({
+                "ok": true,
+                "friends": friends.iter().map(|f| json!({
+                    "id": f.id, "name": f.name, "handle": f.handle,
+                    "state": f.state,
+                    // A request this account sent waits for the other side.
+                    "incoming": f.state == "pending" && f.requester != session.user.id,
+                    // Trusted friends join without being asked about each time.
+                    "trusted": f.connect == "always",
+                    "input": f.input, "connect": f.connect, "keyboard": f.keyboard, "mouse": f.mouse,
+                })).collect::<Vec<_>>(),
+            }),
+            Err(error) if self.expired(&error) => failed("signed_out"),
+            Err(error) => refused(error),
+        }
+    }
+
+    fn settings_answer(settings: account::FriendSettings) -> Value {
+        json!({
+            "ok": true,
+            "settings": {
+                "input": settings.input, "connect": settings.connect,
+                "keyboard": settings.keyboard, "mouse": settings.mouse,
+            },
+        })
+    }
+
+    async fn friend_settings(&self, id: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.friend_settings(&session, id).await {
+            Ok(settings) => Self::settings_answer(settings),
+            Err(error) if self.expired(&error) => failed("signed_out"),
+            Err(error) => refused(error),
+        }
+    }
+
+    async fn save_friend_settings(&self, id: &str, change: account::FriendChange) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.save_friend_settings(&session, id, &change).await {
+            Ok(settings) => Self::settings_answer(settings),
+            Err(error) if self.expired(&error) => failed("signed_out"),
+            Err(error) => refused(error),
+        }
+    }
+
+    async fn request_friend(&self, handle: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.request_friend(&session, handle).await {
+            Ok(()) => json!({"ok": true}),
+            Err(error) if self.expired(&error) => failed("signed_out"),
+            Err(error) => refused(error),
+        }
+    }
+
+    async fn accept_friend(&self, id: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.accept_friend(&session, id).await {
+            Ok(()) => json!({"ok": true}),
+            Err(error) if self.expired(&error) => failed("signed_out"),
+            Err(error) => refused(error),
+        }
+    }
+
+    async fn remove_friend(&self, id: &str) -> Value {
+        let session = match self.session() {
+            Ok(session) => session,
+            Err(answer) => return answer,
+        };
+        match self.account.remove_friend(&session, id).await {
+            Ok(()) => json!({"ok": true}),
+            Err(error) if self.expired(&error) => failed("signed_out"),
+            Err(error) => refused(error),
+        }
+    }
+}
+
+/// Where a computer can be reached: its tunnel port on each of its addresses.
+fn reach_addresses(reach: &account::Reach) -> Vec<String> {
+    reach.addresses.iter().map(|a| if a.contains(':') { format!("[{a}]:{}", reach.port) } else { format!("{a}:{}", reach.port) }).collect()
+}
+
+/// The device records to remove as duplicates. One record is kept per name, and/// this computer is always the one kept when an older record shares its name.
+fn duplicate_ids(devices: &[account::Device], mine: &str) -> Vec<String> {
+    // Better to keep: this computer, then one that hosts, then one that reported in.
+    fn rank(device: &account::Device, mine: &str) -> (bool, bool, bool) {
+        (device.fingerprint == mine, device.hosts, device.online)
+    }
+    let mut kept: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (index, device) in devices.iter().enumerate() {
+        let name = device.name.trim().to_lowercase();
+        let better = kept.get(&name).is_none_or(|&at| rank(device, mine) > rank(&devices[at], mine));
+        if better {
+            kept.insert(name, index);
+        }
+    }
+    let kept: std::collections::HashSet<usize> = kept.into_values().collect();
+    devices.iter().enumerate().filter(|(index, _)| !kept.contains(index)).map(|(_, device)| device.id.clone()).collect()
 }
 
 fn configure(channel: String, test_account: Option<(String, String)>, memory_store: bool, stream: Option<stream::Settings>) -> Value {
@@ -296,6 +520,9 @@ fn configure(channel: String, test_account: Option<(String, String)>, memory_sto
     let store: Box<dyn SecretStore> = if memory_store { Box::new(MemoryStore::default()) } else { Box::new(SystemStore) };
     let preferences_path = stream.as_ref().map(|settings| settings.data.join("preferences.json"));
     let preferences = preferences_path.as_deref().map(Preferences::load).unwrap_or_default();
+    // The background part shares the clipboard unless the person turned it off,
+    // and it starts on, so it is told as soon as the window is set up.
+    let _ = runtime.block_on(channel::ask(&channel, &json!({"do": "clipboard", "on": preferences.share_clipboard})));
     let app = App {
         runtime,
         account,
@@ -323,21 +550,51 @@ pub fn call(request: &str) -> Value {
         };
         return configure(channel, test_account, memory_store, stream);
     }
+    // Update requests stand on their own: they need the release feed, not the
+    // account or the background part.
+    if matches!(request, Request::UpdateState | Request::UpdateCheck | Request::UpdateInstall) {
+        return update_call(request);
+    }
     let Some(app) = APP.get() else { return failed("not_configured") };
     app.runtime.block_on(async {
         match request {
             Request::Configure { .. } => failed("already_configured"),
+            Request::UpdateState | Request::UpdateCheck | Request::UpdateInstall => failed("unknown_request"),
             Request::State => app.state().await,
             Request::SignIn { email, password, computer } => app.sign_in(&email, &password, &computer).await,
             Request::SignOut => app.sign_out().await,
             Request::Devices => app.devices().await,
             Request::RemoveDevice { id } => app.remove_device(&id).await,
+            Request::RemoveDuplicateDevices => app.remove_duplicates().await,
+            Request::Friends => app.friends().await,
+            Request::FriendSettings { id } => app.friend_settings(&id).await,
+            Request::SaveFriendSettings { id, input, connect, keyboard, mouse } => {
+                app.save_friend_settings(&id, account::FriendChange { input, connect, keyboard, mouse }).await
+            }
+            Request::RequestFriend { handle } => app.request_friend(&handle).await,
+            Request::AcceptFriend { id } => app.accept_friend(&id).await,
+            Request::RemoveFriend { id } => app.remove_friend(&id).await,
             Request::Connect { id } => app.connect(&id).await,
             Request::Preferences => {
                 let preferences = app.preferences.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
                 json!({"ok": true, "preferences": preferences})
             }
-            Request::SavePreferences { preferences } => app.save_preferences(preferences),
+            Request::SavePreferences { preferences } => app.save_preferences(preferences).await,
+            Request::SendFile { path } => {
+                let answer = app.background(json!({"do": "send_file", "path": path})).await;
+                answer.unwrap_or_else(|| failed("background_not_running"))
+            }
+            Request::Transfers => {
+                let answer = app.background(json!({"do": "transfers"})).await;
+                answer.unwrap_or_else(|| failed("background_not_running"))
+            }
+            Request::Preview { host, max_width, addresses } => {
+                // The background part peeks at that computer for one answer, or
+                // uses the tunnel it already has; the window keeps its icon when
+                // there is none.
+                let answer = app.background(json!({"do": "preview", "host": host, "max_width": max_width, "addresses": addresses})).await;
+                answer.unwrap_or_else(|| json!({"ok": false, "err": "not_available"}))
+            }
             Request::Disconnect => {
                 stream::stop(&app.running).await;
                 app.background(json!({"do": "disconnect"})).await.unwrap_or_else(|| failed("background_not_running"))
@@ -371,5 +628,36 @@ pub unsafe extern "C" fn secpar_app_free(answer: *mut std::ffi::c_char) {
     if !answer.is_null() {
         // SAFETY: the pointer came from CString::into_raw in secpar_app_call.
         drop(unsafe { std::ffi::CString::from_raw(answer) });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device(id: &str, name: &str, fingerprint: &str) -> account::Device {
+        account::Device { id: id.into(), fingerprint: fingerprint.into(), name: name.into(), platform: "windows".into(), hosts: false, online: false, reach: None }
+    }
+
+    #[test]
+    fn duplicate_records_keep_one_name_and_never_this_computer() {
+        let devices = vec![
+            device("1", "x250", "aa"),
+            device("2", "X250 ", "bb"),
+            device("3", "Desktop", "cc"),
+            // This computer, listed after an older record with the same name.
+            device("4", "desktop", "dd"),
+            device("5", "Laptop", "ee"),
+        ];
+        assert_eq!(duplicate_ids(&devices, "dd"), vec!["2", "3"]);
+    }
+
+    #[test]
+    fn a_record_that_hosts_is_the_one_kept_for_that_name() {
+        let mut hosting = device("2", "x250", "bb");
+        hosting.hosts = true;
+        assert_eq!(duplicate_ids(&[device("1", "x250", "aa"), hosting], "zz"), vec!["1"]);
+        // Different names and a list without duplicates remove nothing.
+        assert!(duplicate_ids(&[device("1", "x250", "aa"), device("2", "desktop", "bb")], "aa").is_empty());
     }
 }

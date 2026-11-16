@@ -4,6 +4,7 @@
 //! work finish its journal write even if the phone disconnects.
 use super::{BoxFut, Outbox, Session};
 use crate::proto::{ClientMsg, ServerMsg};
+use std::net::SocketAddr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -14,13 +15,28 @@ pub struct EngineInfo {
     pub http_port: u16,
     pub https_port: u16,
     pub certificate_sha256: String,
+    /// The host tunnel's UDP port (docs/gamestream-engine.md).
+    pub tunnel_port: u16,
+    /// The host tunnel certificate pin.
+    pub tunnel_certificate_sha256: String,
+    /// IPs to try for the tunnel, LAN first; empty when none is known.
+    pub tunnel_addresses: Vec<String>,
+}
+
+/// The client's tunnel identity and endpoints, sent with `gamestream.pair`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClientTunnel {
+    /// The client tunnel certificate pin, lowercase hex SHA-256.
+    pub certificate_sha256: String,
+    /// Natted UDP endpoints to punch. May be empty.
+    pub candidates: Vec<SocketAddr>,
 }
 
 /// Implemented by the platform glue around the engine controller.
 pub trait EngineBackend: Send + Sync + 'static {
     fn info(&self) -> EngineInfo;
     /// Approve exactly this client certificate for `device` (the authenticated Secpar
-    /// device) under `owner` (the computer's account).
+    /// device) under `owner` (the computer's account), and let `tunnel` reach the engine.
     fn approve(
         &self,
         owner: &str,
@@ -28,6 +44,7 @@ pub trait EngineBackend: Send + Sync + 'static {
         client_id: &str,
         certificate_sha256: &str,
         pin: &str,
+        tunnel: &ClientTunnel,
     ) -> BoxFut<Result<(), &'static str>>;
     /// Durable per-device revocation; returns how many client grants were removed.
     fn revoke(&self, owner: &str, device: &str) -> BoxFut<Result<usize, &'static str>>;
@@ -88,6 +105,9 @@ impl Session for EngineSession {
                     http_port: info.http_port,
                     https_port: info.https_port,
                     certificate_sha256: info.certificate_sha256,
+                    tunnel_port: info.tunnel_port,
+                    tunnel_certificate_sha256: info.tunnel_certificate_sha256,
+                    tunnel_addresses: info.tunnel_addresses,
                 })
             }
             ClientMsg::GameStreamPair {
@@ -95,7 +115,26 @@ impl Session for EngineSession {
                 client_id,
                 certificate_sha256,
                 pin,
+                tunnel_certificate_sha256,
+                tunnel_candidates,
             } => {
+                // The handler rejects these first; keep the engine session safe on its own.
+                if tunnel_certificate_sha256.len() != 64 {
+                    return Some(error(&id, "bad_request", "The tunnel identity is missing"));
+                }
+                let mut candidates = Vec::with_capacity(tunnel_candidates.len());
+                for candidate in &tunnel_candidates {
+                    match candidate.parse() {
+                        Ok(address) => candidates.push(address),
+                        Err(_) => {
+                            return Some(error(&id, "bad_request", "A tunnel endpoint is invalid"))
+                        }
+                    }
+                }
+                let tunnel = ClientTunnel {
+                    certificate_sha256: tunnel_certificate_sha256,
+                    candidates,
+                };
                 // One enrollment at a time per device: a second grant cannot
                 // overwrite or race the first.
                 if self.busy.swap(true, Ordering::SeqCst) {
@@ -111,7 +150,14 @@ impl Session for EngineSession {
                 tokio::spawn(async move {
                     let result = broker
                         .backend
-                        .approve(&broker.owner, &device, &client_id, &certificate_sha256, &pin)
+                        .approve(
+                            &broker.owner,
+                            &device,
+                            &client_id,
+                            &certificate_sha256,
+                            &pin,
+                            &tunnel,
+                        )
                         .await;
                     busy.store(false, Ordering::SeqCst);
                     out.send(match result {
@@ -141,7 +187,7 @@ mod tests {
 
     #[derive(Default)]
     struct Fake {
-        approvals: Mutex<Vec<(String, String, String, String)>>,
+        approvals: Mutex<Vec<(String, String, String, String, ClientTunnel)>>,
         revocations: Mutex<Vec<(String, String)>>,
         fail: AtomicBool,
     }
@@ -151,13 +197,24 @@ mod tests {
                 http_port: 1,
                 https_port: 2,
                 certificate_sha256: "a".repeat(64),
+                tunnel_port: 3,
+                tunnel_certificate_sha256: "c".repeat(64),
+                tunnel_addresses: vec!["192.0.2.10".into()],
             }
         }
-        fn approve(&self, o: &str, d: &str, c: &str, f: &str, _p: &str) -> BoxFut<Result<(), &'static str>> {
+        fn approve(
+            &self,
+            o: &str,
+            d: &str,
+            c: &str,
+            f: &str,
+            _p: &str,
+            tunnel: &ClientTunnel,
+        ) -> BoxFut<Result<(), &'static str>> {
             self.approvals
                 .lock()
                 .unwrap()
-                .push((o.into(), d.into(), c.into(), f.into()));
+                .push((o.into(), d.into(), c.into(), f.into(), tunnel.clone()));
             let fail = self.fail.load(Ordering::SeqCst);
             Box::pin(async move { if fail { Err("no") } else { Ok(()) } })
         }
@@ -178,6 +235,8 @@ mod tests {
             client_id: "cid".into(),
             certificate_sha256: "b".repeat(64),
             pin: "1234".into(),
+            tunnel_certificate_sha256: "d".repeat(64),
+            tunnel_candidates: vec!["198.51.100.8:54321".into()],
         }
     }
 
@@ -187,10 +246,12 @@ mod tests {
         let broker = Broker::new(fake.clone(), "acct");
         let (out, mut rx) = outbox();
         let mut session = broker.session("device-1", out);
-        assert!(matches!(
-            session.on_msg(ClientMsg::GameStreamInfo { id: "i".into() }),
-            Some(ServerMsg::GameStreamInfo { http_port: 1, .. })
-        ));
+        match session.on_msg(ClientMsg::GameStreamInfo { id: "i".into() }) {
+            Some(ServerMsg::GameStreamInfo { http_port: 1, tunnel_port: 3, tunnel_addresses, .. }) => {
+                assert_eq!(tunnel_addresses, vec!["192.0.2.10".to_string()])
+            }
+            other => panic!("expected info, got {other:?}"),
+        }
         assert!(session.on_msg(pair("p1")).is_none());
         match rx.recv().await.unwrap() {
             super::super::Out::Msg(ServerMsg::GameStreamPaired { id }) => assert_eq!(id, "p1"),
@@ -199,6 +260,35 @@ mod tests {
         let approvals = fake.approvals.lock().unwrap();
         assert_eq!(approvals.len(), 1);
         assert_eq!((approvals[0].0.as_str(), approvals[0].1.as_str()), ("acct", "device-1"));
+        assert_eq!(approvals[0].4.certificate_sha256, "d".repeat(64));
+        assert_eq!(
+            approvals[0].4.candidates,
+            vec!["198.51.100.8:54321".parse::<SocketAddr>().unwrap()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pair_without_a_tunnel_identity_is_refused_before_busy() {
+        let fake = Arc::new(Fake::default());
+        let broker = Broker::new(fake.clone(), "acct");
+        let (out, mut rx) = outbox();
+        let mut session = broker.session("device-1", out);
+        let ClientMsg::GameStreamPair { id, client_id, certificate_sha256, pin, tunnel_candidates, .. } = pair("p1") else { unreachable!() };
+        assert!(matches!(
+            session.on_msg(ClientMsg::GameStreamPair {
+                id,
+                client_id,
+                certificate_sha256,
+                pin,
+                tunnel_certificate_sha256: String::new(),
+                tunnel_candidates,
+            }),
+            Some(ServerMsg::GameStreamError { code, .. }) if code == "bad_request"
+        ));
+        // Nothing reached the engine, so the next request is not "busy".
+        assert!(session.on_msg(pair("p2")).is_none());
+        assert!(matches!(rx.recv().await.unwrap(), super::super::Out::Msg(ServerMsg::GameStreamPaired { .. })));
+        assert_eq!(fake.approvals.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

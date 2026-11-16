@@ -250,9 +250,11 @@ pub fn verdict(m: &ClientMsg, gate: &Gate) -> Verdict {
         StreamStop => Allow,
         // The small picture on a card. It needs the view permission, like the stream.
         ThumbSub { .. } => need("view"),
+        // Browsing this computer's files: only when the owner lets this friend.
+        FsList { .. } | FsGet { .. } => if gate.has("browse") && gate.has("files") { Allow } else { Deny },
         // Owner only, whatever the grant says.
         Pair { .. } | Hello { .. } | Guest { .. } | GameStreamInfo { .. } | GameStreamPair { .. } | MediaSub { .. }
-        | MediaCmd { .. } | Power { .. } | Net | Unlock { .. } | FsList { .. } | FsGet { .. } => Deny,
+        | MediaCmd { .. } | Power { .. } | Net | Unlock { .. } => Deny,
     }
 }
 
@@ -268,7 +270,8 @@ pub fn out_allowed(m: &ServerMsg, gate: &Gate) -> bool {
             gate.view()
         }
         Paired { .. } | GameStreamInfo { .. } | GameStreamPaired { .. } | GameStreamError { .. } | Media { .. }
-        | Net { .. } | Remote { .. } | UnlockResult { .. } | FsList { .. } => false,
+        | Net { .. } | Remote { .. } | UnlockResult { .. } => false,
+        FsList { .. } => gate.has("browse") && gate.has("files"),
     }
 }
 
@@ -280,6 +283,7 @@ pub(crate) fn caps(all: &[String], gate: &Gate) -> Vec<String> {
             "input" => gate.keyboard() || gate.mouse(),
             "clip" => gate.has("clipboard"),
             "files" => gate.has("files"),
+            "fsbrowse" => gate.has("browse") && gate.has("files"),
             "pad" => gate.has("gamepad"),
             "thumb" => gate.view(),
             _ => false,

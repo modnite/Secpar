@@ -1,5 +1,9 @@
 include ':app'
 
+// The pinned Moonlight Android engine, compiled inside the one Android app.
+include ':engine'
+project(':engine').projectDir = file('app/engine')
+
 // Private migration harness. Existing app/release builds do not switch engines.
 if (providers.gradleProperty('secparUpstreamSource').isPresent()) {
     include ':gamestream-core'

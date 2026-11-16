@@ -59,28 +59,25 @@ impl Settings {
     }
     pub fn ui(&mut self,ui:&mut egui::Ui)->bool {
         let old=self.clone();
-
-        design::surface().inner_margin(10).show(ui,|ui| {
-            ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
-            ui.label(egui::RichText::new("Video").strong());
-            ui.columns(2,|c| {
-                c[0].label("Resolution");
-                let text=resolution_label(self.width,self.height);
-                egui::ComboBox::from_id_salt("client-resolution").width(c[0].available_width()).selected_text(text).show_ui(&mut c[0],|ui| {
+        ui.spacing_mut().item_spacing.y=8.;
+        design::group(ui,"Picture",|ui| {
+            let width=design::value_width(ui);
+            design::row(ui,"Resolution",|ui| {
+                egui::ComboBox::from_id_salt("client-resolution").width(width).selected_text(resolution_label(self.width,self.height)).show_ui(ui,|ui| {
                     for (w,h) in RESOLUTIONS {
                         if ui.selectable_label(self.width==w,resolution_label(w,h)).clicked(){self.width=w;self.height=h;}
                     }
                 });
-                c[1].label("Frame rate");
-                egui::ComboBox::from_id_salt("client-fps").width(c[1].available_width()).selected_text(format!("{} fps",self.fps)).show_ui(&mut c[1],|ui| {for fps in [30,60,90,120] {ui.selectable_value(&mut self.fps,fps,format!("{fps} fps"));}});
             });
-            ui.columns(2,|c| {
-                c[0].label("Bitrate limit");
-                egui::ComboBox::from_id_salt("client-bitrate").width(c[0].available_width()).selected_text(format!("{} Mbps",self.kbps/1000)).show_ui(&mut c[0],|ui| {for kbps in [5000,10000,20000,30000,50000,80000] {ui.selectable_value(&mut self.kbps,kbps,format!("{} Mbps",kbps/1000));}});
-                c[1].label("Decoder");
-                let hardware=video::hardware_available(c[1].ctx());
-                let selected=self.decoder.label();
-                egui::ComboBox::from_id_salt("client-decoder").width(c[1].available_width()).selected_text(selected).show_ui(&mut c[1],|ui| {
+            design::row(ui,"Frame rate",|ui| {
+                egui::ComboBox::from_id_salt("client-fps").width(width).selected_text(format!("{} fps",self.fps)).show_ui(ui,|ui| {for fps in [30,60,90,120] {ui.selectable_value(&mut self.fps,fps,format!("{fps} fps"));}});
+            });
+            design::row(ui,"Bitrate",|ui| {
+                egui::ComboBox::from_id_salt("client-bitrate").width(width).selected_text(format!("{} Mbps",self.kbps/1000)).show_ui(ui,|ui| {for kbps in [5000,10000,20000,30000,50000,80000] {ui.selectable_value(&mut self.kbps,kbps,format!("{} Mbps",kbps/1000));}});
+            });
+            let hardware=video::hardware_available(ui.ctx());
+            design::row(ui,"Decoder",|ui| {
+                egui::ComboBox::from_id_salt("client-decoder").width(width).selected_text(self.decoder.label()).show_ui(ui,|ui| {
                     ui.selectable_value(&mut self.decoder,video::Preference::Automatic,video::Preference::Automatic.label());
                     if hardware==Some(true) {ui.selectable_value(&mut self.decoder,video::Preference::HARDWARE,video::Preference::HARDWARE.label());}
                     ui.selectable_value(&mut self.decoder,video::Preference::Software,video::Preference::Software.label());
@@ -90,30 +87,23 @@ impl Settings {
                     None=>"Checking hardware decoding",
                 });
             });
-            if let Some(active)=&self.active_decoder {ui.small(active);}
+            if let Some(active)=&self.active_decoder {ui.label(egui::RichText::new(active).size(12.).color(design::MUTED));ui.add_space(4.);}
         });
-        ui.add_space(4.);
-        design::surface().inner_margin(10).show(ui,|ui| {
-            ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
-            ui.label(egui::RichText::new("Audio").strong());
-            ui.checkbox(&mut self.audio,"Play host audio");
-            ui.label(egui::RichText::new("Clipboard").strong());
-            ui.checkbox(&mut self.clipboard,"Share clipboard");
+        design::group(ui,"Sound and clipboard",|ui| {
+            design::switch_row(ui,&mut self.audio,"Play sound here");
+            design::switch_row(ui,&mut self.clipboard,"Share clipboard");
         });
-        ui.add_space(4.);
-        design::surface().inner_margin(10).show(ui,|ui| {
-            ui.set_width(ui.available_width());ui.spacing_mut().item_spacing.y=4.;
-            ui.label(egui::RichText::new("Keyboard").strong());
+        design::group(ui,"Keyboard",|ui| {
             #[cfg(any(windows,target_os="linux"))]
-            ui.checkbox(&mut self.system_keys,"Send system shortcuts to the host");
-            ui.columns(2,|c| {
-                let height=c[1].spacing().interact_size.y;
-                c[0].allocate_ui_with_layout(egui::vec2(c[0].available_width(),height),egui::Layout::left_to_right(egui::Align::Center),|ui|{ui.label("Escape keys");});
-                egui::ComboBox::from_id_salt("client-escape").width(c[1].available_width()).selected_text(self.escape.label()).show_ui(&mut c[1],|ui| {
+            design::switch_row(ui,&mut self.system_keys,"Send system shortcuts");
+            let width=design::value_width(ui);
+            design::row(ui,"Release keys",|ui| {
+                egui::ComboBox::from_id_salt("client-escape").width(width).selected_text(self.escape.label()).show_ui(ui,|ui| {
                     for keys in keys::EscapeKeys::ALL {ui.selectable_value(&mut self.escape,keys,keys.label());}
                 });
             });
-            ui.label(egui::RichText::new(format!("{}+  W fullscreen stream   Q disconnect   S menu button",self.escape.label())).size(12.).color(design::MUTED));
+            ui.label(egui::RichText::new(format!("{}+  W full screen   Q disconnect   S menu",self.escape.label())).size(12.).color(design::MUTED));
+            ui.add_space(4.);
         });
         if !self.note.is_empty(){ui.label(&self.note);}
         *self!=old

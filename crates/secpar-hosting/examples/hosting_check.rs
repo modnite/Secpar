@@ -136,7 +136,7 @@ async fn main() -> Result {
     let reachable = tokio::time::timeout(Duration::from_secs(3), tokio::net::TcpStream::connect((outside, PORT))).await.map(|r| r.is_ok()).unwrap_or(false);
     check("the engine does not answer on the network address", !reachable)?;
 
-    let hosting = Hosting::start((outside, 0).into(), &host_id, access.clone(), engine.clone(), "127.0.0.1".parse()?, Ports::engine(PORT)).await?;
+    let hosting = Hosting::start((outside, 0).into(), &host_id, access.clone(), engine.clone(), Arc::new(secpar_hosting::NoClipboard), Arc::new(secpar_hosting::NoFiles), Arc::new(secpar_hosting::NoPreviews), "127.0.0.1".parse()?, Ports::engine(PORT)).await?;
     let address = hosting.tunnel().local_addr()?;
     let pin = host_id.fingerprint();
     let connect = move |device: Identity| async move { secpar_tunnel::connect(address, &device, pin, "127.0.0.2".parse().unwrap(), Ports::engine(PORT)).await };

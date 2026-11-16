@@ -20,12 +20,14 @@ private val HEX64 = Regex("[a-f0-9]{64}")
 private val DIRECTORY_QUERY = Regex("q=[a-z0-9_]{1,30}")
 private val UUID = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
 private const val UUID_PATTERN = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"
-private val PERMISSIONS = setOf("view", "audio", "gamepad", "keyboard", "mouse", "clipboard", "files")
+private val PERMISSIONS = setOf("view", "audio", "gamepad", "keyboard", "mouse", "clipboard", "files", "browse")
 private val REQUEST_STATE = Regex("[a-z_]{1,20}")
 private val GRANT_TEXT = Regex("[A-Za-z0-9_.-]{1,4096}")
 /** Every path this client calls. The account session is never sent anywhere else on the service. */
 private val ALLOWED_PATHS = listOf(
     Regex("/auth/(device|device/token|logout)"),
+    // The app's own sign-in, sign-up and recovery forms.
+    Regex("/v1/app/(sign-in|register|verify|resend|forgot|reset|code|email|handle|password)"),
     Regex("/v1/(me|me/visibility|computers|friends|blocks|directory|requests|friend-computers|owner-pairings)"),
     Regex("/v1/friends/by-username/[a-z0-9_]{3,30}"),
     Regex("/v1/friends/$UUID_PATTERN(/accept|/settings)?"),
@@ -109,7 +111,9 @@ data class AccountUser(val id: String, val handle: String, val visible: Boolean 
 data class Friend(val id: String, val handle: String, val state: String, val requester: String,
     val input: String = "view", val connect: String = "ask",
     /** Keyboard and mouse are set apart. An older service sends only [input], which then decides both. */
-    val keyboard: Boolean = input == "full", val mouse: Boolean = input == "full") {
+    val keyboard: Boolean = input == "full", val mouse: Boolean = input == "full",
+    /** Whether this friend may browse your files. An older service leaves it out. */
+    val browse: Boolean = false) {
     val accepted get() = state == "accepted"
     val pending get() = state == "pending"
 }
@@ -123,7 +127,9 @@ data class OwnedComputer(val id: String, val name: String, val platform: String,
 /** A computer of an accepted friend that is online and lets friends connect. */
 data class FriendComputer(val id: String, val name: String, val platform: String, val owner: String, val ownerHandle: String,
     /** What the owner lets this account do there. An older service leaves these out. */
-    val connect: String = "ask", val keyboard: Boolean = false, val mouse: Boolean = false)
+    val connect: String = "ask", val keyboard: Boolean = false, val mouse: Boolean = false,
+    /** Whether the owner lets you browse this computer's files. */
+    val browse: Boolean = false)
 /** A request to use a friend's computer. [expires] is a Unix second. [permissions] is what the Worker kept. */
 data class AccessRequest(val id: String, val state: String, val expires: Long, val permissions: List<String>) {
     val approved get() = state == "approved"
@@ -167,6 +173,7 @@ interface AccountService {
     /** Null leaves that setting as it is. */
     suspend fun friendSetting(id: String, input: String?, connect: String?) {}
     suspend fun friendInput(id: String, keyboard: Boolean?, mouse: Boolean?) {}
+    suspend fun friendBrowse(id: String, browse: Boolean) {}
     suspend fun requests(): List<ConnectionRequest> = emptyList()
     suspend fun answer(answer: Answer, id: String) {}
     suspend fun friendComputers(): List<FriendComputer> = emptyList()
@@ -239,7 +246,8 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
             fun flag(key: String) = (o[key] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: (input == "full")
             Friend(o.text("id").also { valid(UUID.matches(it)) }, o.text("handle").also { valid(safeText(it, 80)) },
                 state, o.text("requester").also { valid(UUID.matches(it)) },
-                input, o.optionalChoice("connect", "ask", "always"), flag("keyboard"), flag("mouse"))
+                input, o.optionalChoice("connect", "ask", "always"), flag("keyboard"), flag("mouse"),
+                (o["browse"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false)
         }
     }
 
@@ -268,6 +276,11 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
             input?.let { put("input", it) }
             connect?.let { put("connect", it) }
         })
+    }
+
+    override suspend fun friendBrowse(id: String, browse: Boolean) {
+        pathId(id)
+        call("PUT", "/v1/friends/$id/settings", buildJsonObject { put("browse", browse) })
     }
 
     override suspend fun friendInput(id: String, keyboard: Boolean?, mouse: Boolean?) {
@@ -309,15 +322,18 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
     override suspend fun friendComputers(): List<FriendComputer> {
         val rows = call("GET", "/v1/friend-computers") as? JsonArray ?: invalid()
         valid(rows.size <= 256)
-        return rows.map { row ->
+        // One computer the app cannot read is left out; the others still show.
+        return rows.mapNotNull { row -> runCatching {
             val o = row.objectValue()
             FriendComputer(o.text("id").also { valid(UUID.matches(it)) }, o.text("name").also { valid(safeText(it, 320)) },
-                o.text("platform").also { valid(safeText(it, 16)) }, o.text("owner").also { valid(UUID.matches(it)) },
+                ((o["platform"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: "").also { valid(it.isEmpty() || safeText(it, 16)) },
+                o.text("owner").also { valid(UUID.matches(it)) },
                 o.text("owner_handle").also { valid(safeText(it, 80)) },
                 o.optionalChoice("connect", "ask", "always"),
                 (o["keyboard"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false,
-                (o["mouse"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false)
-        }
+                (o["mouse"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false,
+                (o["browse"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: false)
+        }.getOrNull() }
     }
 
     override suspend fun requestAccess(computer: String, permissions: List<String>): AccessRequest {

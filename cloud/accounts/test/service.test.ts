@@ -47,6 +47,8 @@ class Database {
     this.db.exec(readFileSync(new URL("../migrations/0008_keyboard_and_mouse.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0009_devices.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0010_device_reach.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0011_knocks.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0012_friend_browse.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -701,7 +703,7 @@ describe("per-friend host settings", () => {
     call("/v1/requests", actor, "POST", { computer: host, permissions });
   it("defaults to view only and ask each time", async () => {
     await friendship();
-    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "view", connect: "ask", keyboard: false, mouse: false });
+    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "view", connect: "ask", keyboard: false, mouse: false, browse: false });
     const list = await (await call("/v1/friends", "alice")).json();
     expect(list[0]).toMatchObject({ input: "view", connect: "ask" });
   });
@@ -710,12 +712,12 @@ describe("per-friend host settings", () => {
     await friendship();
     expect((await settings("alice", "mallory", { input: "full" })).status).toBe(404);
     expect((await settings("alice", "bob", { input: "full" })).status).toBe(200);
-    expect(await (await settings("bob", "alice")).json()).toEqual({ input: "view", connect: "ask", keyboard: false, mouse: false });
+    expect(await (await settings("bob", "alice")).json()).toEqual({ input: "view", connect: "ask", keyboard: false, mouse: false, browse: false });
     expect((await settings("alice", "bob", {})).status).toBe(400);
     expect((await settings("alice", "bob", { input: "admin" })).status).toBe(400);
     expect((await settings("alice", "bob", { connect: "never" })).status).toBe(400);
     expect((await settings("alice", "bob", { connect: "always" })).status).toBe(200);
-    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "full", connect: "always", keyboard: true, mouse: true });
+    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "full", connect: "always", keyboard: true, mouse: true, browse: false });
   });
   it("strips keyboard and mouse for a view only friend and refuses input only requests", async () => {
     await friendship();
@@ -736,16 +738,16 @@ describe("per-friend host settings", () => {
     await friendship();
     const host = await computer();
     expect((await settings("alice", "bob", { keyboard: true })).status).toBe(200);
-    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "view", connect: "ask", keyboard: true, mouse: false });
+    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "view", connect: "ask", keyboard: true, mouse: false, browse: false });
     const made = await (await ask(host, ["view", "keyboard", "mouse"])).json();
     expect(made.permissions).toEqual(["keyboard", "view"]);
     expect((await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view", "mouse"] })).status).toBe(400);
     expect((await settings("alice", "bob", { mouse: true })).status).toBe(200);
-    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "full", connect: "ask", keyboard: true, mouse: true });
+    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "full", connect: "ask", keyboard: true, mouse: true, browse: false });
     expect((await settings("alice", "bob", { keyboard: "yes" })).status).toBe(400);
     // Choosing the single setting again decides both.
     await settings("alice", "bob", { input: "view" });
-    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "view", connect: "ask", keyboard: false, mouse: false });
+    expect(await (await settings("alice", "bob")).json()).toEqual({ input: "view", connect: "ask", keyboard: false, mouse: false, browse: false });
     const list = await (await call("/v1/friends", "alice")).json();
     expect(list[0]).toMatchObject({ keyboard: false, mouse: false });
   });

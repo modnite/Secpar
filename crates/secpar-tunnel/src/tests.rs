@@ -190,3 +190,65 @@ async fn a_device_can_ask_the_host_itself_and_the_host_knows_who_asks() {
     assert_eq!(&answer[32..], b"hello");
     assert!(client.request(&vec![0u8; MAX_REQUEST + 1]).await.is_err());
 }
+
+#[tokio::test]
+async fn the_app_channel_carries_large_payloads_and_names_the_device() {
+    let (host_id, device_id) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let host = serve(
+        "127.0.0.1:0".parse().unwrap(),
+        &host_id,
+        Allowed::new([device_id.fingerprint()]),
+        "127.0.0.1".parse().unwrap(),
+        Ports { tcp: vec![], udp: vec![] },
+    )
+    .await
+    .unwrap();
+    let address = host.local_addr().unwrap();
+    let ports = Ports { tcp: vec![], udp: vec![] };
+    let client = connect(address, &device_id, host_id.fingerprint(), "127.0.0.1".parse().unwrap(), ports).await.unwrap();
+    // Nobody answers yet.
+    assert!(client.app_request(b"hello").await.is_err());
+    host.on_app(Arc::new(|device, request| {
+        Box::pin(async move { [&device[..], &request[..]].concat() })
+    }));
+    // Larger than the pairing channel allows, which is how clipboard text travels.
+    let request = vec![b'x'; 200_000];
+    let answer = client.app_request(&request).await.unwrap();
+    assert_eq!(&answer[..32], &device_id.fingerprint()[..]);
+    assert_eq!(&answer[32..], &request[..]);
+    // The pairing channel still has its own, smaller limit.
+    assert!(client.request(&vec![0u8; MAX_REQUEST + 1]).await.is_err());
+    assert!(client.app_request(&vec![0u8; MAX_APP + 1]).await.is_err());
+}
+
+#[tokio::test]
+async fn an_app_frame_over_the_limit_is_dropped_unread() {
+    let (host_id, device_id) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+    let host = serve(
+        "127.0.0.1:0".parse().unwrap(),
+        &host_id,
+        Allowed::new([device_id.fingerprint()]),
+        "127.0.0.1".parse().unwrap(),
+        Ports { tcp: vec![], udp: vec![] },
+    )
+    .await
+    .unwrap();
+    let address = host.local_addr().unwrap();
+    let ports = Ports { tcp: vec![], udp: vec![] };
+    let client = connect(address, &device_id, host_id.fingerprint(), "127.0.0.1".parse().unwrap(), ports).await.unwrap();
+    let called = Arc::new(std::sync::Mutex::new(false));
+    let seen = called.clone();
+    host.on_app(Arc::new(move |_, request| {
+        *seen.lock().unwrap() = true;
+        Box::pin(async move { request })
+    }));
+    // Written by hand, as a device that does not follow the limit would.
+    let (mut send, mut recv) = client.connection.open_bi().await.unwrap();
+    send.write_all(&APP.to_be_bytes()).await.unwrap();
+    send.write_all(&((MAX_APP as u32) + 1).to_be_bytes()).await.unwrap();
+    send.write_all(b"{\"app\":1}").await.unwrap();
+    send.finish().unwrap();
+    let answer = recv.read_to_end(MAX_APP).await.unwrap_or_default();
+    assert!(answer.is_empty(), "an oversized frame must not be answered");
+    assert!(!*called.lock().unwrap(), "the handler must not see it");
+}

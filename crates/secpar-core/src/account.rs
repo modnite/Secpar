@@ -129,6 +129,75 @@ pub struct Reach {
     pub addresses: Vec<String>,
 }
 
+/// One person on the account's friend list, or a request waiting for an answer.
+/// `requester` is the account that asked, so the same row can mean either side.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Friend {
+    pub id: String,
+    pub handle: String,
+    #[serde(default)]
+    pub name: String,
+    /// "pending" while one side has not answered, then "accepted".
+    pub state: String,
+    pub requester: String,
+    /// "view" or "full".
+    pub input: String,
+    /// "ask" or "always": whether this friend joins without being asked about.
+    pub connect: String,
+    #[serde(default)]
+    pub keyboard: bool,
+    #[serde(default)]
+    pub mouse: bool,
+}
+
+/// What one account allows a friend's devices to do on its computers. The
+/// service keeps `input` in step with the two finer permissions: it is "full"
+/// only while both keyboard and mouse are allowed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FriendSettings {
+    /// "view" or "full".
+    pub input: String,
+    /// "ask" or "always": whether the friend joins without being asked about.
+    pub connect: String,
+    #[serde(default)]
+    pub keyboard: bool,
+    #[serde(default)]
+    pub mouse: bool,
+}
+
+/// A change to a friend's permissions. Parts that are `None` are left as they
+/// are. Sending `keyboard` or `mouse` makes the service derive `input` from both.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct FriendChange {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connect: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyboard: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse: Option<bool>,
+}
+impl FriendChange {
+    /// Nothing to send. The service refuses an empty change, so it is caught here.
+    pub fn is_empty(&self) -> bool {
+        self.input.is_none() && self.connect.is_none() && self.keyboard.is_none() && self.mouse.is_none()
+    }
+    /// Checks the values the service accepts, so a mistake is caught before it is sent.
+    fn checked(&self) -> Result<()> {
+        if self.input.as_deref().is_some_and(|input| input != "view" && input != "full") {
+            return Err(Error::Invalid("A friend's control setting can only be view or full"));
+        }
+        if self.connect.as_deref().is_some_and(|connect| connect != "ask" && connect != "always") {
+            return Err(Error::Invalid("A friend's connect setting can only be ask or always"));
+        }
+        if self.is_empty() {
+            return Err(Error::Invalid("That friend's permissions were not changed"));
+        }
+        Ok(())
+    }
+}
+
 /// What a device needs to use the relay for a few hours.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RelayAccess {
@@ -181,6 +250,10 @@ pub struct AccessList {
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+/// A device or account id from the service: a UUID, never anything else.
+fn identifier(text: &str) -> bool {
+    text.len() == 36 && text.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 fn fingerprint_of(text: &str) -> Result<Fingerprint> {
     let bad = Error::Invalid("The access list names a device in a form Secpar does not understand");
@@ -533,10 +606,61 @@ impl Service {
 
     /// Removes a device from the account. Hosting devices drop it at their next list.
     pub async fn remove(&self, session: &Session, device: &str) -> Result<()> {
-        if device.len() != 36 || !device.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        if !identifier(device) {
             return Err(Error::Invalid("Unknown device"));
         }
         self.send(self.http.delete(self.url(&format!("/v1/devices/{device}"))).bearer_auth(&session.token)).await.map(|_| ())
+    }
+
+    /// Everyone on the account's friend list, including requests that have not
+    /// been answered yet.
+    pub async fn friends(&self, session: &Session) -> Result<Vec<Friend>> {
+        self.json(self.http.get(self.url("/v1/friends")).bearer_auth(&session.token)).await
+    }
+
+    /// Asks the account named `handle` (with or without the @) to be friends.
+    /// The request waits for that account to accept it.
+    pub async fn request_friend(&self, session: &Session, handle: &str) -> Result<()> {
+        let handle = handle.trim().trim_start_matches('@').to_lowercase();
+        if handle.is_empty() || handle.len() > 30 || !handle.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+            return Err(Error::Invalid("Use an account name of 1 to 30 letters, digits or underscores"));
+        }
+        self.send(self.http.put(self.url(&format!("/v1/friends/by-username/{handle}"))).bearer_auth(&session.token)).await.map(|_| ())
+    }
+
+    /// Accepts a request from `account`. Requests this account sent itself are
+    /// refused by the service, not here.
+    pub async fn accept_friend(&self, session: &Session, account: &str) -> Result<()> {
+        if !identifier(account) {
+            return Err(Error::Invalid("Unknown account"));
+        }
+        self.send(self.http.post(self.url(&format!("/v1/friends/{account}/accept"))).bearer_auth(&session.token)).await.map(|_| ())
+    }
+
+    /// Removes a friend, or turns down a request. Any access it had ends with it.
+    pub async fn remove_friend(&self, session: &Session, account: &str) -> Result<()> {
+        if !identifier(account) {
+            return Err(Error::Invalid("Unknown account"));
+        }
+        self.send(self.http.delete(self.url(&format!("/v1/friends/{account}"))).bearer_auth(&session.token)).await.map(|_| ())
+    }
+
+    /// What this account allows `account`'s devices to do on its computers.
+    pub async fn friend_settings(&self, session: &Session, account: &str) -> Result<FriendSettings> {
+        if !identifier(account) {
+            return Err(Error::Invalid("Unknown account"));
+        }
+        self.json(self.http.get(self.url(&format!("/v1/friends/{account}/settings"))).bearer_auth(&session.token)).await
+    }
+
+    /// Changes what `account`'s devices may do. Answers the settings now in force,
+    /// which may differ from the change when one permission decides another.
+    pub async fn save_friend_settings(&self, session: &Session, account: &str, change: &FriendChange) -> Result<FriendSettings> {
+        if !identifier(account) {
+            return Err(Error::Invalid("Unknown account"));
+        }
+        change.checked()?;
+        self.json(self.http.put(self.url(&format!("/v1/friends/{account}/settings"))).bearer_auth(&session.token).json(change)).await
     }
 
     /// The keys access lists are signed with. Keep them beside the saved list.
@@ -601,6 +725,23 @@ mod tests {
         assert!(Service::local_test(ORIGIN, "http://127.0.0.1:8791").is_ok());
         assert!(Service::local_test(ORIGIN, "http://127.0.0.1:8791.example.com").is_err());
         assert!(Service::local_test(ORIGIN, "http://192.168.1.5:8791").is_err());
+    }
+
+    #[test]
+    fn a_friend_change_only_accepts_the_service_s_values() {
+        let mut change = FriendChange::default();
+        assert!(change.is_empty() && change.checked().is_err());
+        change.connect = Some("always".into());
+        assert!(change.checked().is_ok());
+        change.connect = Some("sometimes".into());
+        assert!(change.checked().is_err());
+        // Control is view or full; the fine permissions are separate.
+        let input = FriendChange { input: Some("full".into()), ..Default::default() };
+        assert!(input.checked().is_ok());
+        assert_eq!(serde_json::to_value(&input).unwrap(), serde_json::json!({"input": "full"}));
+        let both = FriendChange { keyboard: Some(true), mouse: Some(true), ..Default::default() };
+        assert_eq!(serde_json::to_value(&both).unwrap(), serde_json::json!({"keyboard": true, "mouse": true}));
+        assert!(FriendChange { input: Some("keyboard".into()), ..Default::default() }.checked().is_err());
     }
 
     /// A stand-in for the service's signing key, to check lists without a network.

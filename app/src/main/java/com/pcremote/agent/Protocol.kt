@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -100,6 +101,37 @@ sealed interface Msg {
     @Serializable @SerialName("net") data class Net(
         val lan: List<String>, val public: String? = null, val anywhere: Boolean = false, val upnp: Boolean = false,
     ) : Msg
+
+    // Managed engine, docs/gamestream-engine.md. These use the same authenticated connection as
+    // everything else; none of them grants access on its own.
+    /** Client request `{"t":"gamestream.info","id":"..."}`; the reply shares its type name, so [Wire] handles it. */
+    data class GameStreamInfoAsk(val id: String) : Msg
+    /**
+     * The engine's ports and pins. `tunnel_*` are absent on a host that has not opened the engine
+     * to this device yet; [com.pcremote.engine.Gamestream.read] keeps that apart from a broken answer.
+     */
+    @Serializable @SerialName("gamestream.info") data class GameStreamInfo(
+        val id: String,
+        val http_port: Int = 0,
+        val https_port: Int = 0,
+        val certificate_sha256: String = "",
+        val tunnel_port: Int = 0,
+        val tunnel_certificate_sha256: String = "",
+        val tunnel_addresses: List<String> = emptyList(),
+    ) : Msg
+    /** Ask the computer to accept this device's engine certificate, through the tunnel it names. */
+    @Serializable @SerialName("gamestream.pair") data class GameStreamPair(
+        val id: String,
+        val client_id: String,
+        val certificate_sha256: String,
+        val pin: String,
+        val tunnel_certificate_sha256: String,
+        val tunnel_candidates: List<String>,
+    ) : Msg
+    @Serializable @SerialName("gamestream.paired") data class GameStreamPaired(val id: String) : Msg
+    @Serializable @SerialName("gamestream.error") data class GameStreamError(
+        val id: String, val code: String, val msg: String = "",
+    ) : Msg
 }
 
 @Serializable data class FsEntry(val name: String, val path: String, val dir: Boolean, val size: Long = 0, val mtime: Long = 0)
@@ -115,8 +147,11 @@ object Wire {
         explicitNulls = false
     }
 
-    fun encode(m: Msg): String =
-        if (m is Msg.NetReq) """{"t":"net"}""" else json.encodeToString(Msg.serializer(), m)
+    fun encode(m: Msg): String = when (m) {
+        is Msg.NetReq -> """{"t":"net"}"""
+        is Msg.GameStreamInfoAsk -> """{"t":"gamestream.info","id":${JsonPrimitive(m.id)}}"""
+        else -> json.encodeToString(Msg.serializer(), m)
+    }
 
     fun decode(s: String): Msg? = try {
         val obj: JsonObject = json.parseToJsonElement(s).jsonObject

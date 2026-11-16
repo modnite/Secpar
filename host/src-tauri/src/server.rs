@@ -20,6 +20,27 @@ pub struct App {
     pub net: Arc<Mutex<net::NetStatus>>,
     /// Display names of friends with a running session, by account id.
     pub friends: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    /// The bundled streaming engine, for revoking its grants with the device.
+    pub engine: crate::gamestream::Managed,
+}
+
+impl App {
+    /// Removes a device on every layer: the control sessions here and its engine
+    /// grants (Moonlight certificate and tunnel access). The engine part runs in
+    /// the background so the window's answer is not held up by the engine.
+    pub fn revoke(&self, device: &str) {
+        self.agent.revoke(device);
+        let owner = {
+            let store = self.store.lock().unwrap();
+            store.device_owner(device).flatten().unwrap_or_else(|| store.engine_owner())
+        };
+        let (engine, device) = (self.engine.clone(), device.to_string());
+        tokio::spawn(async move {
+            if let Err(e) = engine.revoke_owner(&owner, &device).await {
+                crate::log::line(&format!("engine: revocation failed: {e}"));
+            }
+        });
+    }
 }
 
 pub fn run() {
@@ -38,7 +59,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // Account-link failure must never interrupt existing owner connections.
     let account = crate::host_account::open(&dir, &identity.fingerprint_hex);
     let guests = account.as_ref().ok().map(|a| secpar_host_core::agent::GuestAdmission::new(a.clone()));
-    let host = Arc::new(crate::host::Host::new(store.clone(), guests));
+    let net = Arc::new(Mutex::new(net::NetStatus::default()));
+    // The bundled engine starts in the background; host startup never waits for it.
+    let engine = crate::gamestream::start(&dir, engine_addresses(net.clone()));
+    let host = Arc::new(crate::host::Host::new(store.clone(), guests, engine.clone(), net.clone()));
     let (outgoing, net) = (host.outgoing.clone(), host.net.clone());
     if store.lock().unwrap().config().anywhere {
         let net = net.clone();
@@ -80,7 +104,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(start_tray(store.clone()));
 
     if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
-    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends });
+    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends, engine });
     let weak = Arc::downgrade(&app);
     tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_secs(3));
@@ -96,7 +120,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             };
             account.set_presence(presence).await;
             let revoked = app.store.lock().unwrap().set_account_owner(owner.clone());
-            for device in revoked { app.agent.revoke(&device); }
+            for device in revoked { app.revoke(&device); }
             if let Some(owner) = owner {
                 let _ = account.poll_pairings(|id| {
                     let app = app.clone(); let owner = owner.clone();
@@ -108,6 +132,16 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let handler: ipc::Handler = Arc::new(move |cmd, args| Box::pin(crate::commands::dispatch(app.clone(), cmd, args)));
     ipc::serve(ipc::PIPE, handler, ui).await?;
     Ok(())
+}
+
+/// The tunnel addresses a client may try: this PC's LAN addresses, then the
+/// router's public one only when UPnP actually reported it. Nothing invented.
+fn engine_addresses(net: Arc<Mutex<net::NetStatus>>) -> crate::gamestream::Addresses {
+    Arc::new(move || {
+        let status = net.lock().unwrap().clone();
+        let public = if status.upnp { status.public } else { None };
+        crate::gamestream::addresses(crate::commands::rank_ips(crate::win::sys::adapters().0), public)
+    })
 }
 
 /// Tells phones (and the window) when the PC locks or unlocks.
@@ -126,19 +160,49 @@ async fn watch_lock(agent: AgentHandle, ui: broadcast::Sender<Value>) {
     }
 }
 
-/// Starts the tray as the signed-in user once per sign-in (when "show in tray" is on).
+/// Starts the tray as the signed-in user once per sign-in (when "show in tray" is on), so the
+/// user can see that hosting runs. Hosting never runs on its own in a signed-in session: when no
+/// Secpar window or tray is running there for about 15 seconds, the service stops. Opening the app
+/// starts it again. Before anyone signs in there is no app, and the sign-in screen stays reachable.
 async fn start_tray(store: Arc<Mutex<Store>>) {
     let mut started = false;
+    let mut missing = 0u32;
     loop {
         match win::session::user_token() {
-            None => started = false,
-            Some(t) if !started && store.lock().unwrap().config().autostart => {
-                started = win::session::spawn(*t, "--hidden", true).is_some();
+            None => {
+                started = false;
+                missing = 0;
             }
-            Some(_) => {}
+            Some(t) => {
+                if !started && store.lock().unwrap().config().autostart {
+                    started = win::session::spawn(*t, "--hidden", true).is_some();
+                }
+                if app_running() {
+                    missing = 0;
+                } else {
+                    missing += 1;
+                    if missing >= 5 {
+                        crate::log::line("service: no Secpar app in the signed-in session; stopping");
+                        crate::service::stop_later(false);
+                        missing = 0;
+                    }
+                }
+            }
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
+}
+
+/// Whether a Secpar window or tray runs in a user session (any session but the services' own).
+fn app_running() -> bool {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq secpar-desktop.exe", "/FI", "SESSION ne 0", "/NH", "/FO", "CSV"])
+        .creation_flags(0x0800_0000)
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).contains("secpar-desktop.exe"))
+        // A failed check never stops hosting.
+        .unwrap_or(true)
 }
 
 /// Copies the store and TLS identity from `old` (2.x) into `dir`; `key` is the decrypted TLS key.

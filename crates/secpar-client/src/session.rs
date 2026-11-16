@@ -50,6 +50,9 @@ pub enum Event {
     Notice(String),
     /// What the host allows this connection to do, from a friend's `welcome`.
     Caps(Vec<String>),
+    /// The stream runs in the bundled component on the managed engine, so this
+    /// window keeps its normal page instead of showing a picture of its own.
+    Managed(bool),
 }
 /// Errors that must not end a session: the host refused one message and carries on.
 pub fn soft_error(v:&Value)->Option<&'static str> {

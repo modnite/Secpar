@@ -671,7 +671,7 @@ mod tests {
         fn unsupported_formats_are_reported_not_crashed_on() {
             // The software backend only knows H.264.
             let mut soft=Backend::new(Preference::Software).unwrap();
-            assert_eq!(soft.decode(&[0,0,0,1,0x40,1],Codec::Hevc).err(),Some(DecodeError::Device));
+            assert_eq!(soft.decode(&[0,0,0,1,0x40,1],Codec::Hevc,0,60,0).err(),Some(DecodeError::Device));
         }
         #[test]
         fn a_codec_without_an_installed_decoder_is_a_clean_error() {

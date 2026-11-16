@@ -17,6 +17,7 @@ mod design;
 mod dialogs;
 mod files;
 pub mod gamepad;
+mod gamestream;
 mod hosting;
 mod input;
 mod keys;
@@ -244,6 +245,8 @@ struct App {
     brand: TextureHandle,
     mark: TextureHandle,
     stream_menu_open: bool,
+    /// The stream runs in the bundled component: this window keeps its page.
+    managed_stream: bool,
     menu_page: u8,
     show_stream_stats: bool,
     /// Held while a stream is connected: the screen must not dim or sleep.
@@ -281,6 +284,9 @@ struct App {
     remote_keyboard: bool,
     pointer_in_video: bool,
     observed_fullscreen: Option<bool>,
+    /// The window's size, and its place where the system tells it (Wayland does not), before a
+    /// stream shaped it, to go back to afterwards.
+    before_stream: Option<(Option<egui::Pos2>, egui::Vec2)>,
     #[cfg(windows)]
     hook: Option<keyhook::KeyHook>,
     #[cfg(windows)]
@@ -356,6 +362,7 @@ impl App {
             brand,
             mark,
             stream_menu_open: false,
+            managed_stream: false,
             menu_page: 0,
             show_stream_stats: false,
             awake: None,
@@ -387,6 +394,7 @@ impl App {
             auto_capture_pending: false,
             video_rect: None, video_layer: None, remote_keyboard: false, pointer_in_video: false,
             observed_fullscreen: None,
+            before_stream: None,
             #[cfg(windows)]
             hook: None,
             #[cfg(windows)]
@@ -416,6 +424,12 @@ impl App {
                     let mut id=0u32;
                     // Loops: a keyframe only comes again at the start of the file.
                     if bytes.is_empty() {return}
+                    // Exact 60 Hz grid: a sleeping feeder's overshoot looks like client judder.
+                    // SECPAR_REVIEW_JITTER replays the measured capture spread instead.
+                    let jitter=std::env::var_os("SECPAR_REVIEW_JITTER").is_some();
+                    let pattern=[14u64,16,18,16,19,17];
+                    let mut step=0usize;
+                    let mut next=Instant::now();
                     loop {let mut at=0;
                     while at+5<=bytes.len() {
                         let len=u32::from_be_bytes(bytes[at..at+4].try_into().unwrap()) as usize;
@@ -424,7 +438,13 @@ impl App {
                         at+=5+len;
                         let header=secpar_stream::frame::FrameHeader{len:len as u32,capture_us:0,keyframe:key,codec:secpar_stream::frame::Codec::H264};
                         if tx.blocking_send(Event::Video(secpar_client::receiver::VideoFrame{id,header,data:data.to_vec()})).is_err() {break}
-                        id+=1;ctx.request_repaint();std::thread::sleep(Duration::from_micros(16_667));
+                        id+=1;ctx.request_repaint();
+                        if jitter {
+                            next+=Duration::from_millis(pattern[step%pattern.len()]);step+=1;
+                        } else {
+                            next+=Duration::from_nanos(16_666_667);
+                        }
+                        while Instant::now()<next {std::hint::spin_loop();}
                     }
                     }
                 });
@@ -521,6 +541,9 @@ impl App {
         self.texture = None;
         self.displays.clear();
         self.cursor_shape = None;
+        // The managed engine is used for this person's own computers only: a
+        // friend's grant is not a device the computer's engine knows.
+        let managed = guest.is_none().then(|| gamestream::Settings::from_client(&self.client)).flatten();
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -547,7 +570,10 @@ impl App {
                     Err("Pair a computer first".into())
                 };
                 let result = match connection {
-                    Ok(c) => session::run(c, options, rx, ev_tx.clone()).await,
+                    Ok(c) => match (managed, c.caps.iter().any(|cap| cap == "gamestream")) {
+                        (Some(settings), true) => gamestream::run(c, settings, rx, ev_tx.clone()).await,
+                        _ => session::run(c, options, rx, ev_tx.clone()).await,
+                    },
                     Err(e) => Err(e),
                 };
                 let _ = ev_tx
@@ -779,6 +805,7 @@ impl App {
                 }
                 Event::Status(s) => { self.status=s; }
                 Event::Caps(_) => {}
+                Event::Managed(on) => { self.managed_stream=on; }
                 Event::Notice(text) => self.notice=Some(text),
                 Event::Audio{packet,received_at} => {
                     // A covered window may resume with a few old events queued.
@@ -790,7 +817,25 @@ impl App {
                 Event::AudioUnavailable(error)=>self.notice=Some(format!("Host audio: {error}")),
                 Event::ClipboardUnavailable(error)=>{self.clipboard=None;self.notice=Some(error);},
                 Event::Clipboard(text)=>{if let Some(bridge)=&self.clipboard {bridge.set(text);}},
-                Event::StreamInfo{width,height,fps}=>{self.dimensions=[width as usize,height as usize];self.stream_fps=fps;self.resize_wait=None;},
+                Event::StreamInfo{width,height,fps}=>{
+                    let first = self.before_stream.is_none();
+                    self.dimensions=[width as usize,height as usize];self.stream_fps=fps;self.resize_wait=None;
+                    // A windowed stream takes the stream's shape at half its size; the window's own
+                    // size comes back when the stream ends.
+                    // A maximised or full-screen window is left as it is.
+                    let now = ctx.input(|i| {
+                        let v = i.viewport();
+                        if v.maximized == Some(true) || v.fullscreen == Some(true) { return None; }
+                        Some((v.outer_rect.map(|r| r.min), v.inner_rect?.size()))
+                    });
+                    if let (true, true, Some(now)) = (first, width > 0 && height > 0, now) {
+                        self.before_stream = Some(now);
+                        ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(egui::vec2(240., 135.)));
+                        // Half the stream in screen pixels, whatever the display's scaling.
+                        let scale = ctx.pixels_per_point().max(0.5);
+                        ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(width as f32 / 2. / scale, height as f32 / 2. / scale)));
+                    }
+                },
                 Event::Stats{rtt_ms,mbps,received_fps}=>self.stream_stats=Some((rtt_ms,mbps,received_fps)),
                 Event::Displays(v) => {
                     self.display = v["current"].as_str().unwrap_or("").into();
@@ -838,6 +883,7 @@ impl App {
                 Event::Ended(s) => {
                     self.guest_error=self.guest_session && s!="Disconnected";
                     self.guest_session=false;
+                    self.managed_stream=false;
                     self.files.end_background();
                     self.connection_error=if s=="Disconnected" {None}else{Some(s.clone())};
                     self.clipboard=None;
@@ -852,6 +898,14 @@ impl App {
                     self.audio = None;
                     self.texture = None;
                     self.leave_fullscreen_if_idle(ctx);
+                    // Back to the window the person had before the stream.
+                    if let Some((place, size)) = self.before_stream.take() {
+                        ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(egui::vec2(360., 400.)));
+                        if let Some(place) = place {
+                            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(place));
+                        }
+                        ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
+                    }
                     self.video_rect = None;self.pointer_in_video=false;self.remote_keyboard=false;
                     self.cursor = (0, 0, false);
                     self.cursor_shape = None;
@@ -1180,7 +1234,7 @@ impl eframe::App for App {
         if self.command.is_none() && self.input.enabled {
             self.capture(ctx, false);
         }
-        if self.command.is_none() {
+        if self.command.is_none() || self.managed_stream {
             egui::TopBottomPanel::top("toolbar")
                 .frame(
                     egui::Frame::new()
@@ -1192,14 +1246,11 @@ impl eframe::App for App {
                         ui.image((self.brand.id(), egui::vec2(112., 27.)));
                         ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION")).size(11.).color(design::MUTED));
                         if self.command.is_none() {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    self.updates.button(ui);
-                                    if self.account.toolbar(ui){self.page=Page::Computers;}
-
-                                },
-                            );
+                            // Refresh, sign in or out, and updates, as on Android.
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                self.updates.button(ui);
+                                if self.account.toolbar(ui) { self.page = Page::Computers; }
+                            });
                         } else {
                             ui.label(&self.status);
                             if let Some(error)=self.audio_error.clone() {
@@ -1239,7 +1290,7 @@ impl eframe::App for App {
                     });
                 });
         }
-        if self.command.is_none() {
+        if self.command.is_none() || self.managed_stream {
             egui::TopBottomPanel::top("navigation")
                 .frame(
                     egui::Frame::new()
@@ -1362,7 +1413,7 @@ impl eframe::App for App {
                             }
                         }
                     }
-                } else if self.command.is_none() {
+                } else if self.command.is_none() || self.managed_stream {
                     if self.page==Page::Files {
                         if ui.button("Back to computers").clicked(){self.page=Page::Computers;}
                         ui.add_space(8.);
@@ -1382,27 +1433,51 @@ impl eframe::App for App {
                         self.account.ui(ui);
                     } else if matches!(self.page, Page::Settings | Page::ClientSettings | Page::Hosting) {
                         let settings_scroll=egui::ScrollArea::vertical().id_salt("settings-page").auto_shrink([false, false]);
-                        #[cfg(feature="ui-review")]
-                        let settings_scroll=if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p=="settings-host-sample") {settings_scroll.vertical_scroll_offset(500.)}else{settings_scroll};
-                        settings_scroll.show(ui, |ui| {
-                            ui.heading("Client settings");
-                            ui.add_space(8.);
-                            if self.client.ui(ui) { self.options=self.client.options(); self.client.save(); }
-                            if cfg!(any(windows,target_os="linux")) {
-                                ui.add_space(16.);
-                                self.hosting.inline_ui(ui, ctx, &mut self.account);
-                            }
+                        // Sections on the left, the chosen section's rows on the right.
+                        let sections: &[&str] = if cfg!(any(windows,target_os="linux")) { &["Streaming", "This computer", "Account", "About"] } else { &["Streaming", "Account", "About"] };
+                        let key = egui::Id::new("settings-section");
+                        let first = if self.page == Page::Hosting || std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("host")) { 1 } else { 0 };
+                        let mut section: usize = ctx.data(|d| d.get_temp(key)).unwrap_or(first).min(sections.len() - 1);
+                        // The sections as one segmented control across the top, then the section.
+                        if let Some(picked) = design::segmented(ui, sections, section) { section = picked; }
+                        ui.add_space(10.);
+                        let size = ui.available_size();
+                        ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
+                            settings_scroll.show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                match sections[section] {
+                                    "Streaming" => { if self.client.ui(ui) { self.options=self.client.options(); self.client.save(); } }
+                                    "This computer" => self.hosting.inline_ui(ui, ctx, &mut self.account),
+                                    "Account" => self.account.account_ui(ui),
+                                    _ => self.updates.about_ui(ui),
+                                }
+                            });
                         });
+                        ctx.data_mut(|d| d.insert_temp(key, section));
                     } else {
                         // Narrow windows keep the Android-style card order and scroll as one list.
                         let shown = egui::ScrollArea::vertical().id_salt("computers-page").auto_shrink([false, false]).show(ui, |ui| {
+                            self.account.manual = self.computer.as_ref().filter(|_| self.computer_account.is_none()).map(|c| (c.id.clone(), c.name.clone()));
                             if let Some(id) = self.account.computers_ui(ui) {
                                 let name=self.account.computers.iter().find(|c|c.id==id).map(|c|c.name.clone()).unwrap_or_default();
                                 self.files.wait_for(&id, &name);
                                 self.account.connect_owned_for_files(id);
                                 self.page=Page::Files;
                             }
-                            if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none()) {
+                            // Signed in, the link-paired computer is a tile in the grid above.
+                            let tiled = self.account.user.is_some();
+                            if tiled {
+                                let (connect, files, forget) = std::mem::take(&mut self.account.manual_clicked);
+                                if let Some(computer) = self.computer.clone().filter(|_| self.computer_account.is_none()) {
+                                    if files {
+                                        self.files.open(&computer.id, &computer.name, None, files::Source::Saved(computer.clone()));
+                                        self.page = Page::Files;
+                                    }
+                                    if forget { self.account.forget_computer(); }
+                                    if connect { self.start(ctx); }
+                                }
+                            }
+                            if let Some(computer) = self.computer.as_ref().filter(|_|self.computer_account.is_none() && !tiled) {
                                 let name = computer.name.clone();
                                 let mut forget = false;
                                 let mut menu = |ui: &mut egui::Ui| {
@@ -1518,6 +1593,8 @@ impl eframe::App for App {
         }
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        // A stream on the managed engine is its own process: never let it outlive the app.
+        gamestream::stop_running();
         #[cfg(windows)]
         {
             self.hook = None;

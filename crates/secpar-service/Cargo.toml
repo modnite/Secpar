@@ -9,13 +9,27 @@ publish = false
 secpar-core = { path = "../secpar-core" }
 secpar-tunnel = { path = "../secpar-tunnel" }
 secpar-hosting = { path = "../secpar-hosting" }
+secpar-clipboard = { path = "../secpar-clipboard" }
 secpar-gamestream-host = { path = "../secpar-gamestream-host" }
+base64 = "0.23.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "time", "macros", "sync", "io-util", "signal"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization"] }
+# The still of this computer's screen is written as a JPEG.
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
+base64 = "0.23.1"
+ring = "0.17.14"
 tempfile = "3"

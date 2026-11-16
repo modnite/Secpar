@@ -222,6 +222,12 @@ class MainActivity : ComponentActivity() {
             MidnightTheme(dark = dark) {
                 val nav = rememberNavController()
                 val scope = rememberCoroutineScope()
+                // Coming back from the managed engine's stream screen: the stream is over,
+                // so its tunnel and loopback ports go with it.
+                LifecycleResumeEffect(Unit) {
+                    com.pcremote.engine.EngineLaunch.finishIfStreaming()
+                    onPauseOrDispose {}
+                }
                 fun finishOnboarding() {
                     prefs.edit().putBoolean(PREF_ONBOARDED, true).apply()
                     nav.navigate(Routes.HOME) { popUpTo(Routes.ONBOARDING) { inclusive = true } }
@@ -288,7 +294,7 @@ class MainActivity : ComponentActivity() {
                                 dismissError = { account.dismissError() },
                                 friend = account::friendAction, note = account::showNote,
                                 search = account::search, setVisible = account::setVisible,
-                                friendSetting = account::friendSetting, friendInput = account::friendInput, answer = account::answerRequest,
+                                friendSetting = account::friendSetting, friendInput = account::friendInput, friendBrowse = account::friendBrowse, answer = account::answerRequest,
                                 connectFriend = { computer, permissions, mode ->
                                     account.connectFriend(computer, permissions) { route -> nav.navigate(Routes.mode(route, mode)) }
                                 },
@@ -324,7 +330,10 @@ class MainActivity : ComponentActivity() {
                         ), shown, accountActions, updateAvailable = update.release != null,
                             friends = { com.pcremote.account.FriendsPage(shown, accountActions, alertsOn = alertsOn) },
                             settings = { com.pcremote.settings.SettingsPage(settings,
-                                onThemeChanged = { themeTick++; if (settings.theme == com.pcremote.settings.ThemeChoice.LIGHT) recreate() }) })
+                                onThemeChanged = { themeTick++; if (settings.theme == com.pcremote.settings.ThemeChoice.LIGHT) recreate() },
+                                computers = cards.map { it.id to it.name },
+                                forget = { id -> cards.firstOrNull { it.id == id }?.let { home.remove(it) } },
+                                updates = { startActivity(Intent(this@MainActivity, com.pcremote.update.UpdatesActivity::class.java)) }) })
                         PairingOverlay(pairState,
                             onRetry = { pairing.reset(); scanQr(this@MainActivity, onUnavailable = ::manualPairing) { raw -> scope.launch { pairing.onScanned(raw) } } },
                             onDismiss = pairing::reset)

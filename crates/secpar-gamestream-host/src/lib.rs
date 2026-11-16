@@ -421,6 +421,23 @@ impl Host {
     pub async fn grants(&self) -> Vec<Grant> {
         self.journal.lock().await.records().to_vec()
     }
+    /// Changes the size of the stream this computer is hosting. The engine builds
+    /// its encoder again at the requested size and keeps capturing the same
+    /// display, so the connected device reconfigures from the next sequence
+    /// header. `false` means no stream was running and nothing was changed.
+    pub async fn resolution(&self, width: u32, height: u32) -> Result<bool> {
+        if !(64..=7680).contains(&width) || !(64..=7680).contains(&height) || width % 2 != 0 || height % 2 != 0 {
+            return Err(Error("A stream size must be even numbers from 64 to 7680"));
+        }
+        let value = self
+            .api
+            .request(reqwest::Method::POST, "secpar/resolution", Some(json!({"width": width, "height": height})))
+            .await?;
+        if value["status"] != true {
+            return Err(Error("Bundled host refused the stream size"));
+        }
+        Ok(value["streaming"] == true)
+    }
     /// Revoke every client granted to this owner's device. Recorded durably
     /// first, then removed from the host and verified gone.
     pub async fn revoke(&self, owner: &str, device: &str) -> Result<usize> {
@@ -499,11 +516,15 @@ fn command(executable: &Path) -> Command {
     if let Some(dir) = executable.parent() {
         command.current_dir(dir);
     }
+    command.stdin(Stdio::null()).kill_on_drop(true);
+    // The engine's own output goes beside it, not to a null handle: when it
+    // fails, this file is the only record of why.
+    let logs = executable.parent().map(|dir| (dir.join("engine.out.log"), dir.join("engine.err.log")));
+    let out = logs.as_ref().and_then(|(path, _)| std::fs::OpenOptions::new().create(true).append(true).open(path).ok());
+    let err = logs.as_ref().and_then(|(_, path)| std::fs::OpenOptions::new().create(true).append(true).open(path).ok());
     command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+        .stdout(out.map(Stdio::from).unwrap_or_else(Stdio::null))
+        .stderr(err.map(Stdio::from).unwrap_or_else(Stdio::null));
     contain::prepare(&mut command);
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -607,7 +628,7 @@ impl Api {
         path: &str,
         body: Option<Value>,
     ) -> Result<Value> {
-        if !matches!(path, "config" | "pin" | "clients/list" | "clients/unpair") {
+        if !matches!(path, "config" | "pin" | "clients/list" | "clients/unpair" | "secpar/resolution") {
             return Err(Error("Unknown private host operation"));
         }
         let mut request = self

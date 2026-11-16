@@ -64,6 +64,13 @@ __pycache__/
 .secpar-build-tools/
 host/src-tauri/tauri.encoder-build.conf.json
 host/src-tauri/encoder-licenses/
+host/src-tauri/secpar4-bundle/
+host/src-tauri/tauri.secpar4.conf.json
 
 # Secpar 4 upstream checkouts (fetched by scripts/fetch-upstream.sh)
 /upstream/src/
+
+# Build output and staged engines
+app/engine/build/
+host/src-tauri/engine/
+host/src-tauri/tauri.encoder-build.conf.json

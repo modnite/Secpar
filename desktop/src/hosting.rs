@@ -240,16 +240,35 @@ impl Panel {
             self.qr=None;
         }
         ctx.request_repaint_after(Duration::from_secs(1));
+        if inline {
+            // Settings, This computer: what it is and whether it hosts, as rows.
+            ui.spacing_mut().item_spacing.y = 8.;
+            design::group(ui, "This computer", |ui| {
+                let name = self.state.as_ref().map(|s| s.name.clone()).unwrap_or_else(|| "This computer".into());
+                design::row(ui, "Name", |ui| { ui.label(egui::RichText::new(name).color(design::MUTED)); });
+                let status = match &self.state {
+                    Some(state) if state.locked => "Locked",
+                    Some(_) => "Hosting",
+                    None if cfg!(windows) => "Hosting service unavailable",
+                    None => "Not hosting",
+                };
+                design::row(ui, "Status", |ui| { ui.label(egui::RichText::new(status).color(design::MUTED)); });
+                design::row(ui, "Hosting account", |ui| {
+                    if ui.add(egui::Button::new("Manage").min_size(egui::vec2(96., design::CONTROL))).clicked() { self.account_open = true; }
+                });
+            });
+        } else {
         ui.horizontal(|ui| {
-            if !inline {back=design::back_button(ui);}
-            ui.heading(if inline || self.settings_open {"Host settings"}else{"Paired devices"});
+            back=design::back_button(ui);
+            ui.heading(if self.settings_open {"Host settings"}else{"Paired devices"});
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                 ui.menu_button("Manage",|ui| {
-                    if !inline && ui.button(if self.settings_open {"Paired devices"}else{"Host settings"}).clicked(){self.settings_open=!self.settings_open;ui.close();}
+                    if ui.button(if self.settings_open {"Paired devices"}else{"Host settings"}).clicked(){self.settings_open=!self.settings_open;ui.close();}
                     if ui.button("Account").clicked(){self.account_open=true;ui.close();}
                 });
             });
         });
+        }
         ui.add_space(if self.settings_open { 0. } else { 8. });
         if !inline && !self.settings_open {
             design::surface().show(ui, |ui| {
@@ -313,10 +332,34 @@ impl Panel {
             if inline || self.settings_open { self.settings_ui(ui); }
             if inline {
                 ui.add_space(8.);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Paired devices").strong());
-                    if account.user.is_none() {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let signed_out = account.user.is_none();
+                design::group(ui, "Paired devices", |ui| {
+                    match self.state.clone() {
+                        Some(state) => {
+                            if state.devices.is_empty() && state.friends.is_empty() {
+                                ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
+                                ui.add_space(6.);
+                            }
+                            for friend in &state.friends {
+                                design::row(ui, &format!("{} (friend)", friend.name), |ui| {
+                                    if ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked() {
+                                        self.send(Command::Disconnect(friend.id.clone()));
+                                    }
+                                });
+                            }
+                            for device in state.devices {
+                                design::row(ui, &device.name, |ui| {
+                                    if ui.add_enabled(!self.busy, egui::Button::new("Remove")).clicked() {
+                                        self.revoke = Some(device.clone());
+                                    }
+                                    ui.label(egui::RichText::new(if device.connected { "Connected" } else { "Paired" }).size(12.).color(if device.connected { design::ACCENT } else { design::MUTED }));
+                                });
+                            }
+                        }
+                        None => { ui.label(egui::RichText::new("Hosting unavailable").color(design::MUTED)); ui.add_space(6.); }
+                    }
+                    if signed_out {
+                        design::row(ui, "New device", |ui| {
                             if ui.add_enabled(self.state.is_some() && !self.busy, egui::Button::new("Pair a device")).clicked() {
                                 self.pairing=true; self.link.clear(); self.qr=None; self.send(Command::Pair);
                             }
@@ -324,7 +367,7 @@ impl Panel {
                     }
                 });
             }
-            if inline || !self.settings_open { if let Some(state) = self.state.clone() {
+            if !inline && !self.settings_open { if let Some(state) = self.state.clone() {
                 if state.devices.is_empty() {
                     ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
                 }
@@ -481,14 +524,12 @@ impl Panel {
         let pad_ok = self.settings["pad"]["ok"].as_bool().unwrap_or(false);
         let pad_text = self.settings["pad"]["text"].as_str().unwrap_or("Gamepad status unknown").to_string();
         ui.add_enabled_ui(self.state.is_some() && !self.busy, |ui| {
-            ui.spacing_mut().item_spacing.y = 4.;
-            design::surface().inner_margin(10).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(egui::RichText::new("Device access").strong());
+            ui.spacing_mut().item_spacing.y = 8.;
+            design::group(ui, "Who can use it", |ui| {
                 self.setting_toggle(ui, &config, "allow_files", "Receive and browse files", "Allow paired devices to send files to this computer and to browse it.");
-                self.setting_toggle(ui, &config, "allow_clip", "Allow clipboard sharing", "Allow clipboard exchange with paired devices.");
+                self.setting_toggle(ui, &config, "allow_clip", "Share clipboard", "Allow clipboard exchange with paired devices.");
                 self.setting_toggle(ui, &config, "friends", "Let friends connect", "Friends you added still need your approval unless you set them to connect at any time.");
-                ui.add_space(4.);
+                self.setting_toggle(ui, &config, "previews", "Show previews of this screen", "Your other devices and your friends see a small still of this screen. Off keeps it private.");
 
                 if !pad_ok {ui.horizontal(|ui| {
                     design::dot(ui,design::MUTED);
@@ -503,29 +544,32 @@ impl Panel {
         let mut backend=config["encoder"]["backend"].as_str().unwrap_or("auto").to_string();
         let mut preset=config["encoder"]["preset"].as_str().unwrap_or("fast").to_string();
         let old=(backend.clone(),preset.clone());
-        ui.label(egui::RichText::new("Encoder").size(12.).color(design::MUTED)).on_hover_text("Changes apply to new connections.");
+        let width=design::value_width(ui);
         let selected=if backend=="auto" {"Automatic"} else {
             choices.iter().find(|c|c["id"].as_str()==Some(&backend)).and_then(|c|c["name"].as_str()).unwrap_or("Encoder unavailable")
         };
-        egui::ComboBox::from_id_salt("host-encoder").width(ui.available_width()).selected_text(selected).show_ui(ui,|ui| {
-            ui.selectable_value(&mut backend,"auto".into(),"Automatic");
-            for choice in &choices {
-                let id=choice["id"].as_str().unwrap_or("");
-                let name=choice["name"].as_str().unwrap_or(id);
-                let enabled=choice["available"].as_bool().unwrap_or(false);
-                let response=ui.add_enabled(enabled,egui::Button::new(name).selected(backend==id));
-                if response.clicked() {backend=id.into();}
-                if !enabled {response.on_hover_text(choice["reason"].as_str().unwrap_or("Unavailable on this GPU"));}
-            }
+        design::row(ui,"Encoder",|ui| {
+            egui::ComboBox::from_id_salt("host-encoder").width(width).selected_text(selected).show_ui(ui,|ui| {
+                ui.selectable_value(&mut backend,"auto".into(),"Automatic");
+                for choice in &choices {
+                    let id=choice["id"].as_str().unwrap_or("");
+                    let name=choice["name"].as_str().unwrap_or(id);
+                    let enabled=choice["available"].as_bool().unwrap_or(false);
+                    let response=ui.add_enabled(enabled,egui::Button::new(name).selected(backend==id));
+                    if response.clicked() {backend=id.into();}
+                    if !enabled {response.on_hover_text(choice["reason"].as_str().unwrap_or("Unavailable on this GPU"));}
+                }
+            }).response.on_hover_text("Changes apply to new connections.");
         });
         let effective=if backend=="auto" {choices.iter().find(|c|c["available"].as_bool()==Some(true)).and_then(|c|c["id"].as_str()).unwrap_or("")}else{&backend};
         let labels=if effective.contains("nvenc") {["P1 · fastest","P4 · balanced","P7 · highest quality"]}
             else if effective.contains("qsv") {["Very fast","Medium","Slow"]}else{["Speed","Balanced","Quality"]};
         if effective!="media-foundation" {
-            ui.label(egui::RichText::new("Encoder preset").size(12.).color(design::MUTED));
             let index=match preset.as_str(){"balanced"=>1,"quality"=>2,_=>0};
-            egui::ComboBox::from_id_salt("host-encoder-preset").width(ui.available_width()).selected_text(labels[index]).show_ui(ui,|ui| {
-                for (id,label) in ["fast","balanced","quality"].into_iter().zip(labels) {ui.selectable_value(&mut preset,id.into(),label);}
+            design::row(ui,"Encoder preset",|ui| {
+                egui::ComboBox::from_id_salt("host-encoder-preset").width(width).selected_text(labels[index]).show_ui(ui,|ui| {
+                    for (id,label) in ["fast","balanced","quality"].into_iter().zip(labels) {ui.selectable_value(&mut preset,id.into(),label);}
+                });
             });
         }
         if old!=(backend.clone(),preset.clone()) {self.send(Command::Patch(json!({"encoder":{"backend":backend,"preset":preset}})));}
@@ -537,65 +581,55 @@ impl Panel {
         let config = self.settings["config"].clone();
         ui.add_enabled_ui(self.state.is_some() && !self.busy, |ui| {
             ui.spacing_mut().item_spacing.y = 4.;
-            design::surface().inner_margin(10).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.vertical(|ui| {
-                    let left = &mut *ui;
-                    left.label(egui::RichText::new("Display").size(12.).color(design::MUTED));
-                    let mut display = config["display"].as_str().unwrap_or("").to_string();
-                    let old = display.clone();
-                    let selected = if display.is_empty() { "Primary display" } else {
-                        self.settings["displays"].as_array().into_iter().flatten()
-                            .find(|d| d["id"].as_str() == Some(&display))
-                            .and_then(|d| d["name"].as_str()).unwrap_or("Display unavailable")
-                    };
-                    egui::ComboBox::from_id_salt("host-display").width(left.available_width())
-                        .selected_text(selected).show_ui(left, |ui| {
-                            ui.selectable_value(&mut display, String::new(), "Primary display");
-                            for d in self.settings["displays"].as_array().into_iter().flatten() {
-                                if let (Some(id), Some(name)) = (d["id"].as_str(), d["name"].as_str()) {
-                                    ui.selectable_value(&mut display, id.into(), name);
-                                }
+            ui.spacing_mut().item_spacing.y = 8.;
+            design::group(ui, "Picture", |ui| {
+                let width = design::value_width(ui);
+                let mut display = config["display"].as_str().unwrap_or("").to_string();
+                let old = display.clone();
+                let selected = if display.is_empty() { "Primary display".to_string() } else {
+                    self.settings["displays"].as_array().into_iter().flatten()
+                        .find(|d| d["id"].as_str() == Some(&display))
+                        .and_then(|d| d["name"].as_str()).unwrap_or("Display unavailable").to_string()
+                };
+                let displays = self.settings["displays"].clone();
+                design::row(ui, "Display", |ui| {
+                    egui::ComboBox::from_id_salt("host-display").width(width).selected_text(selected).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut display, String::new(), "Primary display");
+                        for d in displays.as_array().into_iter().flatten() {
+                            if let (Some(id), Some(name)) = (d["id"].as_str(), d["name"].as_str()) {
+                                ui.selectable_value(&mut display, id.into(), name);
                             }
-                        });
-                    if display != old { self.send(Command::Patch(json!({"display":display}))); }
-                    let right = &mut *ui;
-                    right.label(egui::RichText::new("Quality limit").size(12.).color(design::MUTED));
-                    let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
-                    let old = quality.clone();
-                    let choices = [("auto", "No limit"), ("battery", "1280 × 720 · 30 fps"), ("smooth", "1920 × 1080 · 60 fps"), ("sharp", "2560 × 1440 · 60 fps"), ("2160p60", "3840 × 2160 · 60 fps")];
-                    let label = choices.iter().find(|(value,_)| *value == quality).map(|(_,label)| *label).unwrap_or("Custom");
-                    egui::ComboBox::from_id_salt("host-quality").width(right.available_width())
-                        .selected_text(label).show_ui(right, |ui| {
-                            for (value,label) in choices { ui.selectable_value(&mut quality,value.into(),label); }
-                        });
-                    if quality != old { self.send(Command::Patch(json!({"max_quality":quality}))); }
-                    self.encoder_ui(right, &config);
+                        }
+                    });
                 });
+                if display != old { self.send(Command::Patch(json!({"display":display}))); }
+                let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
+                let old = quality.clone();
+                let choices = [("auto", "No limit"), ("battery", "1280 × 720 · 30 fps"), ("smooth", "1920 × 1080 · 60 fps"), ("sharp", "2560 × 1440 · 60 fps"), ("2160p60", "3840 × 2160 · 60 fps")];
+                let label = choices.iter().find(|(value,_)| *value == quality).map(|(_,label)| *label).unwrap_or("Custom");
+                design::row(ui, "Quality limit", |ui| {
+                    egui::ComboBox::from_id_salt("host-quality").width(width).selected_text(label).show_ui(ui, |ui| {
+                        for (value,label) in choices { ui.selectable_value(&mut quality,value.into(),label); }
+                    });
+                });
+                if quality != old { self.send(Command::Patch(json!({"max_quality":quality}))); }
+                self.encoder_ui(ui, &config);
             });
-            ui.add_space(4.);
-            ui.vertical(|ui| {
-                design::surface().inner_margin(10).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(egui::RichText::new("Device access").strong());
-                    self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
-                    self.setting_toggle(ui,&config,"allow_clip","Allow clipboard sharing","Allow clipboard exchange with paired devices.");
-                    self.setting_toggle(ui,&config,"friends","Let friends connect","Friends you added still need your approval unless you set them to connect at any time.");
-                    if let Some(ok @ false) = self.settings["pad"]["ok"].as_bool() {
-                        ui.horizontal(|ui| {
-                            design::dot(ui, if ok { design::ACCENT } else { design::MUTED });
-                            ui.label(egui::RichText::new(self.settings["pad"]["text"].as_str().unwrap_or("")).size(12.).color(design::MUTED));
-                        });
-                    }
-
-                });
-                ui.add_space(4.);
-                design::surface().inner_margin(10).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(egui::RichText::new("Connections & startup").strong());
-                    self.setting_toggle(ui,&config,"anywhere","Router ports","Use UPnP to request a router port for direct remote connections. Relay connections are separate.");
-                    self.setting_toggle(ui,&config,"autostart","Start in tray","Open Secpar in the system tray when you sign in. The hosting service runs independently.");
-                });
+            design::group(ui, "Who can use it", |ui| {
+                self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
+                self.setting_toggle(ui,&config,"allow_clip","Share clipboard","Allow clipboard exchange with paired devices.");
+                self.setting_toggle(ui,&config,"friends","Let friends connect","Friends you added still need your approval unless you set them to connect at any time.");
+                self.setting_toggle(ui,&config,"previews","Show previews of this screen","Your other devices and your friends see a small still of this screen. Off keeps it private.");
+                if let Some(ok @ false) = self.settings["pad"]["ok"].as_bool() {
+                    ui.horizontal(|ui| {
+                        design::dot(ui, if ok { design::ACCENT } else { design::MUTED });
+                        ui.label(egui::RichText::new(self.settings["pad"]["text"].as_str().unwrap_or("")).size(12.).color(design::MUTED));
+                    });
+                }
+            });
+            design::group(ui, "Connections and startup", |ui| {
+                self.setting_toggle(ui,&config,"anywhere","Router ports","Use UPnP to request a router port for direct remote connections. Relay connections are separate.");
+                self.setting_toggle(ui,&config,"autostart","Start in tray","Open Secpar in the system tray when you sign in. The hosting service runs independently.");
             });
         });
     }
@@ -608,61 +642,11 @@ impl Panel {
         help: &str,
     ) {
         let mut value = config[key].as_bool().unwrap_or(false);
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), 28.),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(label).on_hover_text(help);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (rect, mut response) =
-                        ui.allocate_exact_size(egui::vec2(34., 28.), egui::Sense::click());
-                    if response.clicked() {
-                        value = !value;
-                        response.mark_changed();
-                    }
-                    response.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::WidgetType::Checkbox,
-                            ui.is_enabled(),
-                            value,
-                            label,
-                        )
-                    });
-                    let track = egui::Rect::from_center_size(rect.center(), egui::vec2(32., 18.));
-                    let fill = if value {
-                        design::ACCENT
-                    } else {
-                        egui::Color32::from_rgb(62, 73, 87)
-                    };
-                    ui.painter().rect_filled(track, 9, fill);
-                    let x = if value {
-                        track.right() - 9.
-                    } else {
-                        track.left() + 9.
-                    };
-                    ui.painter().circle_filled(
-                        egui::pos2(x, track.center().y),
-                        6.,
-                        if value {
-                            egui::Color32::from_rgb(7, 38, 30)
-                        } else {
-                            egui::Color32::from_rgb(205, 216, 226)
-                        },
-                    );
-                    if response.has_focus() {
-                        ui.painter().rect_stroke(
-                            rect.expand(2.),
-                            5,
-                            egui::Stroke::new(1_f32, design::ACCENT),
-                            egui::StrokeKind::Outside,
-                        );
-                    }
-                    if response.on_hover_text(help).changed() {
-                        self.send(Command::Patch(json!({key:value})));
-                    }
-                });
-            },
-        );
+        let changed = design::row(ui, label, |ui| design::switch(ui, &mut value, label));
+        if changed {
+            self.send(Command::Patch(json!({ key: value })));
+        }
+        let _ = help;
     }
 }
 fn paint_qr(ui: &mut egui::Ui, qr: &qrcode::QrCode) {

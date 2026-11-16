@@ -6,6 +6,12 @@ BINARY = Path(os.environ.get("CARGO_TARGET_DIR", ROOT/"desktop/target"))/"releas
 TOOL = Path(os.environ["SECPAR_APPIMAGETOOL"])
 RUNTIME = Path(os.environ["SECPAR_APPIMAGE_RUNTIME"])
 TAG = os.environ["SECPAR_RELEASE_TAG"]
+# The bundled hosting engine, staged by the release build, beside the
+# executable where the Linux host looks for it on first run. The connecting
+# side's engine (moonlight-common-c) is compiled into the app itself.
+ENGINE = Path(os.environ.get("SECPAR_ENGINE_DIR", ROOT/"dist-desktop/engine"))
+# Sunshine's own libraries are loaded through LD_LIBRARY_PATH=usr/lib (AppRun).
+ENGINE_LIBS = ("libcrypto.so.4", "libssl.so.4", "libminiupnpc.so.21")
 if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", TAG):raise RuntimeError("Use a plain vX.Y.Z release tag")
 if TAG.encode() not in BINARY.read_bytes():raise RuntimeError("Build the binary with the selected release tag")
 if ".debug_" in subprocess.check_output(["readelf","-S",str(BINARY)],text=True):raise RuntimeError("Debug sections must not be published")
@@ -23,6 +29,15 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     shutil.copy2(ROOT/"assets/branding/secpar-icon.png",app/"com.secpar.desktop.png")
     shutil.copy2(ROOT/"desktop/packaging/appimage-install.sh",exe/"secpar-install")
     (exe/"secpar-install").chmod(0o755)
+    # One AppImage with both roles: the host's engine is an internal part of
+    # this app, not a separate download.
+    if not (ENGINE/"sunshine").is_file():raise RuntimeError("No staged engine at "+str(ENGINE)+" (set SECPAR_ENGINE_DIR)")
+    shutil.copytree(ENGINE,exe/"engine")
+    for name in ENGINE_LIBS:
+        staged=exe/"engine"/name
+        if not staged.is_file():raise RuntimeError("Missing bundled engine library "+name)
+        shutil.copy2(staged,lib/name)
+        staged.unlink()
     (app/"com.secpar.desktop.desktop").write_text('[Desktop Entry]\nType=Application\nName=Secpar\nExec=secpar-desktop\nIcon=com.secpar.desktop\nTerminal=false\nCategories=Network;RemoteAccess;\nX-AppImage-Version='+TAG[1:]+'\n')
     licenses=app/"usr/share/licenses/secpar";licenses.mkdir(parents=True)
     shutil.copy2(ROOT/"LICENSE.txt",licenses/"Secpar-GPL-3.0.txt")
@@ -38,17 +53,37 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
             match=re.search(r"^\s*(\S+) => (/\S+)",line)
             if not match:continue
             name,path=match.groups()
-            if SYSTEM.match(name) or name in copied:continue
+            # Arch's ldd can print an absolute loader name (`/lib64/...`).
+            # Always use the basename so the destination stays inside the AppDir.
+            name=Path(name).name
+            if not name or SYSTEM.match(name) or name in copied:continue
             copied.add(name);shutil.copy2(path,lib/name);pending.append(Path(path));distributed.append(Path(path))
     packages=set()
+    debian=shutil.which("dpkg-query")
+    arch=shutil.which("pacman")
     for source in distributed:
-        result=subprocess.run(["dpkg-query","-S",str(source.resolve())],text=True,capture_output=True)
-        for line in result.stdout.splitlines():
-            if ": " in line:packages.add(line.split(": ",1)[0])
-    for package in packages:
-        copyright=Path("/usr/share/doc")/package.split(":")[0]/"copyright"
-        if copyright.exists():shutil.copy2(copyright,licenses/(package.replace(":","-")+"-copyright.txt"))
-    (licenses/"Debian-packages.txt").write_text(subprocess.check_output(["dpkg-query","-W","-f=${binary:Package} ${Version} (source: ${source:Package} ${source:Version})\\n",*sorted(packages)],text=True))
+        if debian:
+            result=subprocess.run(["dpkg-query","-S",str(source.resolve())],text=True,capture_output=True)
+            for line in result.stdout.splitlines():
+                if ": " in line:packages.add(line.split(": ",1)[0])
+        elif arch:
+            result=subprocess.run(["pacman","-Qo",str(source.resolve())],text=True,capture_output=True)
+            match=re.search(r"owned by (\S+)",result.stdout)
+            if result.returncode==0 and match:packages.add(match.group(1))
+    if debian:
+        for package in packages:
+            copyright=Path("/usr/share/doc")/package.split(":")[0]/"copyright"
+            if copyright.exists():shutil.copy2(copyright,licenses/(package.replace(":","-")+"-copyright.txt"))
+        (licenses/"Debian-packages.txt").write_text(subprocess.check_output(["dpkg-query","-W","-f=${binary:Package} ${Version} (source: ${source:Package} ${source:Version})\\n",*sorted(packages)],text=True))
+    elif arch and packages:
+        for package in packages:
+            for folder in (Path("/usr/share/licenses")/package,Path("/usr/share/licenses")/package.lower()):
+                if folder.is_dir():
+                    shutil.copytree(folder,licenses/(package+"-licenses"),dirs_exist_ok=True,ignore_dangling_symlinks=True)
+                    break
+        (licenses/"Arch-packages.txt").write_text(subprocess.check_output(["pacman","-Q",*sorted(packages)],text=True))
+    else:
+        (licenses/"System-packages.txt").write_text("System libraries from the build host; see its package database for licences.\n")
     (app/"AppRun").write_text("""#!/bin/sh
 set -eu
 APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}

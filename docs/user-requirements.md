@@ -265,3 +265,27 @@ separate copies or asking the owner for new manual setup. Agreed order: hosting 
 the Windows PC, the Android app, connecting from outside the home network; then the
 rest. Owner confirmed on 2026-11-15 that the phone reaches the PC on home Wi-Fi and
 on mobile data. Sound, touch and controllers on Android are not yet reported.
+
+Release-shape corrections, 2026-11-15 (the owner's questions, verbatim intent):
+
+- "Where is the installer exe with in-place update? Where is the AppImage with
+  in-place update?" The product ships as `Secpar-Windows-x64-setup.exe` and
+  `Secpar-Linux-x64.AppImage` (+ .zsync), both updating in place. A zip or a tar
+  is not a deliverable, and neither is a package without an update path. Keep the
+  asset names the 3.x updater feed already uses, and keep the Android version code
+  following the release (4.0.0 -> 40000), not Moonlight's own counter.
+- "Why can I only remove friends and can't change their permissions?" The
+  account service already stores per-friend connect (ask/always) and control
+  (view/ keyboard and mouse). The window and the phone must both expose it, on
+  both platforms, saved through the service.
+- "Why are there no dropdown lists but settings cycle on click?" Settings that
+  offer a list must open a real dropdown with the current value marked. Cycling on
+  click is not acceptable. The phone uses segmented choices where a dropdown does
+  not fit a touch layout, and that is fine.
+- Live resolution change already existed in the 3.x hosts (Windows reopens the
+  encoder at the new size; Linux renegotiates the capture with a fresh encoder
+  chain and a source pinned to the display size). Do not claim it cannot be done
+  because the new engine is Sunshine; port the mechanism.
+- "I am not ready until I say I am ready": keep working and shipping verified
+  increments; do not present anything as finished or as a release until the owner
+  says so. Say plainly what is proven, on which machine, and what is not.

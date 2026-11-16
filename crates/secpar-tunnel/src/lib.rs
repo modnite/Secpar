@@ -10,6 +10,8 @@
 //! Wire format: a TCP connection is one QUIC stream that starts with the port as
 //! two bytes; a UDP packet is one QUIC datagram that starts with the port as two
 //! bytes. Stream port 0 is a readiness check that the host answers with one byte.
+//! Stream port 1 carries one small request to the host itself; port 2 is the same
+//! idea with length prefixes, for payloads of up to a megabyte.
 mod tls;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -164,12 +166,18 @@ pub type Handler = Arc<
         + Sync,
 >;
 type SharedHandler = Arc<std::sync::RwLock<Option<Handler>>>;
-/// The largest request or answer on the host's own channel.
+/// The largest request or answer on the host's own channel (port 1).
 pub const MAX_REQUEST: usize = 8192;
+/// The largest request or answer on the app channel (port 2), in either
+/// direction. Clipboard text and later file and monitor requests travel here.
+pub const MAX_APP: usize = 1 << 20;
 
 /// Stream "port" for requests to the host itself. Port 0 is the readiness check;
 /// neither is ever an engine port.
 const REQUEST: u16 = 1;
+/// Stream "port" for the app channel: length-prefixed, so large payloads fit.
+/// Kept separate from `REQUEST` so pairing is unchanged and stays small.
+const APP: u16 = 2;
 
 pub mod relay;
 pub use relay::Relay;
@@ -192,11 +200,17 @@ pub struct Host {
     allowed: Arc<Allowed>,
     connections: Connections,
     handler: SharedHandler,
+    app: SharedHandler,
 }
 impl Host {
     /// Sets who answers requests to the host itself. Without one they get no answer.
     pub fn on_request(&self, handler: Handler) {
         *self.handler.write().unwrap() = Some(handler);
+    }
+    /// Sets who answers the app channel, the one that carries larger payloads.
+    /// Without one they get no answer.
+    pub fn on_app(&self, app: Handler) {
+        *self.app.write().unwrap() = Some(app);
     }
     /// The relay, for devices that cannot reach this host directly.
     pub fn relay(&self) -> Arc<Relay> {
@@ -271,16 +285,17 @@ pub fn serve_on(
     let (endpoint, relay) = endpoint(socket, Some(config)).map_err(opened)?;
     let connections = Connections::default();
     let handler = SharedHandler::default();
-    let (accepting, open, handling) = (endpoint.clone(), connections.clone(), handler.clone());
+    let app = SharedHandler::default();
+    let (accepting, open, handling, apps) = (endpoint.clone(), connections.clone(), handler.clone(), app.clone());
     tokio::spawn(async move {
         while let Some(incoming) = accepting.accept().await {
-            let (ports, open, handling) = (ports.clone(), open.clone(), handling.clone());
+            let (ports, open, handling, apps) = (ports.clone(), open.clone(), handling.clone(), apps.clone());
             tokio::spawn(async move {
                 let Ok(connection) = incoming.await else { return };
                 let Some(device) = peer_fingerprint(&connection) else { return };
                 let id = connection.stable_id();
                 open.lock().unwrap().push((device, connection.clone()));
-                host_connection(connection, device, handling, engine, ports).await;
+                host_connection(connection, device, handling, apps, engine, ports).await;
                 open.lock().unwrap().retain(|(_, c)| c.stable_id() != id);
             });
         }
@@ -292,16 +307,17 @@ pub fn serve_on(
         allowed,
         connections,
         handler,
+        app,
     })
 }
 
-async fn host_connection(connection: quinn::Connection, device: Fingerprint, handler: SharedHandler, engine: IpAddr, ports: Ports) {
+async fn host_connection(connection: quinn::Connection, device: Fingerprint, handler: SharedHandler, app: SharedHandler, engine: IpAddr, ports: Ports) {
     let streams = {
         let connection = connection.clone();
         let tcp = ports.tcp.clone();
         async move {
             while let Ok((mut send, mut recv)) = connection.accept_bi().await {
-                let (tcp, handler) = (tcp.clone(), handler.clone());
+                let (tcp, handler, app) = (tcp.clone(), handler.clone(), app.clone());
                 tokio::spawn(async move {
                     let mut port = [0u8; 2];
                     if recv.read_exact(&mut port).await.is_err() {
@@ -321,6 +337,31 @@ async fn host_connection(connection: quinn::Connection, device: Fingerprint, han
                             let _ = send.write_all(&answer).await;
                             let _ = send.finish();
                         }
+                        return;
+                    }
+                    if port == APP {
+                        // A frame that says it is larger than the limit is
+                        // refused after its four header bytes, unread.
+                        let mut header = [0u8; 4];
+                        if recv.read_exact(&mut header).await.is_err() {
+                            return;
+                        }
+                        let length = u32::from_be_bytes(header) as usize;
+                        if length > MAX_APP {
+                            return;
+                        }
+                        let mut request = vec![0u8; length];
+                        if recv.read_exact(&mut request).await.is_err() {
+                            return;
+                        }
+                        let Some(app) = app.read().unwrap().clone() else { return };
+                        let answer = app(device, request).await;
+                        if answer.len() > MAX_APP {
+                            return;
+                        }
+                        let _ = send.write_all(&(answer.len() as u32).to_be_bytes()).await;
+                        let _ = send.write_all(&answer).await;
+                        let _ = send.finish();
                         return;
                     }
                     if !tcp.contains(&port) {
@@ -397,9 +438,14 @@ pub struct Client {
     relay: Arc<Relay>,
     connection: quinn::Connection,
     endpoint: quinn::Endpoint,
+    host: Fingerprint,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Client {
+    /// The certificate this tunnel was opened to: the computer at the other end.
+    pub fn host(&self) -> Fingerprint {
+        self.host
+    }
     /// Asks the host itself something, outside the engine's traffic, and waits
     /// for its answer. The host knows which device is asking from the tunnel.
     pub async fn request(&self, request: &[u8]) -> Result<Vec<u8>> {
@@ -416,6 +462,35 @@ impl Client {
         };
         match tokio::time::timeout(Duration::from_secs(30), exchange).await {
             Ok(Some(answer)) if !answer.is_empty() => Ok(answer),
+            _ => Err(FAILED),
+        }
+    }
+    /// Like `request`, on the app channel: the payload is carried with a four
+    /// byte length in front, so up to `MAX_APP` bytes go each way.
+    pub async fn app_request(&self, request: &[u8]) -> Result<Vec<u8>> {
+        const FAILED: Error = Error("The host did not answer");
+        if request.len() > MAX_APP {
+            return Err(Error("The request is too large"));
+        }
+        let exchange = async {
+            let (mut send, mut recv) = self.connection.open_bi().await.ok()?;
+            send.write_all(&APP.to_be_bytes()).await.ok()?;
+            send.write_all(&(request.len() as u32).to_be_bytes()).await.ok()?;
+            send.write_all(request).await.ok()?;
+            send.finish().ok()?;
+            let mut header = [0u8; 4];
+            recv.read_exact(&mut header).await.ok()?;
+            let length = u32::from_be_bytes(header) as usize;
+            // Nothing larger than the limit is read, whoever sent it.
+            if length > MAX_APP {
+                return None;
+            }
+            let mut answer = vec![0u8; length];
+            recv.read_exact(&mut answer).await.ok()?;
+            Some(answer)
+        };
+        match tokio::time::timeout(Duration::from_secs(30), exchange).await {
+            Ok(Some(answer)) => Ok(answer),
             _ => Err(FAILED),
         }
     }
@@ -610,6 +685,7 @@ pub async fn connect_through(
         relay,
         connection,
         endpoint,
+        host: host_pin,
         tasks,
     })
 }

@@ -18,24 +18,36 @@ fi
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$src"
 # Secpar's patches on Sunshine (integrations/gamestream/patches/sunshine): pairing
-# bound to a client certificate, and the management password read from a pipe.
+# bound to a client certificate, the management password read from a pipe, and the
+# live resolution endpoint. A patch that neither applies nor is already applied
+# stops the build: an engine without them looks like it works until a feature asks.
 patches=$here/integrations/gamestream/patches/sunshine
 for p in "$patches"/*.patch; do
   if git apply --check "$p" 2>/dev/null; then
     git apply "$p"
+  elif git apply -R --check "$p" 2>/dev/null; then
+    echo "$(basename "$p") is already applied" >&2
   else
-    git apply -R --check "$p"   # already applied, or stop here
+    echo "cannot apply $(basename "$p"): the source is not the pinned Sunshine tree" >&2
+    exit 2
   fi
 done
 # SECPAR_RELOCATABLE=1 makes the host look for its assets in ./usr/local/assets
 # under the directory it is started from, so it can run from any folder.
 relocatable=${SECPAR_RELOCATABLE:+-DSUNSHINE_BUILD_APPIMAGE=ON}
+# SECPAR_FFMPEG=<dir from build-ffmpeg-linux.sh> links Secpar's minimal FFmpeg,
+# and SECPAR_SMALL=1 builds for size; Secpar ships that combination.
+small=""
+if [ -n "${SECPAR_FFMPEG:-}" ]; then small="-DFFMPEG_PREPARED_BINARIES=$SECPAR_FFMPEG"; fi
+if [ "${SECPAR_SMALL:-}" = 1 ]; then
+  export CFLAGS="-Os -ffunction-sections -fdata-sections" CXXFLAGS="-O2 -ffunction-sections -fdata-sections" LDFLAGS="-s -Wl,--gc-sections"
+fi
 configure() {
   cmake -B build -G Ninja -S . \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_DOCS=OFF -DBUILD_TESTS=OFF \
     -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ENABLE_CUDA=OFF \
     -DSUNSHINE_ENABLE_DRM=ON -DSUNSHINE_ENABLE_KWIN=ON \
-    -DSUNSHINE_ENABLE_PORTAL=ON -DSUNSHINE_ENABLE_WAYLAND=ON $relocatable
+    -DSUNSHINE_ENABLE_PORTAL=ON -DSUNSHINE_ENABLE_WAYLAND=ON $relocatable $small
 }
 # Sunshine downloads Boost 1.89, whose Boost.Locale has an IDE file-grouping line
 # that current CMake rejects on Linux. The line has no effect on the build, so it

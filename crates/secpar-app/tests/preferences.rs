@@ -25,7 +25,8 @@ fn settings_round_trip_and_validation() {
         "decoder": "hardware",
         "display": "fullscreen",
         "audio": "5.1-surround",
-        "mute_on_focus_loss": true
+        "mute_on_focus_loss": true,
+        "share_clipboard": false
     });
     let saved = call(json!({"do": "save_preferences", "preferences": chosen}));
     assert_eq!(saved["ok"], true, "{saved}");

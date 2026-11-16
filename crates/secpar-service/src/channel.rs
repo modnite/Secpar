@@ -7,8 +7,10 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
-/// The longest line either side accepts.
-const MAX_LINE: usize = 16 * 1024;
+/// The longest line either side accepts. A still of another computer's screen
+/// travels here as base64 in one line, so this is the size of the tunnel's own
+/// app channel rather than the few hundred bytes the other requests need.
+const MAX_LINE: usize = 1024 * 1024;
 
 async fn converse<E: Engine, S: AsyncRead + AsyncWrite + Unpin>(core: Arc<Core<E>>, stream: S) {
     let (reading, mut writing) = tokio::io::split(stream);

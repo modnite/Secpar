@@ -35,6 +35,10 @@ pub struct Preferences {
     pub audio: String,
     #[serde(default)]
     pub mute_on_focus_loss: bool,
+    /// Keep this computer's clipboard text in step with the connected computer.
+    /// On unless the person turns it off.
+    #[serde(default = "default_share_clipboard")]
+    pub share_clipboard: bool,
 }
 fn default_resolution() -> String { "1920x1080".into() }
 fn default_fps() -> u32 { 60 }
@@ -42,6 +46,7 @@ fn default_bitrate() -> u32 { 20_000 }
 fn default_decoder() -> String { "auto".into() }
 fn default_display() -> String { "windowed".into() }
 fn default_audio() -> String { "stereo".into() }
+fn default_share_clipboard() -> bool { true }
 
 impl Default for Preferences {
     fn default() -> Self {
@@ -53,6 +58,7 @@ impl Default for Preferences {
             display: default_display(),
             audio: default_audio(),
             mute_on_focus_loss: false,
+            share_clipboard: default_share_clipboard(),
         }
     }
 }
@@ -163,11 +169,18 @@ mod tests {
     fn a_saved_file_round_trips_and_a_bad_one_falls_back() {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join("preferences.json");
-        let chosen = Preferences { resolution: "1280x720".into(), fps: 120, bitrate_kbps: 40_000, decoder: "hardware".into(), display: "fullscreen".into(), audio: "5.1-surround".into(), mute_on_focus_loss: true };
+        let chosen = Preferences { resolution: "1280x720".into(), fps: 120, bitrate_kbps: 40_000, decoder: "hardware".into(), display: "fullscreen".into(), audio: "5.1-surround".into(), mute_on_focus_loss: true, share_clipboard: false };
         chosen.save(&path).unwrap();
         assert_eq!(Preferences::load(&path), chosen.checked().unwrap());
         std::fs::write(&path, b"{\"fps\":999}").unwrap();
         assert_eq!(Preferences::load(&path), Preferences::default());
+    }
+
+    #[test]
+    fn a_file_from_before_clipboard_sharing_turns_it_on() {
+        let saved: Preferences = serde_json::from_str(r#"{"resolution":"1280x720"}"#).unwrap();
+        assert!(saved.share_clipboard);
+        assert!(!serde_json::from_str::<Preferences>(r#"{"share_clipboard":false}"#).unwrap().share_clipboard);
     }
 
     #[test]

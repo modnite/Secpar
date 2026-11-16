@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import Qt.labs.platform as Platform
 
 ApplicationWindow {
     id: window
@@ -15,6 +16,48 @@ ApplicationWindow {
     property int tab: Math.max(0, Math.min(2, startTab))
     // The layout sample shows the pages as they look when signed in.
     readonly property bool signedIn: sampleData || backend.signedIn
+    // Set while the app is really ending, so closing the window can hide it instead.
+    property bool quitting: false
+
+    function showWindow() {
+        window.show()
+        window.raise()
+        window.requestActivate()
+    }
+    function quitApp() {
+        window.quitting = true
+        Qt.quit()
+    }
+    // Closing the window leaves Secpar in the tray, with the background part and
+    // any stream still running. Without a tray, closing ends the app as usual.
+    onClosing: function (close) {
+        if (!window.quitting && tray.available) {
+            close.accepted = false
+            window.hide()
+        }
+    }
+
+    Platform.SystemTrayIcon {
+        id: tray
+        visible: true
+        icon.source: "qrc:/branding/secpar-icon.svg"
+        tooltip: "Secpar"
+        menu: Platform.Menu {
+            Platform.MenuItem {
+                text: "Open Secpar"
+                onTriggered: window.showWindow()
+            }
+            Platform.MenuSeparator {}
+            Platform.MenuItem {
+                text: "Quit"
+                onTriggered: window.quitApp()
+            }
+        }
+        onActivated: function (reason) {
+            if (reason === Platform.SystemTrayIcon.Trigger || reason === Platform.SystemTrayIcon.DoubleClick)
+                window.showWindow()
+        }
+    }
 
     header: Rectangle {
         height: 48

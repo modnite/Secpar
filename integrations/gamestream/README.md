@@ -35,7 +35,8 @@ whole media pipeline with Secpar-specific scheduling again.
   media implementation is unchanged. Small reviewed patches set a separate
   Secpar settings identity, internal executable name and Alt+F fullscreen shortcut. A managed-pairing
   environment flag exits the standard CLI pairing flow with success/failure instead
-  of leaving a confirmation dialog open; upstream crypto is unchanged.
+  of leaving a confirmation dialog open; upstream crypto is unchanged. A third
+  patch adds the Secpar in-stream menu (`0003`), described below.
 - Actual worker `--version` and `stream --help` run with no network, user home,
   audio, display or GPU mounts. A source audit matches511 tracked files, including
   pinned nested dependencies. Stripped worker2.2MiB (runtime libraries not included).
@@ -61,6 +62,107 @@ sh integrations/gamestream/build-linux-client.sh /tmp/secpar-qt-source
 No installer, system service, firewall rule or public release is created. Packaging
 must put this private executable and its libraries inside the single Secpar app.
 Do not offer another client download or ask users to install Moonlight separately.
+
+## The Secpar stream menu
+
+`patches/moonlight-qt/0003-secpar-in-stream-menu.patch` adds a floating menu over
+the video. It is drawn through the renderer's overlay channel, so it appears in
+windowed and fullscreen mode and in every renderer Moonlight selects. Upstream
+decoding, audio, pacer and crypto code is untouched.
+
+- Button: 40 px, translucent, with the approved triangle. It is anchored to the
+  top-left of the picture, 12 px inside it, and stays on screen while streaming.
+  On a 4:3 stream in a 16:9 window it sits at the top-left of the picture, not at
+  the window corner.
+- Drag it anywhere inside the picture. The place is kept as a fraction of the
+  picture area, so it survives a window resize and a fullscreen toggle, and it is
+  saved for the next stream in `secpar/buttonX` and `secpar/buttonY` under the
+  `Secpar` identity. It cannot be dragged outside the picture, or over the
+  letterbox bars. Use **Reset position** in the menu to put it back at the
+  top-left.
+- The panel uses the desktop stream menu numbers: 250 px wide, 34 px rows,
+  20 px Lucide 0.468.0 glyphs (pinned commit `f12b0de1`, ISC), near-white text,
+  mint checks, and red for Disconnect. It opens to the right of the button, or to
+  the left when the button is near the right edge, and stays inside the picture.
+- Rows: Window/Fullscreen, Quality, Players and stats, Reset position, then
+  Disconnect. The Players page toggles the stats overlay and lists the attached
+  controllers with their player numbers.
+- There is no Files row. This component has no file transfer, so the row would
+  be a button that does nothing.
+
+### Changing the size while a stream runs
+
+The Quality page lists the size the stream is running at first, then 1280x720,
+1920x1080, 2560x1440 and 3840x2160, with the current one checked. Picking
+another sends this to the local background part, on the same channel the Secpar
+window uses:
+
+    {"do":"resolution","width":1280,"height":720}
+
+The background part carries it over the tunnel to the host engine
+(`docs/live-resolution.md`). A status request on the same channel first tells the
+page whether a size change is possible at all:
+
+- **Channels.** Windows named pipe `secpar-service`, Linux
+  `$XDG_RUNTIME_DIR/secpar-service.sock`. `SECPAR_SERVICE_CHANNEL` overrides the
+  name for a development build.
+- **While waiting** the page says "Changing to 1280 × 720…" and the rows stay
+  read-only until the picture reports the new size. The check mark and the
+  numbers come from the decoded frame, so they show what the stream really is,
+  not what was asked for.
+- **When it cannot work** the rows are read-only and the page says why: no
+  Secpar background part on this computer, not connected through the app, the
+  app refused the change, or only the owner may change it. A component run
+  outside Secpar therefore keeps the read-only page.
+- The size change keeps the stream running: the host rebuilds its encoder and
+  does not restart capture. Bitrate, frame rate, codec and the hardware/software
+  decoder are shown read-only, because they cannot change inside a session.
+
+### Chords
+
+The three chords work whether or not the menu is open, and none of them reaches
+the host:
+
+| Setting key | Environment override | Default | Action |
+| --- | --- | --- | --- |
+| `secpar/chordMenu` | `SECPAR_CHORD_MENU` | Ctrl+Alt+S | Open or close the menu |
+| `secpar/chordFullscreen` | `SECPAR_CHORD_FULLSCREEN` | Ctrl+Alt+W | Window or fullscreen |
+| `secpar/chordDisconnect` | `SECPAR_CHORD_DISCONNECT` | Ctrl+Alt+Q | End the stream |
+
+The keys live in the component's own `SecparStream.conf` under the `Secpar`
+identity, so a launcher can set them there or in the environment before starting
+the component. Each value is a `Ctrl`/`Alt`/`Shift` combination plus one key. A
+value with a function key, with the Windows key, or without a modifier is
+rejected and the default is used, and the component logs that it did.
+
+While the menu is open it owns the pointer and the keyboard, and nothing it
+consumes reaches the host. Closing it restores capture only if capture was
+active when it opened. Escape closes it, the arrow keys and Enter move and
+select, and Backspace goes back one page. The button and its drag need the same
+released pointer a click always needed, so use the chord first when the stream
+has the mouse.
+
+### Where each renderer puts it
+
+The overlay channel used to place every overlay at the bottom-left of the frame,
+which is where Moonlight's performance overlay belongs. The Secpar image carries
+its own place in window pixels and each renderer applies it in its own
+coordinates:
+
+| Renderer | Placement |
+| --- | --- |
+| D3D11VA, DXVA2 | x and y as given, with y flipped because this path counts from the bottom |
+| SDL, libplacebo, VDPAU, DRM | x and y as given |
+| EGL (OpenGL) | x as given, y flipped into GL's bottom-left origin |
+| VAAPI | converted into the source surface's pixels, so on that path the button scales with the picture |
+
+Moonlight's own debug and status overlays keep their previous positions.
+
+What was run on 2026-11-15: the D3D11VA path on Windows, windowed and fullscreen,
+with the menu anchored to the picture, dragged to the bottom-right corner, kept
+there across a resize and a new stream, reset from the menu, and a real size
+change from 1024x768 to 1280x720 driven from the Quality page. The other renderer
+paths above were written but not run here.
 
 ## Build the Android core harness
 

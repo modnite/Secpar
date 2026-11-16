@@ -518,10 +518,11 @@ builds on instead of rewriting. See `integrations/gamestream/README.md`.
   to its local management port pinned to its certificate, and keeps a durable
   record of which client certificate belongs to which Secpar device, with
   revocation.
-- `integrations/gamestream/patches/sunshine`: two patches, 221 lines together.
+- `integrations/gamestream/patches/sunshine`: three patches, 549 lines together.
   One binds pairing approval to a client certificate; one reads the management
-  password from a pipe instead of the command line. Both build scripts now apply
-  them. These count toward the "few and separate" patch set in risk 6.
+  password from a pipe instead of the command line; one changes the size of a
+  running stream on request (`docs/live-resolution.md`). Both build scripts now
+  apply them. These count toward the "few and separate" patch set in risk 6.
 - `integrations/gamestream/patches/moonlight-qt`: two patches giving the client a
   separate Secpar settings identity and a pairing mode that exits instead of
   showing a dialog.

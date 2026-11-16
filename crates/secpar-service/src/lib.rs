@@ -11,8 +11,9 @@ use secpar_core::{
     hosting::{Access, Refreshed},
     identity::{hex, unhex},
 };
-use secpar_hosting::{request_pairing, Engine, Hosting, Pairing, ENGINE_BASE};
-use secpar_tunnel::{Identity, Ports};
+use secpar_hosting::{request_pairing, Engine, Hosting, Pairing, Still, ENGINE_BASE, PREVIEW_TTL};
+use secpar_tunnel::{Fingerprint, Identity, Ports};
+use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -23,6 +24,9 @@ use std::{
 };
 
 pub mod channel;
+pub mod clipboard;
+pub mod files;
+pub mod preview;
 
 pub struct Settings {
     /// The account service this device belongs to.
@@ -50,11 +54,33 @@ enum Request {
     Disconnect,
     /// Have the other computer complete the stream component's pairing.
     Pair { pairing: Pairing },
+    /// Ask the computer this one is connected to for a different stream size.
+    Resolution { width: u32, height: u32 },
+    /// Share this computer's clipboard text with the computer it is connected to.
+    Clipboard { on: bool },
+    /// Send the file at this path to the computer it is connected to.
+    SendFile { path: String },
+    /// How far the files this computer sends have got, and the last one that
+    /// arrived here.
+    Transfers,
+    /// A still of one of the account's computers, for its tile. `host` is that
+    /// computer's certificate fingerprint and `addresses` where it can be
+    /// reached. An empty list means the account lists it as offline, and an
+    /// offline computer is never asked.
+    Preview {
+        host: String,
+        max_width: u32,
+        #[serde(default)]
+        addresses: Vec<String>,
+    },
 }
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
+/// How long one peek may take before it is given up, so a computer that does not
+/// answer cannot hold the queue behind it.
+const PEEK_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
 fn failed(code: &str) -> Value {
     json!({"ok": false, "error": code})
 }
@@ -63,24 +89,50 @@ pub struct Core<E: Engine> {
     identity: Identity,
     account: account::Service,
     /// Present when this computer hosts.
-    hosting: Option<Hosting<E>>,
+    hosting: Option<Arc<Hosting<E>>>,
+    /// This computer's clipboard, shared with the connected computer while
+    /// there is one.
+    clipboard: Arc<clipboard::Shared>,
+    /// Where files from other computers are written.
+    files: Arc<files::Downloads>,
+    /// Files this computer sends, and how far they have got.
+    transfers: Arc<files::Transfers>,
     /// The tunnel to the computer this one is connected to, if any.
-    outgoing: tokio::sync::Mutex<Option<secpar_tunnel::Client>>,
+    outgoing: tokio::sync::Mutex<Option<Arc<secpar_tunnel::Client>>>,
+    /// One peek at a time, so a page of tiles queues here instead of opening a
+    /// tunnel for each computer at once.
+    peeking: tokio::sync::Mutex<()>,
+    /// When each computer was last asked for a still, so the same one is not
+    /// asked again while its picture is still fresh.
+    peeked: std::sync::Mutex<std::collections::HashMap<Fingerprint, std::time::Instant>>,
 }
 impl<E: Engine> Core<E> {
     /// Starts with the device's identity. With an engine this computer hosts:
     /// the tunnel opens for whoever the saved access list still allows.
     pub async fn start(settings: Settings, identity: Identity, engine: Option<Arc<E>>) -> Result<Arc<Self>, &'static str> {
         std::fs::create_dir_all(&settings.state).map_err(|_| "The state folder cannot be used")?;
+        let clipboard = clipboard::Shared::start(true);
+        let files = files::Downloads::open();
         let hosting = match engine {
             None => None,
             Some(engine) => {
                 let access = Arc::new(Access::open(settings.account.origin(), identity.fingerprint(), settings.state.join("access.json"), now()));
                 let loopback = "127.0.0.1".parse().map_err(|_| "No loopback address")?;
-                Some(Hosting::start(settings.bind, &identity, access, engine, loopback, Ports::engine(ENGINE_BASE)).await.map_err(|e| e.0)?)
+                let hosting = Hosting::start(settings.bind, &identity, access, engine, clipboard.clone(), files.clone(), Arc::new(preview::Screen), loopback, Ports::engine(ENGINE_BASE)).await.map_err(|e| e.0)?;
+                Some(Arc::new(hosting))
             }
         };
-        Ok(Arc::new(Self { identity, account: settings.account, hosting, outgoing: tokio::sync::Mutex::new(None) }))
+        Ok(Arc::new(Self {
+            identity,
+            account: settings.account,
+            hosting,
+            clipboard,
+            files,
+            transfers: Default::default(),
+            outgoing: tokio::sync::Mutex::new(None),
+            peeking: tokio::sync::Mutex::new(()),
+            peeked: Default::default(),
+        }))
     }
     /// The tunnel's address when this computer hosts.
     pub fn tunnel_address(&self) -> Option<SocketAddr> {
@@ -99,6 +151,45 @@ impl<E: Engine> Core<E> {
         if let Some(hosting) = &self.hosting {
             hosting.keep_current(&self.account, &self.identity).await;
         }
+    }
+
+    /// Opens a tunnel to `host` at `addresses` for one question and drops it
+    /// again. No engine port is taken and no local socket is kept, so a stream's
+    /// own tunnel keeps its addresses while a still is fetched.
+    ///
+    /// One peek runs at a time, and the same computer is not asked again while
+    /// its picture is still fresh: a page of tiles queues here rather than
+    /// opening a tunnel per tile at once.
+    async fn peek(&self, host: Fingerprint, addresses: &[SocketAddr], max_width: u32) -> Option<Still> {
+        let _one_at_a_time = self.peeking.lock().await;
+        {
+            let mut asked = self.peeked.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if asked.get(&host).is_some_and(|last| last.elapsed() < PREVIEW_TTL) {
+                return None;
+            }
+            asked.insert(host, std::time::Instant::now());
+        }
+        let listen = "127.0.0.2".parse().ok()?;
+        let asking = async {
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+            // No engine ports: nothing here can collide with a stream.
+            let none = Ports { tcp: Vec::new(), udp: Vec::new() };
+            let tunnel = secpar_tunnel::connect_on(socket, addresses, &self.identity, host, listen, none).await.ok()?;
+            secpar_hosting::preview(&tunnel, max_width).await
+        };
+        // A computer that does not answer must not hold the queue for long.
+        tokio::time::timeout(PEEK_WAIT, asking).await.ok().flatten()
+    }
+
+    /// Answers a still request with the picture from the tunnel it came on.
+    fn still_answer(still: Still) -> Value {
+        json!({
+            "ok": true,
+            "jpeg": base64::engine::general_purpose::STANDARD.encode(&still.jpeg),
+            "width": still.width,
+            "height": still.height,
+            "at": still.at,
+        })
     }
 
     /// Answers one line from the window.
@@ -156,7 +247,10 @@ impl<E: Engine> Core<E> {
                 let Ok(listen) = "127.0.0.2".parse() else { return failed("no_socket") };
                 match secpar_tunnel::connect_on(socket, &addresses, &self.identity, host, listen, Ports::engine(ENGINE_BASE)).await {
                     Ok(tunnel) => {
-                        *outgoing = Some(tunnel);
+                        let tunnel = Arc::new(tunnel);
+                        *outgoing = Some(tunnel.clone());
+                        // The clipboard follows this tunnel until it is let go.
+                        tokio::spawn(clipboard::follow(self.clipboard.clone(), Arc::downgrade(&tunnel)));
                         json!({"ok": true, "stream_address": format!("127.0.0.2:{ENGINE_BASE}")})
                     }
                     Err(_) => failed("not_connected"),
@@ -170,6 +264,60 @@ impl<E: Engine> Core<E> {
                 let outgoing = self.outgoing.lock().await;
                 let Some(tunnel) = outgoing.as_ref() else { return failed("not_connected") };
                 json!({"ok": true, "answer": request_pairing(tunnel, &pairing).await})
+            }
+            Request::Resolution { width, height } => {
+                let outgoing = self.outgoing.lock().await;
+                let Some(tunnel) = outgoing.as_ref() else { return failed("not_connected") };
+                match secpar_hosting::set_resolution(tunnel, width, height).await {
+                    Ok(streaming) => json!({"ok": true, "streaming": streaming}),
+                    Err(code) => failed(code),
+                }
+            }
+            Request::Clipboard { on } => {
+                self.clipboard.set_sharing(on);
+                json!({"ok": true, "sharing": on})
+            }
+            Request::SendFile { path } => {
+                let outgoing = self.outgoing.lock().await.clone();
+                let Some(tunnel) = outgoing else { return failed("not_connected") };
+                match files::send(self.transfers.clone(), tunnel, PathBuf::from(path)) {
+                    Ok(id) => {
+                        let transfer = self.transfers.list().into_iter().find(|t| t.id == id);
+                        json!({"ok": true, "transfer": transfer})
+                    }
+                    Err(code) => failed(code),
+                }
+            }
+            Request::Transfers => json!({
+                "ok": true,
+                "transfers": self.transfers.list(),
+                "received": self.files.last(),
+            }),
+            Request::Preview { host, max_width, addresses } => {
+                let unavailable = json!({"ok": false, "err": "not_available"});
+                let Some(host) = unhex(&host) else { return unavailable };
+                // A computer this window is already connected to answers on the
+                // tunnel that is open, without a second one being opened.
+                let open = {
+                    let outgoing = self.outgoing.lock().await;
+                    outgoing.as_ref().filter(|tunnel| tunnel.host() == host && !tunnel.is_closed()).cloned()
+                };
+                if let Some(tunnel) = open {
+                    return match secpar_hosting::preview(&tunnel, max_width).await {
+                        Some(still) => Self::still_answer(still),
+                        None => unavailable,
+                    };
+                }
+                // No addresses means the account lists it as offline, and an
+                // offline computer is never asked.
+                let addresses: Vec<SocketAddr> = addresses.iter().filter_map(|address| address.parse().ok()).collect();
+                if addresses.is_empty() {
+                    return unavailable;
+                }
+                match self.peek(host, &addresses, max_width).await {
+                    Some(still) => Self::still_answer(still),
+                    None => unavailable,
+                }
             }
         }
     }

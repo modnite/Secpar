@@ -1,6 +1,6 @@
 //! Real tunnels and a real access list, with a stand-in for the engine.
 use super::*;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::{
     rand::SystemRandom,
     signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING},
@@ -16,6 +16,8 @@ struct FakeEngine {
     revoked: Mutex<Vec<(String, String)>>,
     /// Stream identities that were taken away.
     dead: Mutex<Vec<String>>,
+    /// Stream sizes a device asked for, in order.
+    sizes: Mutex<Vec<(u32, u32)>>,
 }
 impl Engine for FakeEngine {
     fn approve<'a>(&'a self, owner: &'a str, device: &'a str, pairing: &'a Pairing, name: &'a str) -> Pending<'a, Result<(), Refusal>> {
@@ -45,6 +47,12 @@ impl Engine for FakeEngine {
     }
     fn granted(&self) -> Pending<'_, Vec<(String, String)>> {
         Box::pin(async move { self.grants.lock().unwrap().iter().map(|g| (g.0.clone(), g.1.clone())).collect() })
+    }
+    fn resolution(&self, width: u32, height: u32) -> Pending<'_, Result<bool, Refusal>> {
+        Box::pin(async move {
+            self.sizes.lock().unwrap().push((width, height));
+            Ok(true)
+        })
     }
 }
 
@@ -79,12 +87,27 @@ fn pairing(certificate: &str) -> Pairing {
     Pairing { client_id: "0123456789ABCDEF".into(), certificate_sha256: certificate.repeat(32), pin: "1234".into() }
 }
 
+/// A stand-in for this computer's screen: it counts the pictures it is asked to
+/// take and describes each one with its own width.
+#[derive(Default)]
+struct FakeScreen {
+    taken: Mutex<Vec<u32>>,
+}
+impl Previews for FakeScreen {
+    fn still(&self, max_width: u32) -> Option<Still> {
+        self.taken.lock().unwrap().push(max_width);
+        // The smallest JPEG the answer check accepts: a start and an end marker.
+        Some(Still { jpeg: vec![0xFF, 0xD8, 0xFF, 0xD9], width: max_width, height: max_width * 9 / 16, at: now() })
+    }
+}
+
 struct World {
     signer: Signer,
     host: Identity,
     laptop: Identity,
     phone: Identity,
     engine: Arc<FakeEngine>,
+    screen: Arc<FakeScreen>,
     hosting: Hosting<FakeEngine>,
     _folder: tempfile::TempDir,
 }
@@ -96,9 +119,10 @@ impl World {
         let access = Arc::new(Access::open(ORIGIN, host.fingerprint(), folder.path().join("access.json"), now()));
         access.update(&list(&signer, &host, &[&laptop], vec![guest(&phone, phone_trusted)]), &[signer.key.clone()], now()).unwrap();
         let engine = Arc::new(FakeEngine::default());
+        let screen = Arc::new(FakeScreen::default());
         let none = secpar_tunnel::Ports { tcp: vec![], udp: vec![] };
-        let hosting = Hosting::start("127.0.0.1:0".parse().unwrap(), &host, access, engine.clone(), "127.0.0.1".parse().unwrap(), none).await.unwrap();
-        Self { signer, host, laptop, phone, engine, hosting, _folder: folder }
+        let hosting = Hosting::start("127.0.0.1:0".parse().unwrap(), &host, access, engine.clone(), Arc::new(NoClipboard), Arc::new(NoFiles), screen.clone(), "127.0.0.1".parse().unwrap(), none).await.unwrap();
+        Self { signer, host, laptop, phone, engine, screen, hosting, _folder: folder }
     }
     async fn connect(&self, device: &Identity) -> secpar_tunnel::Result<secpar_tunnel::Client> {
         let none = secpar_tunnel::Ports { tcp: vec![], udp: vec![] };
@@ -184,6 +208,19 @@ async fn a_request_after_access_ended_is_refused_even_on_an_open_tunnel() {
 }
 
 #[tokio::test]
+async fn only_the_owners_own_device_changes_the_stream_size() {
+    let world = World::new(false).await;
+    let laptop = world.connect(&world.laptop).await.unwrap();
+    assert_eq!(set_resolution(&laptop, 1280, 720).await, Ok(true));
+    assert_eq!(*world.engine.sizes.lock().unwrap(), vec![(1280, 720)]);
+    // A friend watching does not choose the size of the picture on this computer.
+    assert!(world.hosting.accept(&world.phone.fingerprint(), now() + 600).await);
+    let phone = world.connect(&world.phone).await.unwrap();
+    assert_eq!(set_resolution(&phone, 640, 480).await, Err("not_allowed"));
+    assert_eq!(world.engine.sizes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn without_a_list_nobody_gets_in_and_nothing_is_revoked() {
     let world = World::new(true).await;
     let tunnel = world.connect(&world.laptop).await.unwrap();
@@ -194,4 +231,65 @@ async fn without_a_list_nobody_gets_in_and_nothing_is_revoked() {
     assert!(world.connect(&world.laptop).await.is_err());
     // Losing the list is not the same as the device leaving it.
     assert!(world.engine.revoked.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_still_of_the_screen_is_given_to_the_owners_own_device_only() {
+    let world = World::new(false).await;
+    let laptop = world.connect(&world.laptop).await.unwrap();
+    let still = preview(&laptop, 480).await.expect("the owner's laptop sees this computer's screen");
+    assert_eq!((still.width, still.height), (480, 270));
+    assert_eq!(&still.jpeg[..2], &[0xFF, 0xD8]);
+    assert!(still.at > 0);
+    assert_eq!(*world.screen.taken.lock().unwrap(), vec![480]);
+    // A friend who may use the keyboard is still not shown the screen.
+    assert!(world.hosting.accept(&world.phone.fingerprint(), now() + 600).await);
+    let phone = world.connect(&world.phone).await.unwrap();
+    assert!(preview(&phone, 480).await.is_none());
+    assert_eq!(*world.screen.taken.lock().unwrap(), vec![480], "a friend's request takes no picture");
+}
+
+#[tokio::test]
+async fn a_still_is_kept_for_its_window_and_the_width_is_clamped_both_ways() {
+    let world = World::new(false).await;
+    let laptop = world.connect(&world.laptop).await.unwrap();
+    assert_eq!(preview(&laptop, 4000).await.unwrap().width, MAX_PREVIEW_WIDTH);
+    assert_eq!(preview(&laptop, 1).await.unwrap().width, MIN_PREVIEW_WIDTH);
+    assert_eq!(preview(&laptop, 0).await.unwrap().width, DEFAULT_PREVIEW_WIDTH);
+    // Each width is its own picture, and each was taken once.
+    assert_eq!(*world.screen.taken.lock().unwrap(), vec![MAX_PREVIEW_WIDTH, MIN_PREVIEW_WIDTH, DEFAULT_PREVIEW_WIDTH]);
+    // Asking again straight away is answered from the cache: no second capture.
+    assert_eq!(preview(&laptop, 440).await.unwrap().width, 440);
+    assert!(preview(&laptop, 440).await.is_some());
+    assert!(preview(&laptop, 440).await.is_some());
+    let taken = world.screen.taken.lock().unwrap().clone();
+    assert_eq!(taken, vec![MAX_PREVIEW_WIDTH, MIN_PREVIEW_WIDTH, DEFAULT_PREVIEW_WIDTH, 440], "one capture per width inside the window");
+}
+
+#[tokio::test]
+async fn a_computer_with_no_screen_to_show_answers_not_available() {
+    let (signer, host, laptop) = (signer(), Identity::generate().unwrap(), Identity::generate().unwrap());
+    let folder = tempfile::tempdir().unwrap();
+    let access = Arc::new(Access::open(ORIGIN, host.fingerprint(), folder.path().join("access.json"), now()));
+    access.update(&list(&signer, &host, &[&laptop], vec![]), &[signer.key.clone()], now()).unwrap();
+    let none = secpar_tunnel::Ports { tcp: vec![], udp: vec![] };
+    let hosting = Hosting::start(
+        "127.0.0.1:0".parse().unwrap(),
+        &host,
+        access,
+        Arc::new(FakeEngine::default()),
+        Arc::new(NoClipboard),
+        Arc::new(NoFiles),
+        Arc::new(NoPreviews),
+        "127.0.0.1".parse().unwrap(),
+        none.clone(),
+    )
+    .await
+    .unwrap();
+    let tunnel = secpar_tunnel::connect(hosting.tunnel().local_addr().unwrap(), &laptop, host.fingerprint(), "127.0.0.1".parse().unwrap(), none).await.unwrap();
+    let request = serde_json::to_vec(&serde_json::json!({"app": {"preview": {"max_width": 480}}})).unwrap();
+    let answer: serde_json::Value = serde_json::from_slice(&tunnel.app_request(&request).await.unwrap()).unwrap();
+    // A computer with nothing to capture gives the protocol's refusal, not an error.
+    assert_eq!((answer["ok"].clone(), answer["err"].clone()), (serde_json::json!(false), serde_json::json!("not_available")));
+    assert!(preview(&tunnel, 480).await.is_none());
 }

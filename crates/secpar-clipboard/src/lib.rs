@@ -10,7 +10,9 @@ pub struct Bridge {
     read: mpsc::Receiver<Event>,
     live: Arc<AtomicBool>,
 }
-trait Backend: Send+'static {
+/// The OS clipboard as this crate uses it. Only `arboard` by default; a
+/// stand-in lets a test run without touching the real clipboard.
+pub trait Backend: Send+'static {
     fn read(&mut self)->Option<String>;
     fn write(&mut self,text:&str)->bool;
 }
@@ -20,6 +22,8 @@ impl Backend for arboard::Clipboard {
 }
 impl Bridge {
     pub fn start()->Self {Self::spawn(||arboard::Clipboard::new().map_err(|_|()))}
+    /// Like `start`, on a clipboard the caller supplies instead of the OS one.
+    pub fn on<B:Backend>(open:impl FnOnce()->Result<B,()>+Send+'static)->Self {Self::spawn(open)}
     fn spawn<B:Backend>(open:impl FnOnce()->Result<B,()>+Send+'static)->Self {
         let (write,commands)=mpsc::sync_channel::<String>(4);
         let (events,read)=mpsc::sync_channel(2);

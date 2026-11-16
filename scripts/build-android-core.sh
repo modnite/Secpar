@@ -18,6 +18,8 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$bin/aarch64-linux-android26-c
 export CC_aarch64_linux_android="$bin/aarch64-linux-android26-clang$ext"
 export AR_aarch64_linux_android="$bin/llvm-ar"
 cd "$here/crates/secpar-android"
+# Built for size: the library ships inside the APK on every phone.
+export CARGO_PROFILE_RELEASE_OPT_LEVEL=z CARGO_PROFILE_RELEASE_LTO=fat CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 CARGO_PROFILE_RELEASE_STRIP=symbols
 cargo build --release --target aarch64-linux-android
 target=${CARGO_TARGET_DIR:-target}
 mkdir -p "$out"

@@ -10,12 +10,18 @@ Rectangle {
     property bool online
     property string route      // "This network", "Direct", "Relay" or empty
     property string status     // shown instead of the online state when set
+    property url preview       // a still of its screen, when it sent one
     property int previewLimit: 10000   // tallest the preview may be
     property bool connected: false
     property bool streaming: false
     property bool busy: false
+    // The row with "Send a file…" only exists while this computer is connected.
+    property bool sendVisible: false
+    // How far a file being sent to it has got, or that it was sent.
+    property string transferText
     signal connectRequested()
     signal disconnectRequested()
+    signal sendRequested()
 
     radius: Theme.radius
     color: Theme.surface
@@ -29,7 +35,8 @@ Rectangle {
         anchors.right: parent.right
         spacing: 0
 
-        // Preview, 16:9. Until a preview has been received it shows the monitor icon.
+        // Preview, 16:9. A still of its screen once one has arrived; until then,
+        // and on a computer that sends none, the monitor icon.
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: Math.min(Math.round(width * 9 / 16), tile.previewLimit)
@@ -37,8 +44,18 @@ Rectangle {
             topLeftRadius: Theme.radius - 1
             topRightRadius: Theme.radius - 1
             color: Theme.background
+            clip: true
+            Image {
+                id: still
+                anchors.fill: parent
+                source: tile.preview
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+                visible: status === Image.Ready
+            }
             Glyph {
                 anchors.centerIn: parent
+                visible: !still.visible
                 icon: "monitor"
                 size: 32
                 color: tile.online ? Theme.textDim : Theme.border
@@ -80,9 +97,32 @@ Rectangle {
             }
             FlatButton {
                 text: tile.connected ? "Disconnect" : "Connect"
-                primary: !tile.connected
+                primary: !tile.connected && enabled
                 enabled: tile.connected || (tile.online && !tile.busy)
+                visible: tile.connected || tile.online
                 onClicked: tile.connected ? tile.disconnectRequested() : tile.connectRequested()
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.gap
+            Layout.rightMargin: Theme.gap
+            Layout.bottomMargin: Theme.gap
+            spacing: Theme.gap
+            visible: tile.sendVisible
+            FlatButton {
+                text: "Send a file…"
+                // One file at a time towards this computer.
+                enabled: tile.transferText.indexOf("Sending ") !== 0
+                onClicked: tile.sendRequested()
+            }
+            Text {
+                Layout.fillWidth: true
+                text: tile.transferText
+                color: Theme.textDim
+                font.pixelSize: Theme.smallTextSize
+                elide: Text.ElideMiddle
+                visible: tile.transferText.length > 0
             }
         }
     }

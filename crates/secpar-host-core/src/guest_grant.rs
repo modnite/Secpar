@@ -145,6 +145,7 @@ pub fn verify(
         "mouse",
         "clipboard",
         "files",
+        "browse",
     ];
     let mut permissions = BTreeSet::new();
     for permission in claims.permissions {
