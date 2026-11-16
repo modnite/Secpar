@@ -1,6 +1,6 @@
 [package]
 name = "secpar-host"
-version = "3.20.6"
+version = "4.0.0"
 description = "Secpar Host"
 edition = "2021"
 license = "GPL-3.0"
@@ -29,6 +29,8 @@ tauri-build = { version = "2", features = [], optional = true }
 [dependencies]
 secpar-host-core = { path = "../../crates/secpar-host-core" }
 secpar-network = { path = "../../crates/secpar-network" }
+secpar-gamestream-host = { path = "../../crates/secpar-gamestream-host" }
+secpar-tunnel = { path = "../../crates/secpar-tunnel" }
 base64 = "0.23.1"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "alloc"] }
 igd-next = { version = "0.18.0", default-features = false, features = ["aio_tokio"] }

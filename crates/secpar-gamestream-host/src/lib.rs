@@ -37,6 +37,8 @@ pub enum Capture {
     #[default]
     Automatic,
     X11,
+    /// KDE Plasma on Wayland, through KWin's own screen capture.
+    KWin,
 }
 #[derive(Clone, Copy, Default)]
 pub enum Encoder {
@@ -74,8 +76,15 @@ impl Config {
     fn text(&self) -> Result<String> {
         self.validate()?;
         let mut text = format!(
-            "sunshine_name = Secpar\nport = {}\norigin_web_ui_allowed = pc\n",
+            // The engine listens on this computer only; devices reach it through
+            // the Secpar tunnel.
+            "sunshine_name = Secpar\nport = {}\norigin_web_ui_allowed = pc\nbind_address = 127.0.0.1\n",
             self.base_port
+        );
+        // The engine must not change the computer it runs on: no audio driver
+        // install, no display mode changes, no tray icon of its own.
+        text.push_str(
+            "install_steam_audio_drivers = disabled\ndd_configuration_option = disabled\nsystem_tray = disabled\n",
         );
         for (key, file) in [
             ("file_state", "clients.json"),
@@ -86,6 +95,9 @@ impl Config {
             ("log_path", "host.log"),
         ] {
             text.push_str(&format!("{key} = {}\n", self.state.join(file).display()));
+        }
+        if matches!(self.capture, Capture::KWin) {
+            text.push_str("capture = kwin\n");
         }
         if matches!(self.capture, Capture::X11) {
             text.push_str("capture = x11\n");
@@ -255,7 +267,9 @@ impl Host {
                 return Err(Error("Could not contain the bundled host process"));
             }
         };
-        let deadline = Instant::now() + Duration::from_secs(15);
+        // On Windows the engine took about 30 seconds to open its management
+        // port on the first test PC, most of it before encoder detection.
+        let deadline = Instant::now() + Duration::from_secs(60);
         let mut api = None;
         loop {
             if child
@@ -403,6 +417,27 @@ impl Host {
         }
         Ok(())
     }
+    /// Every grant made so far, including revoked ones.
+    pub async fn grants(&self) -> Vec<Grant> {
+        self.journal.lock().await.records().to_vec()
+    }
+    /// Changes the size of the stream this computer is hosting. The engine builds
+    /// its encoder again at the requested size and keeps capturing the same
+    /// display, so the connected device reconfigures from the next sequence
+    /// header. `false` means no stream was running and nothing was changed.
+    pub async fn resolution(&self, width: u32, height: u32) -> Result<bool> {
+        if !(64..=7680).contains(&width) || !(64..=7680).contains(&height) || width % 2 != 0 || height % 2 != 0 {
+            return Err(Error("A stream size must be even numbers from 64 to 7680"));
+        }
+        let value = self
+            .api
+            .request(reqwest::Method::POST, "secpar/resolution", Some(json!({"width": width, "height": height})))
+            .await?;
+        if value["status"] != true {
+            return Err(Error("Bundled host refused the stream size"));
+        }
+        Ok(value["streaming"] == true)
+    }
     /// Revoke every client granted to this owner's device. Recorded durably
     /// first, then removed from the host and verified gone.
     pub async fn revoke(&self, owner: &str, device: &str) -> Result<usize> {
@@ -477,11 +512,19 @@ impl Host {
 }
 fn command(executable: &Path) -> Command {
     let mut command = Command::new(executable);
+    // The engine finds its assets relative to where it is started.
+    if let Some(dir) = executable.parent() {
+        command.current_dir(dir);
+    }
+    command.stdin(Stdio::null()).kill_on_drop(true);
+    // The engine's own output goes beside it, not to a null handle: when it
+    // fails, this file is the only record of why.
+    let logs = executable.parent().map(|dir| (dir.join("engine.out.log"), dir.join("engine.err.log")));
+    let out = logs.as_ref().and_then(|(path, _)| std::fs::OpenOptions::new().create(true).append(true).open(path).ok());
+    let err = logs.as_ref().and_then(|(_, path)| std::fs::OpenOptions::new().create(true).append(true).open(path).ok());
     command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+        .stdout(out.map(Stdio::from).unwrap_or_else(Stdio::null))
+        .stderr(err.map(Stdio::from).unwrap_or_else(Stdio::null));
     contain::prepare(&mut command);
     #[cfg(windows)]
     command.creation_flags(0x08000000); // CREATE_NO_WINDOW
@@ -585,7 +628,7 @@ impl Api {
         path: &str,
         body: Option<Value>,
     ) -> Result<Value> {
-        if !matches!(path, "config" | "pin" | "clients/list" | "clients/unpair") {
+        if !matches!(path, "config" | "pin" | "clients/list" | "clients/unpair" | "secpar/resolution") {
             return Err(Error("Unknown private host operation"));
         }
         let mut request = self

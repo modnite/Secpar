@@ -88,3 +88,84 @@ pub fn back_button(ui:&mut egui::Ui)->bool {
     crate::icons::paint(ui,crate::icons::Icon::Back,response.rect.shrink(6.),TEXT);
     response.clicked()
 }
+
+/// A titled settings group: one surface, its rows inside, full width.
+pub fn group<R>(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    surface()
+        .inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 6 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.;
+            ui.label(RichText::new(title).size(12.).color(MUTED));
+            ui.add_space(2.);
+            contents(ui)
+        })
+        .inner
+}
+
+/// How wide the value of a settings row is: about half the row, within limits.
+pub fn value_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() * 0.5).clamp(120., 220.)
+}
+
+/// One settings row: the label at the left, its control at the right edge.
+pub fn row<R>(ui: &mut egui::Ui, label: &str, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let width = ui.available_width();
+    let value = value_width(ui);
+    ui.allocate_ui_with_layout(egui::vec2(width, CONTROL + 8.), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(egui::vec2((width - value - 8.).max(60.), CONTROL), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.add(egui::Label::new(label).truncate());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), contents).inner
+    })
+    .inner
+}
+
+/// An on and off switch. Returns true when it was flipped.
+pub fn switch(ui: &mut egui::Ui, value: &mut bool, label: &str) -> bool {
+    let (rect, mut response) = ui.allocate_exact_size(egui::vec2(34., 28.), egui::Sense::click());
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
+    }
+    let on = *value;
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), on, label));
+    let track = egui::Rect::from_center_size(rect.center(), egui::vec2(32., 18.));
+    ui.painter().rect_filled(track, 9, if on { ACCENT } else { Color32::from_rgb(62, 73, 87) });
+    let x = if on { track.right() - 9. } else { track.left() + 9. };
+    ui.painter().circle_filled(egui::pos2(x, track.center().y), 6., if on { Color32::from_rgb(7, 38, 30) } else { Color32::from_rgb(205, 216, 226) });
+    response.changed()
+}
+
+/// A row whose value is a switch.
+pub fn switch_row(ui: &mut egui::Ui, value: &mut bool, label: &str) -> bool {
+    row(ui, label, |ui| switch(ui, value, label))
+}
+
+/// A segmented control: one bordered strip, equal parts, the chosen one filled.
+/// Returns the new choice when one is clicked.
+pub fn segmented(ui: &mut egui::Ui, options: &[&str], chosen: usize) -> Option<usize> {
+    let width = ui.available_width();
+    let (outer, _) = ui.allocate_exact_size(egui::vec2(width, CONTROL + 4.), egui::Sense::hover());
+    ui.painter().rect(outer, 7, Color32::from_rgb(23, 29, 39), Stroke::new(1., LINE), egui::StrokeKind::Inside);
+    let inner = outer.shrink(2.);
+    let part = inner.width() / options.len() as f32;
+    let mut picked = None;
+    for (index, name) in options.iter().enumerate() {
+        let rect = egui::Rect::from_min_size(egui::pos2(inner.left() + part * index as f32, inner.top()), egui::vec2(part, inner.height()));
+        let response = ui.interact(rect, ui.id().with(("segment", index)), egui::Sense::click());
+        let on = index == chosen;
+        if on {
+            ui.painter().rect_filled(rect, 5, Color32::from_rgb(37, 45, 58));
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, 5, Color32::from_rgb(29, 36, 47));
+        }
+        let size = if ui.fonts_mut(|f| f.layout_no_wrap((*name).into(), egui::FontId::proportional(13.), TEXT).size().x) > part - 8. { 12. } else { 13. };
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, *name, egui::FontId::proportional(size), if on { ACCENT } else { MUTED });
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, on, *name));
+        if response.clicked() && !on {
+            picked = Some(index);
+        }
+    }
+    picked
+}

@@ -169,37 +169,48 @@ private fun FriendComputersList(state: AccountUi, acts: AccountActions) {
 private fun FriendRow(friend: Friend, ownId: String, working: Boolean, acts: AccountActions) {
     val c = LocalMidnight.current
     val label = FriendsModel.label(friend, ownId)
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)).background(AvatarFill), contentAlignment = Alignment.Center) {
-            Text(FriendsModel.initial(friend.handle), color = c.accent, style = MaterialTheme.typography.bodyMedium)
-        }
-        Text(friend.handle, color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f))
-        when (label) {
-            FriendLabel.ACCEPT -> PrimaryButton(FriendsModel.ACCEPT, { acts.friend(FriendAction.ACCEPT, friend.id) }, compact = true, enabled = !working)
-            FriendLabel.FRIEND -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FriendGlyph(R.drawable.lucide_keyboard, if (friend.keyboard) "Keyboard allowed" else "Keyboard blocked", friend.keyboard)
-                FriendGlyph(R.drawable.lucide_mouse, if (friend.mouse) "Mouse allowed" else "Mouse blocked", friend.mouse)
-                FriendGlyph(if (friend.connect == "always") R.drawable.lucide_circle_check else R.drawable.lucide_circle_help,
-                    if (friend.connect == "always") "Connect any time" else "Ask first", friend.connect == "always")
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.size(32.dp).clip(RoundedCornerShape(6.dp)).background(AvatarFill), contentAlignment = Alignment.Center) {
+                Text(FriendsModel.initial(friend.handle), color = c.accent, style = MaterialTheme.typography.bodyMedium)
             }
-            else -> FriendGlyph(R.drawable.lucide_circle_help, FriendsModel.labelText(label), false)
+            Text(friend.handle, color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f))
+            when (label) {
+                FriendLabel.ACCEPT -> PrimaryButton(FriendsModel.ACCEPT, { acts.friend(FriendAction.ACCEPT, friend.id) }, compact = true, enabled = !working)
+                FriendLabel.FRIEND -> {}
+                else -> Text(FriendsModel.labelText(label), color = c.textDim, style = MaterialTheme.typography.bodySmall)
+            }
+            AnchoredMenu(friend.handle, listOf(
+                MenuItem(R.drawable.lucide_ban, FriendsModel.BLOCK) { acts.friend(FriendAction.BLOCK, friend.id) },
+                MenuItem(R.drawable.lucide_user_minus, FriendsModel.removeText(friend)) { acts.friend(FriendAction.REMOVE, friend.id) },
+            ))
         }
-        val settings = if (friend.accepted) listOf(
-            MenuItem(R.drawable.lucide_keyboard, if (friend.keyboard) "Block keyboard" else "Allow keyboard") {
-                acts.friendInput(friend.id, !friend.keyboard, null)
-            },
-            MenuItem(R.drawable.lucide_mouse, if (friend.mouse) "Block mouse" else "Allow mouse") {
-                acts.friendInput(friend.id, null, !friend.mouse)
-            },
-            MenuItem(R.drawable.lucide_circle_check, if (friend.connect == "always") "Ask me first" else "Connect any time") {
-                acts.friendSetting(friend.id, null, if (friend.connect == "always") "ask" else "always")
-            },
-        ) else emptyList()
-        AnchoredMenu(friend.handle, settings + listOf(
-            MenuItem(R.drawable.lucide_ban, FriendsModel.BLOCK) { acts.friend(FriendAction.BLOCK, friend.id) },
-            MenuItem(R.drawable.lucide_user_minus, FriendsModel.removeText(friend)) { acts.friend(FriendAction.REMOVE, friend.id) },
-        ))
+        // Secpar 3's permissions, changed in place, as on the desktop.
+        if (friend.accepted) Row(Modifier.fillMaxWidth().padding(start = 40.dp, top = 2.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlatDropdown("", if (friend.connect == "always") "Any time" else "Ask first", listOf("Any time", "Ask first"), { i ->
+                val value = if (i == 0) "always" else "ask"
+                if (value != friend.connect) acts.friendSetting(friend.id, null, value)
+            }, Modifier.weight(1f))
+            PermissionToggle(R.drawable.lucide_keyboard, "Keyboard", friend.keyboard, Modifier.weight(1f)) { acts.friendInput(friend.id, !friend.keyboard, null) }
+            PermissionToggle(R.drawable.lucide_mouse, "Mouse", friend.mouse, Modifier.weight(1f)) { acts.friendInput(friend.id, null, !friend.mouse) }
+            PermissionToggle(R.drawable.lucide_folder, "Files", friend.browse, Modifier.weight(1f)) { acts.friendBrowse(friend.id, !friend.browse) }
+        }
+    }
+}
+
+/** One permission as a toggle: glyph and word, filled when allowed. */
+@Composable
+private fun PermissionToggle(@androidx.annotation.DrawableRes icon: Int, label: String, on: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val c = LocalMidnight.current
+    Row(modifier.height(32.dp).clip(com.pcremote.ui.theme.MidnightShapes.control).background(if (on) c.surfaceHigh else c.surface)
+        .border(1.dp, if (on) c.accent else c.controlBorder, com.pcremote.ui.theme.MidnightShapes.control)
+        .clickable(role = androidx.compose.ui.semantics.Role.Switch, onClickLabel = label) { onClick() }
+        .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        Icon(painterResource(icon), null, tint = if (on) c.accent else c.textDim, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = if (on) c.text else c.textDim, style = MaterialTheme.typography.bodySmall, maxLines = 1)
     }
 }
 

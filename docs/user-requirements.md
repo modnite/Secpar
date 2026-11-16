@@ -253,3 +253,39 @@ severely hitches on X250. Do not dismiss that as a hardware limit without eviden
 Android audio clipping/hitching remains a distracting post3.19 regression.
 Prioritize its recovery path, preserve video improvements, conserve the reported
 9% remaining weekly usage, and publish non-UI fixes for user testing.
+
+Secpar 4 corrections, 2026-11-14 and 2026-11-15: the owner relies on the Android
+app at work more than anything else and expected it to be developed alongside the
+desktop; put the phone-at-work-to-home-PC use first. Testing and proving every step
+is reinventing the wheel: Moonlight and Sunshine work, and 4 only has to end up
+better than 3. Work lean, show usable results instead of screenshots, and say early
+how long something will take. Usage and cost are tight. Reuse the framework already
+in place (Secpar 3's relay and account services and their keys) instead of building
+separate copies or asking the owner for new manual setup. Agreed order: hosting on
+the Windows PC, the Android app, connecting from outside the home network; then the
+rest. Owner confirmed on 2026-11-15 that the phone reaches the PC on home Wi-Fi and
+on mobile data. Sound, touch and controllers on Android are not yet reported.
+
+Release-shape corrections, 2026-11-15 (the owner's questions, verbatim intent):
+
+- "Where is the installer exe with in-place update? Where is the AppImage with
+  in-place update?" The product ships as `Secpar-Windows-x64-setup.exe` and
+  `Secpar-Linux-x64.AppImage` (+ .zsync), both updating in place. A zip or a tar
+  is not a deliverable, and neither is a package without an update path. Keep the
+  asset names the 3.x updater feed already uses, and keep the Android version code
+  following the release (4.0.0 -> 40000), not Moonlight's own counter.
+- "Why can I only remove friends and can't change their permissions?" The
+  account service already stores per-friend connect (ask/always) and control
+  (view/ keyboard and mouse). The window and the phone must both expose it, on
+  both platforms, saved through the service.
+- "Why are there no dropdown lists but settings cycle on click?" Settings that
+  offer a list must open a real dropdown with the current value marked. Cycling on
+  click is not acceptable. The phone uses segmented choices where a dropdown does
+  not fit a touch layout, and that is fine.
+- Live resolution change already existed in the 3.x hosts (Windows reopens the
+  encoder at the new size; Linux renegotiates the capture with a fresh encoder
+  chain and a source pinned to the display size). Do not claim it cannot be done
+  because the new engine is Sunshine; port the mechanism.
+- "I am not ready until I say I am ready": keep working and shipping verified
+  increments; do not present anything as finished or as a release until the owner
+  says so. Say plainly what is proven, on which machine, and what is not.

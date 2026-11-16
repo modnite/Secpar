@@ -81,6 +81,21 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val agent by session.conn.state.collectAsState()
+    // A computer that offers the managed engine streams through Moonlight inside this app.
+    // Hosts without `gamestream` keep the app's own stream, exactly as before.
+    val caps = (agent as? AgentState.Online)?.caps.orEmpty()
+    var enginePath by remember { mutableStateOf(false) }
+    LaunchedEffect(caps) {
+        if (!enginePath && caps.isNotEmpty() && com.pcremote.engine.Gamestream.offers(caps) &&
+            com.pcremote.engine.EngineLaunch.present(ctx)
+        ) {
+            enginePath = true
+        }
+    }
+    if (enginePath) {
+        com.pcremote.engine.EngineStreamScreen(session, onBack)
+        return
+    }
     com.pcremote.guest.GuestSessionEffects(session, onBack)
     var shareClipboard by remember { mutableStateOf(settings.shareClipboard) }
     com.pcremote.modes.ClipboardSync(session, agent, shareClipboard)

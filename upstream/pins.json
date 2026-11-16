@@ -1,0 +1,15 @@
+{
+  "note": "Upstream sources Secpar 4 is built from. Change a pin only together with a build and a recorded test. Commits were read from GitHub on 2026-11-13.",
+  "sources": [
+    {"name": "sunshine", "role": "host engine", "url": "https://github.com/LizardByte/Sunshine", "ref": "v2026.914.233613", "commit": "63d35f702ee9e362e43263742981836ec0710384", "license": "GPL-3.0", "submodules": true},
+    {"name": "apollo", "role": "reference only: source of the virtual display and per-client permission code to port onto Sunshine", "url": "https://github.com/ClassicOldSong/Apollo", "ref": "master (106 commits after v0.4.6, includes the 2026-05 security backport)", "commit": "adc5c5a0bd80831ce495434bb16aee2cd4175fb8", "license": "GPL-3.0", "submodules": true},
+    {"name": "moonlight-qt", "role": "desktop client engine", "url": "https://github.com/moonlight-stream/moonlight-qt", "ref": "v6.2.0", "commit": "de2467e433821664cdd2224aad8c89a625be1ad9", "license": "GPL-3.0", "submodules": true},
+    {"name": "moonlight-android", "role": "Android decoder and input", "url": "https://github.com/moonlight-stream/moonlight-android", "ref": "v12.2", "commit": "b48494cb96bff23d8886c4775cc4f39a1075495d", "license": "GPL-3.0", "submodules": true},
+    {"name": "moonlight-common-c", "role": "client protocol core, as pinned by moonlight-qt v6.2.0", "url": "https://github.com/moonlight-stream/moonlight-common-c", "ref": "submodule of moonlight-qt v6.2.0", "commit": "f900dd4767759c7b9d0e93bcea666b55c69ea62f", "license": "GPL-3.0", "submodules": true},
+    {"name": "sudovda", "role": "Windows virtual display driver (as used by Apollo)", "url": "https://github.com/SudoMaker/SudoVDA", "ref": "master", "commit": "a4b09fa2aa731a964d0cb5d139cb1e6240e4da12", "license": "MIT or CC0 for the author's changes; Microsoft sample licence for the base (README statement, no licence file)", "submodules": false},
+    {"name": "sunshine-build-deps", "role": "source of the FFmpeg cbs patches and build recipe, as pinned by Sunshine v2026.914.233613", "url": "https://github.com/LizardByte/build-deps", "ref": "submodule of the pinned Sunshine", "commit": "a1fe2841cbc0d8c4501a1006d2d1cb88f219cc8c", "license": "MIT", "submodules": false},
+    {"name": "ffmpeg", "role": "encoder library for the host, built minimal by scripts/build-ffmpeg-windows.sh", "url": "https://github.com/FFmpeg/FFmpeg", "ref": "as pinned by sunshine-build-deps", "commit": "bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa", "license": "LGPL-2.1-or-later; GPL-2.0-or-later as built with x264", "submodules": false},
+    {"name": "amf", "role": "AMD encoder headers for FFmpeg", "url": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF", "ref": "as pinned by sunshine-build-deps", "commit": "eadd00804d5f7e5cd8c85d540073198312870776", "license": "MIT", "submodules": false},
+    {"name": "x264", "role": "software H.264 encoder (fallback)", "url": "https://github.com/LizardByte-infrastructure/x264", "ref": "as pinned by sunshine-build-deps", "commit": "b35605ace3ddf7c1a5d67a2eb553f034aef41d55", "license": "GPL-2.0-or-later", "submodules": false}
+  ]
+}

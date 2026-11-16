@@ -115,6 +115,8 @@ pub struct Config {
     pub friends: bool,
     pub anywhere: bool,
     pub files_dir: String,
+    /// Other devices and friends see a still of this screen. Off keeps the screen private.
+    pub previews: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -127,6 +129,7 @@ impl Default for Config {
             friends: true,
             anywhere: false,
             files_dir: String::new(),
+            previews: true,
         }
     }
 }
@@ -181,11 +184,13 @@ impl Store {
         // Older Linux builds rejected clipboard sharing altogether. Enable the
         // newly supported feature once; subsequent explicit choices persist.
         if !data.clipboard_ready { data.config.allow_clip=true;data.clipboard_ready=true; }
-        let s = Self {
+        let mut s = Self {
             path,
             data,
             codes: Default::default(), account_owner: None,
         };
+        // Repeated pairings from before this version fold into one record.
+        s.fold_duplicates();
         s.save()?;
         Ok(s)
     }
@@ -241,11 +246,26 @@ impl Store {
         self.account_owner = owner;
         self.data.devices.iter().filter(|d| !d.revoked && d.account_owner.is_some() && d.account_owner != self.account_owner).map(|d| d.id.clone()).collect()
     }
+    /// One record per device: a device that pairs again under the same name
+    /// and owner replaces its older records, as on the Windows host.
+    fn fold_duplicates(&mut self) {
+        let devices = &mut self.data.devices;
+        for newest in (0..devices.len()).rev() {
+            if devices[newest].revoked { continue; }
+            let (name, owner) = (devices[newest].name.to_lowercase(), devices[newest].account_owner.clone());
+            for older in 0..newest {
+                if !devices[older].revoked && devices[older].account_owner == owner && devices[older].name.to_lowercase() == name {
+                    devices[older].revoked = true;
+                }
+            }
+        }
+    }
     fn add_device_owned(&mut self, name: &str, owner: Option<String>) -> io::Result<(String,String)> {
         if self.data.devices.len() >= 128 { return Err(io::Error::other("Device limit reached")); }
         let id = hex(&random::<8>());
         let token = URL_SAFE_NO_PAD.encode(random::<32>());
         self.data.devices.push(Device { id:id.clone(), name:name.chars().take(40).collect(), token_sha256:hash(&token), revoked:false, account_owner:owner });
+        self.fold_duplicates();
         if let Err(e) = self.save() { self.data.devices.pop(); return Err(e); }
         Ok((id,token))
     }

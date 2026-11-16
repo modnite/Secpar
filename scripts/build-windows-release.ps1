@@ -3,7 +3,8 @@ param(
     [string]$HostTarget = "",
     [string]$Features = "ffmpeg,gpu-isolation",
     [string]$TauriCli = "",
-    [string]$EncoderDepsCacheRoot = ""
+    [string]$EncoderDepsCacheRoot = "",
+    [string]$BundleConfig = ""
 )
 $ErrorActionPreference = 'Stop'
 $Features=($Features -split '[,\s]+' | Where-Object {$_}) -join ','
@@ -22,20 +23,34 @@ if ($config.version -ne $version) { throw 'Installer version differs' }
 $oldTarget=$env:CARGO_TARGET_DIR; $oldFlags=$env:RUSTFLAGS; $oldTag=$env:SECPAR_RELEASE_TAG
 $oldDebug=$env:CARGO_PROFILE_RELEASE_DEBUG; $oldStrip=$env:CARGO_PROFILE_RELEASE_STRIP
 try {
-    $bundleConfig=Join-Path $repo 'host/src-tauri/tauri.unified.conf.json'
+    $bundleConfig=if ($BundleConfig) { [IO.Path]::GetFullPath($BundleConfig) } else { Join-Path $repo 'host/src-tauri/tauri.unified.conf.json' }
+    $unified=Get-Content -LiteralPath $bundleConfig -Raw | ConvertFrom-Json
+    $resources=@{}
+    foreach($property in $unified.bundle.resources.PSObject.Properties){$resources[$property.Name]=$property.Value}
+    $changed=$false
     if ($Features.Split(',') -contains 'ffmpeg') {
         if (!$env:SECPAR_FFMPEG_DIR -or !(Test-Path (Join-Path $env:SECPAR_FFMPEG_DIR 'share/licenses/encoders/sources.json'))) {
             & (Join-Path $PSScriptRoot 'build-windows-encoder-deps.ps1') -CacheRoot $EncoderDepsCacheRoot
         }
         if (!(Test-Path (Join-Path $env:SECPAR_FFMPEG_DIR 'lib/avcodec.lib'))) {throw 'FFmpeg encoder libraries are missing'}
-        $unified=Get-Content -LiteralPath $bundleConfig -Raw | ConvertFrom-Json
-        $resources=@{}
-        foreach($property in $unified.bundle.resources.PSObject.Properties){$resources[$property.Name]=$property.Value}
         $licenseDirectory=Join-Path $env:SECPAR_FFMPEG_DIR 'share/licenses/encoders'
         $stagedLicenses=Join-Path $repo 'host/src-tauri/encoder-licenses'
         New-Item -ItemType Directory -Force $stagedLicenses | Out-Null
         foreach($notice in Get-ChildItem -LiteralPath $licenseDirectory -File){Copy-Item -LiteralPath $notice.FullName -Destination $stagedLicenses -Force}
         $resources['encoder-licenses/']='licenses/encoders/'
+        $changed=$true
+    }
+    # The streaming engine, copied once into the host's data folder on first
+    # start. Stage it with SECPAR_ENGINE_DIR (sunshine.exe and its shaders,
+    # without the web interface Secpar does not use).
+    if ($env:SECPAR_ENGINE_DIR) {
+        $stagedEngine=Join-Path $repo 'host/src-tauri/engine'
+        Remove-Item -LiteralPath $stagedEngine -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item -LiteralPath $env:SECPAR_ENGINE_DIR -Destination $stagedEngine -Recurse
+        $resources['engine/']='engine/'
+        $changed=$true
+    }
+    if ($changed) {
         $unified.bundle.resources=$resources
         $bundleConfig=Join-Path $repo 'host/src-tauri/tauri.encoder-build.conf.json'
         [IO.File]::WriteAllText($bundleConfig,($unified | ConvertTo-Json -Depth 20))

@@ -397,6 +397,16 @@ impl Panel {
         }
         ctx.request_repaint_after(Duration::from_secs(60));
     }
+    /// Settings, About: the version and the update check.
+    pub fn about_ui(&mut self, ui: &mut egui::Ui) {
+        crate::design::group(ui, "About", |ui| {
+            crate::design::row(ui, "Version", |ui| { ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION")).color(crate::design::MUTED)); });
+            let label = if self.release.is_some() { "Update available" } else { "Check for updates" };
+            crate::design::row(ui, "Updates", |ui| {
+                if ui.add(egui::Button::new(label).min_size(egui::vec2(140., crate::design::CONTROL))).clicked() { self.open = true; }
+            });
+        });
+    }
     pub fn button(&mut self, ui: &mut egui::Ui) {
         if crate::icons::button(ui,crate::icons::Icon::Download,if self.release.is_some(){"Update available"}else{"Check for updates"},true) {self.open=true;}
     }

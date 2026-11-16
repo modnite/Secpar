@@ -89,6 +89,84 @@ pub fn show(ui: &mut egui::Ui, card: Card) -> Action {
     clicked
 }
 
+/// Narrowest a tile gets before the grid drops a column.
+pub const TILE_MIN: f32 = 180.;
+/// Space between tiles, across and down.
+pub const TILE_GAP: f32 = 12.;
+
+/// How many tiles fit across `width`, and how wide each one is.
+pub fn columns(width: f32) -> (usize, f32) {
+    let count = ((width + TILE_GAP) / (TILE_MIN + TILE_GAP)).floor().max(1.) as usize;
+    (count, (width - TILE_GAP * (count - 1) as f32) / count as f32)
+}
+
+/// One computer as a tile: its screen on top, then its name and state. The
+/// screen is the button: clicking it connects. Files sits beside the name.
+pub fn tile(ui: &mut egui::Ui, mut card: Card, width: f32) -> Action {
+    let mut clicked = Action::default();
+    let can_connect = card.connect == Some(true);
+    let inner = width - 2.;
+    let screen_h = (inner * 9. / 16.).round();
+    let colour = card.status.map_or(design::ACCENT, |(_, c)| c);
+    egui::Frame::new().fill(Color32::from_rgb(23, 29, 39)).stroke(egui::Stroke::new(1., design::LINE)).corner_radius(7).inner_margin(1).show(ui, |ui| {
+        ui.set_width(inner);
+        ui.vertical(|ui| {
+        ui.set_width(inner);
+        ui.spacing_mut().item_spacing = egui::vec2(8., 0.);
+        let sense = if can_connect { egui::Sense::click() } else { egui::Sense::hover() };
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(inner, screen_h), sense);
+        let top = egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 };
+        ui.painter().rect_filled(rect, top, design::BG);
+        match card.preview {
+            Some(texture) => {
+                ui.painter().image(texture.id(), rect, egui::Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)), Color32::WHITE);
+            }
+            None => {
+                let tint = if can_connect { design::MUTED } else { design::LINE };
+                crate::icons::paint(ui, crate::icons::Icon::Display, egui::Rect::from_center_size(rect.center(), egui::vec2(32., 32.)), tint);
+            }
+        }
+        if can_connect && response.hovered() {
+            ui.painter().rect_filled(rect, top, Color32::from_black_alpha(120));
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Connect", egui::FontId::proportional(15.), design::ACCENT);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        clicked.connect = can_connect && response.clicked();
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, can_connect, format!("Connect to {}", card.name)));
+
+        egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 6, top: 8, bottom: 8 }).show(ui, |ui| {
+            ui.set_width(inner - 16.);
+            ui.horizontal(|ui| {
+                ui.set_min_height(design::CONTROL);
+                design::dot(ui, colour);
+                let files_w = if card.files.is_some() { 32. + 8. } else { 0. } + if card.menu.is_some() { MENU } else { 0. };
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width() - files_w, design::CONTROL), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.;
+                    ui.add(egui::Label::new(RichText::new(card.name).size(NAME).strong()).truncate());
+                    let second = match (card.status, card.platform.is_empty()) {
+                        (Some((status, _)), false) => format!("{status} · {}", card.platform),
+                        (Some((status, _)), true) => status.to_string(),
+                        (None, _) => card.platform.to_string(),
+                    };
+                    ui.add(egui::Label::new(RichText::new(second).size(SMALL).color(design::MUTED)).truncate());
+                });
+                if card.files.is_some() || card.menu.is_some() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(enabled) = card.files {
+                            clicked.files = crate::icons::button(ui, crate::icons::Icon::Folder, "Files", enabled);
+                        }
+                        if let Some(menu) = card.menu.as_mut() {
+                            menu(ui);
+                        }
+                    });
+                }
+            });
+        });
+        });
+    });
+    clicked
+}
+
 /// Android's card order: identity, preview, then the connection action.
 fn vertical(ui:&mut egui::Ui,mut card:Card)->Action {
     let mut clicked=Action::default();

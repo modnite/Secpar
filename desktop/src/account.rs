@@ -59,10 +59,14 @@ pub struct Friend {
     pub keyboard: Option<bool>,
     #[serde(default)]
     pub mouse: Option<bool>,
+    /// Whether this friend may browse your files. An older service leaves it out.
+    #[serde(default)]
+    pub browse: Option<bool>,
 }
 impl Friend {
     pub fn keyboard(&self) -> bool { self.keyboard.unwrap_or(self.input == "full") }
     pub fn mouse(&self) -> bool { self.mouse.unwrap_or(self.input == "full") }
+    pub fn browse(&self) -> bool { self.browse.unwrap_or(false) }
 }
 /// What this friend may do on the computers you host. Shown beside the name.
 pub fn friend_summary(friend: &Friend) -> String {
@@ -98,6 +102,9 @@ pub struct FriendComputer {
     pub keyboard: bool,
     #[serde(default)]
     pub mouse: bool,
+    /// Whether the owner lets you browse this computer's files.
+    #[serde(default)]
+    pub browse: bool,
 }
 impl FriendComputer {
     /// The owner's settings for you, in the words of the friends list.
@@ -178,8 +185,28 @@ pub const NO_COMPUTERS: &str = "No computers yet";
 pub const NO_OTHER_COMPUTERS: &str = "No other computers yet";
 /// The computers you can connect to. The one this app is hosting from is left out: you are already
 /// on it and cannot connect to yourself.
+/// This machine's name, lowercased, as hosts report it to the account.
+fn this_computer_name() -> Option<String> {
+    #[cfg(windows)]
+    let name = std::env::var("COMPUTERNAME").ok();
+    #[cfg(not(windows))]
+    let name = std::fs::read_to_string("/proc/sys/kernel/hostname").ok().or_else(|| std::env::var("HOSTNAME").ok());
+    name.map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty())
+}
 pub fn remote_computers<'a>(computers: &'a [OwnedComputer], local: Option<&str>) -> Vec<&'a OwnedComputer> {
-    computers.iter().filter(|c| local != Some(c.id.as_str())).collect()
+    // One tile per computer: an installation enrolled twice keeps its name, so the
+    // record that is online and linked stands for it.
+    let mut shown: Vec<&OwnedComputer> = Vec::new();
+    // This computer is never one to connect to, whichever of its records the account has.
+    let here = local.and_then(|id| computers.iter().find(|c| c.id == id)).map(|c| c.name.to_lowercase()).or_else(this_computer_name);
+    for computer in computers.iter().filter(|c| local != Some(c.id.as_str()) && Some(c.name.to_lowercase()) != here) {
+        let rank = |c: &OwnedComputer| (c.online, c.linked);
+        match shown.iter_mut().find(|s| s.name.to_lowercase() == computer.name.to_lowercase()) {
+            Some(slot) => if rank(computer) > rank(slot) { *slot = computer; },
+            None => shown.push(computer),
+        }
+    }
+    shown
 }
 pub fn pairing_with(name: &str) -> String { format!("Pairing with {name}…") }
 pub enum OwnedConnection {
@@ -196,7 +223,7 @@ pub enum Action {
     /// Keyboard and mouse ("view" or "full") and connect policy ("ask" or "always") for one friend.
     Setting { id: String, input: Option<&'static str>, connect: Option<&'static str> },
     /// Keyboard and mouse, each on its own.
-    Input { id: String, keyboard: Option<bool>, mouse: Option<bool> },
+    Input { id: String, keyboard: Option<bool>, mouse: Option<bool>, browse: Option<bool> },
 }
 pub enum Command {
     HostRefresh,
@@ -273,6 +300,10 @@ pub struct Panel {
     people: Vec<Person>,
     requests: Vec<Incoming>,
     friend_computers: Vec<FriendComputer>,
+    /// The computer paired on this device by link or QR (id, name), drawn as a tile with the others.
+    pub manual: Option<(String, String)>,
+    /// What was pressed on that tile: connect, files, forget.
+    pub manual_clicked: (bool, bool, bool),
     guest_choice: Option<(FriendComputer, [bool; 5])>,
     guest_waiting: Option<String>,
     /// Set by the window: a session is open, so no second one starts.
@@ -344,6 +375,7 @@ impl Panel {
                                 connect: "ask".into(),
                                 keyboard: None,
                                 mouse: None,
+                                browse: None,
                             },
                             Friend {
                                 id: "00000000-0000-4000-8000-000000000003".into(),
@@ -354,6 +386,7 @@ impl Panel {
                                 connect: "ask".into(),
                                 keyboard: None,
                                 mouse: None,
+                                browse: None,
                             },
                             Friend {
                                 id: "00000000-0000-4000-8000-000000000004".into(),
@@ -364,6 +397,7 @@ impl Panel {
                                 connect: "ask".into(),
                                 keyboard: None,
                                 mouse: None,
+                                browse: None,
                             },
                         ]
                     } else {
@@ -381,12 +415,14 @@ impl Panel {
                     busy: false,
                     friend_computers: if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("owned")) {
                         vec![
-                            FriendComputer { id: "00000000-0000-4000-8000-000000000020".into(), name: "Jamie's desktop".into(), platform: "windows".into(), owner_handle: "Jamie".into(), connect: "always".into(), keyboard: true, mouse: true },
-                            FriendComputer { id: "00000000-0000-4000-8000-000000000021".into(), name: "Riley's laptop".into(), platform: "linux".into(), owner_handle: "Riley".into(), connect: "ask".into(), keyboard: false, mouse: false },
+                            FriendComputer { id: "00000000-0000-4000-8000-000000000020".into(), name: "Jamie's desktop".into(), platform: "windows".into(), owner_handle: "Jamie".into(), connect: "always".into(), keyboard: true, mouse: true, browse: false },
+                            FriendComputer { id: "00000000-0000-4000-8000-000000000021".into(), name: "Riley's laptop".into(), platform: "linux".into(), owner_handle: "Riley".into(), connect: "ask".into(), keyboard: false, mouse: false, browse: false },
                         ]
                     } else {
                         Vec::new()
                     },
+                    manual: None,
+                    manual_clicked: (false, false, false),
                     guest_choice: None,
                     guest_waiting: None,
                     session_open: false,
@@ -422,6 +458,8 @@ impl Panel {
             people: vec![],
             requests: vec![],
             friend_computers: Vec::new(),
+            manual: None,
+            manual_clicked: (false, false, false),
             guest_choice: None,
             guest_waiting: None,
             session_open: false,
@@ -430,6 +468,65 @@ impl Panel {
             tx,
             events,
         }
+    }
+    /// A friend's permissions from Secpar 3, each changed in place: mouse,
+    /// keyboard, and when they may connect.
+    fn permission_controls(&mut self, ui: &mut eframe::egui::Ui, friend: &Friend) {
+        use eframe::egui;
+                let busy = self.busy;
+                let switch = |ui: &mut egui::Ui, on: bool, icon: crate::icons::Icon, label: &str| -> bool {
+                    let colour = if on { crate::design::TEXT } else { crate::design::MUTED };
+                    let button = egui::Button::new("").selected(on).min_size(egui::vec2(104., crate::design::CONTROL));
+                    let response = ui.add_enabled(!busy, button).on_hover_text(if on { format!("{label} allowed") } else { format!("{label} not allowed") });
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, !busy, on, label));
+                    let rect = response.rect;
+                    crate::icons::paint(ui, icon, egui::Rect::from_center_size(egui::pos2(rect.left() + 18., rect.center().y), egui::vec2(16., 16.)), if on { crate::design::ACCENT } else { crate::design::MUTED });
+                    ui.painter().text(egui::pos2(rect.left() + 32., rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(13.), colour);
+                    response.clicked()
+                };
+                if switch(ui, friend.mouse(), crate::icons::Icon::Mouse, "Mouse") {
+                    self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: None, mouse: Some(!friend.mouse()), browse: None }));
+                }
+                if switch(ui, friend.keyboard(), crate::icons::Icon::Keyboard, "Keyboard") {
+                    self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: Some(!friend.keyboard()), mouse: None, browse: None }));
+                }
+                if switch(ui, friend.browse(), crate::icons::Icon::Folder, "Files") {
+                    self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: None, mouse: None, browse: Some(!friend.browse()) }));
+                }
+                let current = if friend.connect == "always" { "Any time" } else { "Ask first" };
+                egui::ComboBox::from_id_salt(("connect", &friend.id))
+                    .width(104.)
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [("always", "Any time"), ("ask", "Ask first")] {
+                            if ui.selectable_label(friend.connect == value, label).clicked() && friend.connect != value {
+                                self.send(Command::Action(Action::Setting { id: friend.id.clone(), input: None, connect: Some(value) }));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("When this friend may connect");
+    }
+    /// Settings, Account: who is signed in, whether others can find them, and Sign out.
+    pub fn account_ui(&mut self, ui: &mut eframe::egui::Ui) {
+        use crate::design;
+        use eframe::egui;
+        design::group(ui, "Account", |ui| {
+            match self.user.clone() {
+                Some(user) => {
+                    design::row(ui, "Signed in as", |ui| { ui.label(egui::RichText::new(format!("@{}", user.handle)).color(design::MUTED)); });
+                    let mut visible = user.visible;
+                    let changed = ui.add_enabled_ui(!self.busy, |ui| design::switch_row(ui, &mut visible, "Show me in search")).inner;
+                    if changed { self.send(Command::SetVisible(visible)); }
+                    design::row(ui, "This device", |ui| {
+                        if ui.add_enabled(!self.busy, egui::Button::new("Sign out").min_size(egui::vec2(96., design::CONTROL))).clicked() {
+                            self.send(Command::SignOut);
+                        }
+                    });
+                }
+                None => { ui.label(egui::RichText::new("Not signed in. Sign in on Computers.").color(design::MUTED)); ui.add_space(6.); }
+            }
+        });
     }
     pub fn toolbar(&mut self,ui:&mut eframe::egui::Ui)->bool {
         let signed_in=self.user.is_some();
@@ -547,34 +644,93 @@ impl Panel {
         let mut files = None;
         use crate::design;
         use eframe::egui;
-        ui.heading("Computers");
-        ui.add_space(8.);
-        if let Some(user)=self.user.clone() {
-            ui.horizontal(|ui| {
-                ui.add(egui::Label::new(user.handle).truncate());
-
-            });
-            ui.add_space(8.);
-        }
+        ui.add_space(4.);
         if self.user.is_none() {
             self.sign_in_ui(ui);
         }
         if self.user.is_some() {
             let mut connect = None;
-            ui.spacing_mut().item_spacing.y=6.;
+            let waiting = self.guest_flow_ui(ui);
             let shown = remote_computers(&self.computers,self.local_id());
-            for computer in &shown {
-                let preview=self.textures.get(&computer.id).filter(|_| computer.online==1);
-                let presence=if computer.online==1 {Presence::Online}else{Presence::Offline};
-                let (status,color)=computer_status(computer.linked==1,presence);
-                let platform=match computer.platform.as_str(){"windows"=>"Windows","linux"=>"Linux","macos"=>"macOS",_=>""};
-                let clicked=crate::card::show(ui,crate::card::Card{name:&computer.name,status:Some((status,color)),platform,preview,connect:Some(!self.busy && computer.linked==1),files:Some(!self.busy && computer.linked==1 && computer.online==1),menu:None});
-                if clicked.connect { connect=Some(computer.id.clone()); }
-                if clicked.files { files=Some(computer.id.clone()); }
+            // Your computers first, then friends' computers you are paired with,
+            // all as tiles with their screens.
+            struct Tile { name: String, status: String, color: egui::Color32, platform: &'static str, preview: Option<egui::TextureHandle>, connect: bool, files: bool, friend: Option<usize>, id: String, manual: bool }
+            let platform_name = |p: &str| match p { "windows" => "Windows", "linux" => "Linux", "macos" => "macOS", _ => "" };
+            let mut tiles: Vec<Tile> = shown.iter().map(|computer| {
+                let presence = if computer.online == 1 { Presence::Online } else { Presence::Offline };
+                let (status, color) = computer_status(computer.linked == 1, presence);
+                Tile {
+                    name: computer.name.clone(), status: status.to_string(), color, platform: platform_name(&computer.platform),
+                    preview: self.textures.get(&computer.id).filter(|_| computer.online == 1).cloned(),
+                    connect: !self.busy && computer.linked == 1 && computer.online == 1,
+                    files: !self.busy && computer.linked == 1 && computer.online == 1,
+                    friend: None, id: computer.id.clone(), manual: false,
+                }
+            }).collect();
+            if let Some((id, name)) = self.manual.clone() {
+                tiles.push(Tile {
+                    name, status: "Paired on this device".into(), color: design::OK, platform: "",
+                    preview: self.textures.get(&id).cloned(), connect: !self.busy, files: !self.busy, friend: None, id, manual: true,
+                });
+            }
+            if !waiting {
+                for (index, computer) in self.friend_computers.iter().enumerate() {
+                    let enabled = !self.busy && !self.session_open;
+                    tiles.push(Tile {
+                        name: computer.name.clone(), status: format!("@{} · {}", computer.owner_handle, computer.access()), color: design::OK,
+                        platform: platform_name(&computer.platform), preview: self.textures.get(&computer.id).cloned(),
+                        connect: enabled, files: enabled, friend: Some(index), id: computer.id.clone(), manual: false,
+                    });
+                }
+            }
+            let (count, width) = crate::card::columns(ui.available_width());
+            let mut actions = Vec::new();
+            let mut forget = false;
+            for row in tiles.chunks(count) {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = crate::card::TILE_GAP;
+                    for tile in row {
+                        let mut menu = |ui: &mut egui::Ui| {
+                            ui.menu_button("…", |ui| {
+                                if ui.button("Forget on this device").clicked() { forget = true; ui.close(); }
+                            });
+                        };
+                        let card = crate::card::Card {
+                            name: &tile.name, status: Some((tile.status.as_str(), tile.color)), platform: tile.platform, preview: tile.preview.as_ref(),
+                            connect: Some(tile.connect), files: Some(tile.files),
+                            menu: if tile.manual { Some(&mut menu as &mut dyn FnMut(&mut egui::Ui)) } else { None },
+                        };
+                        actions.push((tile.friend, tile.id.clone(), tile.manual, crate::card::tile(ui, card, width)));
+                    }
+                });
+                ui.add_space(crate::card::TILE_GAP);
+            }
+            for (friend, id, manual, action) in actions {
+                if manual {
+                    self.manual_clicked = (action.connect, action.files, forget);
+                    continue;
+                }
+                match friend {
+                    None => {
+                        if action.connect { connect = Some(id.clone()); }
+                        if action.files { files = Some(id); }
+                    }
+                    Some(index) => {
+                        let Some(computer) = self.friend_computers.get(index).cloned() else { continue };
+                        if action.files {
+                            // Browsing a friend's disks is never allowed. Sending files to them is, with the files permission.
+                            let owner = computer.owner_handle.clone();
+                            let permissions = if computer.browse { vec!["files".to_string(), "browse".to_string()] } else { vec!["files".to_string()] };
+                            if self.tx.try_send(Command::RequestGuest { computer, permissions }).is_ok() {
+                                self.guest_waiting = Some(owner);
+                            }
+                        } else if action.connect {
+                            self.guest_choice = Some((computer, PERMISSION_DEFAULTS));
+                        }
+                    }
+                }
             }
             let none_of_ours = shown.is_empty();
-            let waiting = self.guest_flow_ui(ui);
-            if !waiting { self.friend_cards(ui); }
             ui.spacing_mut().item_spacing.y=8.;
             if none_of_ours && self.friend_computers.is_empty() { ui.label(egui::RichText::new(if self.computers.is_empty() {NO_COMPUTERS}else{NO_OTHER_COMPUTERS}).color(design::MUTED)); }
             if let Some(id)=connect { self.connect_owned(id); }
@@ -896,18 +1052,11 @@ impl Panel {
     }
     pub fn ui(&mut self, ui: &mut eframe::egui::Ui) {
         use eframe::egui;
-        ui.heading("Friends");
-        ui.add_space(8.);
+        ui.add_space(4.);
         if self.user.is_none() {
             ui.weak("Sign in on Computers.");
         } else {
-            let mut visible = self.user.as_ref().is_some_and(|u| u.visible);
-            if ui.add_enabled(!self.busy, egui::Checkbox::new(&mut visible, "Show me in search")).changed() {
-                self.send(Command::SetVisible(visible));
-            }
-            ui.add_space(4.);
             self.requests_ui(ui);
-            self.friend_computers_ui(ui);
             self.people_ui(ui);
             ui.add_space(8.);
             if self.friends.is_empty() {
@@ -933,6 +1082,8 @@ impl Panel {
                         if index > 0 {
                             ui.separator();
                         }
+                        // A narrow window puts a friend's permissions on their own line.
+                        let narrow = ui.available_width() < 680.;
                         ui.horizontal(|ui| {
                             let (avatar, _) =
                                 ui.allocate_exact_size(egui::vec2(32., 32.), egui::Sense::hover());
@@ -954,34 +1105,14 @@ impl Panel {
                                 egui::FontId::proportional(14.),
                                 crate::design::ACCENT,
                             );
-                            ui.allocate_ui_with_layout(egui::vec2((ui.available_width()-128.).max(48.),32.),egui::Layout::left_to_right(egui::Align::Center),|ui| {
+                            let controls = if friend.state == "accepted" && !narrow { 490. } else { 128. };
+                            ui.allocate_ui_with_layout(egui::vec2((ui.available_width()-controls).max(48.),32.),egui::Layout::left_to_right(egui::Align::Center),|ui| {
                                 ui.add(egui::Label::new(&friend.handle).truncate());
                             });
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     ui.menu_button("…", |ui| {
-                                        if friend.state == "accepted" {
-                                            ui.label("Control");
-                                            let (mut keyboard, mut mouse) = (friend.keyboard(), friend.mouse());
-                                            if ui.checkbox(&mut keyboard, "Keyboard").changed() {
-                                                self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: Some(keyboard), mouse: None }));
-                                                ui.close();
-                                            }
-                                            if ui.checkbox(&mut mouse, "Mouse").changed() {
-                                                self.send(Command::Action(Action::Input { id: friend.id.clone(), keyboard: None, mouse: Some(mouse) }));
-                                                ui.close();
-                                            }
-                                            ui.separator();
-                                            ui.label("Connecting");
-                                            for (value, label) in [("always", "Any time"), ("ask", "Ask me first")] {
-                                                if ui.radio(friend.connect == value, label).clicked() {
-                                                    self.send(Command::Action(Action::Setting { id: friend.id.clone(), input: None, connect: Some(value) }));
-                                                    ui.close();
-                                                }
-                                            }
-                                            ui.separator();
-                                        }
                                         if ui.button("Block").clicked() {
                                             self.send(Command::Action(Action::Block(
                                                 friend.id.clone(),
@@ -1002,10 +1133,8 @@ impl Panel {
                                             ui.close();
                                         }
                                     });
-                                    if friend.state == "accepted" {
-                                        crate::icons::status(ui,if friend.connect=="always" {crate::icons::Icon::Check}else{crate::icons::Icon::Help},if friend.connect=="always" {"Connect any time"}else{"Ask first"},friend.connect=="always");
-                                        crate::icons::status(ui,crate::icons::Icon::Mouse,if friend.mouse(){"Mouse allowed"}else{"Mouse blocked"},friend.mouse());
-                                        crate::icons::status(ui,crate::icons::Icon::Keyboard,if friend.keyboard(){"Keyboard allowed"}else{"Keyboard blocked"},friend.keyboard());
+                                    if friend.state == "accepted" && !narrow {
+                                        self.permission_controls(ui, &friend);
                                     }
                                     if friend.state == "pending" {
                                         if friend.requester != own {
@@ -1027,6 +1156,12 @@ impl Panel {
                                 },
                             );
                         });
+                        if friend.state == "accepted" && narrow {
+                            ui.horizontal(|ui| {
+                                ui.add_space(40.);
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.permission_controls(ui, &friend));
+                            });
+                        }
                     }
                 });
         }
@@ -1210,11 +1345,16 @@ impl Api {
     }
     async fn friend_computers(&self) -> Result<Vec<FriendComputer>, (StatusCode, String)> {
         let bad = || (StatusCode::BAD_GATEWAY, "Invalid list of friends' computers".to_string());
-        let list: Vec<FriendComputer> = serde_json::from_value(self.call(Method::GET, "/v1/friend-computers", None).await?).map_err(|_| bad())?;
-        if list.len() > 256 || list.iter().any(|c| path_id(&c.id).is_err() || c.name.len() > 320 || c.platform.len() > 16 || !valid_handle(&c.owner_handle)) {
+        let rows: Vec<Value> = serde_json::from_value(self.call(Method::GET, "/v1/friend-computers", None).await?).map_err(|_| bad())?;
+        if rows.len() > 256 {
             return Err(bad());
         }
-        Ok(list)
+        // A computer this app cannot read is left out; the others still show.
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| serde_json::from_value::<FriendComputer>(row).ok())
+            .filter(|c| path_id(&c.id).is_ok() && c.name.len() <= 320 && c.platform.len() <= 16 && valid_handle(&c.owner_handle))
+            .collect())
     }
     /// Ask a friend for access. Answers the request id, its state and the permissions the service kept.
     pub(crate) async fn request_access(&self, computer: &str, permissions: &[String]) -> Result<(String, String, u64, Vec<String>), (StatusCode, String)> {
@@ -1332,7 +1472,10 @@ fn action_request(action: &Action) -> Result<(Method, String), String> {
 fn action_body(action: &Action) -> Option<Value> {
     match action {
         Action::Setting { input, connect, .. } => Some(json!({"input": input, "connect": connect})),
-        Action::Input { keyboard, mouse, .. } => Some(json!({"keyboard": keyboard, "mouse": mouse})),
+        Action::Input { keyboard, mouse, browse, .. } => Some(match browse {
+            Some(browse) => json!({"keyboard": keyboard, "mouse": mouse, "browse": browse}),
+            None => json!({"keyboard": keyboard, "mouse": mouse}),
+        }),
         _ => None,
     }
 }
@@ -2021,7 +2164,7 @@ mod tests {
         f.keyboard = Some(true);
         f.mouse = Some(false);
         assert_eq!(friend_summary(&f), "Any time · Keyboard only");
-        assert_eq!(action_body(&Action::Input { id: "a".into(), keyboard: None, mouse: Some(true) }), Some(json!({"keyboard": null, "mouse": true})));
+        assert_eq!(action_body(&Action::Input { id: "a".into(), keyboard: None, mouse: Some(true), browse: None }), Some(json!({"keyboard": null, "mouse": true})));
     }
     #[test]
     fn old_servers_without_settings_read_as_view_only_and_ask() {

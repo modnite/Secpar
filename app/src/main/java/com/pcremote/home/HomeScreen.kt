@@ -182,7 +182,7 @@ private fun ComputersPage(
         items(rows, key = { it.key }) { row ->
             when (row) {
                 is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)
-                is ComputerRow.FromAccount -> AccountCard(row.computer, account.connecting, acts)
+                is ComputerRow.FromAccount -> AccountCard(row.computer, thumbs[row.computer.id], account.connecting, acts)
                 is ComputerRow.Friends -> FriendCard(row.computer, thumbs[row.computer.id], account, acts)
             }
         }
@@ -244,12 +244,13 @@ private fun CardFrame(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun AccountCard(computer: OwnedComputer, connecting: String?, acts: AccountActions) {
+private fun AccountCard(computer: OwnedComputer, thumb: ImageBitmap?, connecting: String?, acts: AccountActions) {
     val status = ComputerList.status(computer)
+    val ready = computer.linked && connecting == null
     CardFrame {
+        Screen(thumb, ready, stringResource(R.string.pcr_connect) + " " + computer.name) { acts.connect(computer) }
         CardTitle(computer.name, ComputerList.platform(computer.platform), status)
         if (connecting == computer.id) GhostButton(stringResource(R.string.pcr_cancel), acts.cancelConnect)
-        else PrimaryButton(stringResource(R.string.pcr_connect), { acts.connect(computer) }, enabled = computer.linked && connecting == null)
     }
 }
 
@@ -258,21 +259,20 @@ private fun AccountCard(computer: OwnedComputer, connecting: String?, acts: Acco
 private fun FriendCard(computer: FriendComputer, thumb: ImageBitmap?, account: AccountUi, acts: AccountActions) {
     val c = LocalMidnight.current
     val progress = account.guest?.takeIf { it.computerId == computer.id }
+    val ready = account.guest == null
     CardFrame {
+        Screen(thumb, ready && progress == null, stringResource(R.string.pcr_connect) + " " + computer.name) {
+            acts.connectFriend(computer, GuestChoices().permissions(), Mode.SCREEN)
+        }
         CardTitle(computer.name, ComputerList.platform(computer.platform), ComputerStatus.ONLINE)
         Text(FriendsConnect.owner(computer.ownerHandle) + " · " + ComputerList.access(computer), color = c.textDim,
             style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (progress != null) {
             Text(FriendsConnect.phaseText(progress), color = c.textDim, style = MaterialTheme.typography.bodyMedium)
             GhostButton(FriendsConnect.CANCEL, acts.cancelFriendConnect)
-        } else Column(Modifier.widthIn(max = 360.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (thumb != null) Preview(thumb, Modifier.fillMaxWidth())
-            // The same strip as an own card: Connect first, then what the owner's settings allow, each a glyph.
+        } else if (ComputerList.friendTiles(computer).isNotEmpty()) {
+            // What else the owner's settings allow, each a glyph.
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val ready = account.guest == null
-                GlyphTile(R.drawable.lucide_monitor, stringResource(R.string.pcr_connect), Modifier.weight(1f), primary = true) {
-                    if (ready) acts.connectFriend(computer, GuestChoices().permissions(), Mode.SCREEN)
-                }
                 ComputerList.friendTiles(computer).forEach { tile ->
                     GlyphTile(tile.mode.iconRes(), stringResource(tile.mode.label()), Modifier.weight(1f)) {
                         if (ready) acts.connectFriend(computer, tile.permissions, tile.mode)
@@ -304,19 +304,35 @@ private fun SavedCard(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode
     }
     Box {
     CardFrame {
+        // The screen is the Connect button; an offline computer that can be woken wakes instead.
+        val tapToWake = !card.online && card.primary == PrimaryAction.WAKE
+        Screen(thumb.takeIf { card.online }, card.online || tapToWake,
+            stringResource(if (tapToWake) R.string.pcr_wake else R.string.pcr_connect) + " " + card.name) { a.primary(card) }
         CardTitle(card.name, card.os.substringBefore(' '), ComputerList.status(card), endPad = 36.dp)
-        // The preview, then one strip: Connect first, the modes after, each a glyph with no label.
-        Column(Modifier.widthIn(max = 360.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (card.online && thumb != null) Preview(thumb, Modifier.fillMaxWidth())
-            if (card.online) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                GlyphTile(R.drawable.lucide_monitor, stringResource(R.string.pcr_connect), Modifier.weight(1f), primary = true) { a.primary(card) }
-                modes.forEach { m -> GlyphTile(m.iconRes(), stringResource(m.label()), Modifier.weight(1f)) { a.open(card, m) } }
-                if (card.locked && card.canUnlock) GlyphTile(R.drawable.lucide_fingerprint, stringResource(R.string.pcr_unlock), Modifier.weight(1f), onClick = unlock)
-            } else if (card.primary == PrimaryAction.WAKE) PrimaryButton(stringResource(R.string.pcr_wake), { a.primary(card) })
+        if (card.online && (modes.isNotEmpty() || (card.locked && card.canUnlock))) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            modes.forEach { m -> GlyphTile(m.iconRes(), stringResource(m.label()), Modifier.weight(1f)) { a.open(card, m) } }
+            if (card.locked && card.canUnlock) GlyphTile(R.drawable.lucide_fingerprint, stringResource(R.string.pcr_unlock), Modifier.weight(1f), onClick = unlock)
         }
     }
     // The 48dp touch target sits over the card's top right corner; the dots line up with the name row.
     AnchoredMenu(stringResource(R.string.pcr_more), items, Modifier.align(Alignment.TopEnd).offset(y = (-2).dp))
+    }
+}
+
+/**
+ * The computer's screen, 16:9, as on the desktop tiles: its latest picture, or the monitor glyph until
+ * one arrives. Tapping it connects.
+ */
+@Composable
+private fun Screen(thumb: ImageBitmap?, enabled: Boolean, label: String, onClick: () -> Unit) {
+    val c = LocalMidnight.current
+    val haptics = com.pcremote.ui.theme.rememberHaptics()
+    Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MidnightShapes.control).background(c.bg)
+        .border(1.dp, c.border, MidnightShapes.control)
+        .then(if (enabled) Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = label) { haptics.tick(); onClick() } else Modifier)
+        .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        else Icon(painterResource(R.drawable.lucide_monitor), null, tint = if (enabled) c.textDim else c.border, modifier = Modifier.size(32.dp))
     }
 }
 

@@ -3,6 +3,8 @@ package com.pcremote.settings
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -39,9 +41,14 @@ object SettingsOptions {
     val bitrateLabels: List<String> = SettingsModel.BITRATES_MBPS.map { "$it Mbps" }
 }
 
-/** The Settings tab: a page title and one card per group. */
+/**
+ * The Settings tab, laid out like the desktop's: a segmented control for the sections, then titled
+ * groups of rows with the label at the left and the value at the right.
+ */
 @Composable
-fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Modifier = Modifier) {
+fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Modifier = Modifier,
+                 computers: List<Pair<String, String>> = emptyList(), forget: (String) -> Unit = {}, updates: () -> Unit = {}) {
+    var section by rememberSaveable { mutableIntStateOf(0) }
     var theme by remember { mutableStateOf(model.theme) }
     var haptics by remember { mutableStateOf(model.haptics) }
     var natural by remember { mutableStateOf(model.naturalScroll) }
@@ -53,53 +60,70 @@ fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Mod
     var audio by remember { mutableStateOf(model.playHostAudio) }
     var clipboard by remember { mutableStateOf(model.shareClipboard) }
     val ctx = LocalContext.current
+    val c = LocalMidnight.current
 
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
-
-        Group(R.string.pcr_set_video) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FlatDropdown(stringResource(R.string.pcr_resolution), sizeLabel(resolution.first, resolution.second), SettingsOptions.resolutionLabels,
-                    { i -> resolution = SettingsOptions.resolutions[i]; model.resolution = resolution }, Modifier.weight(1f))
-                FlatDropdown(stringResource(R.string.pcr_frame_rate), "$fps fps", SettingsOptions.frameRateLabels,
-                    { i -> fps = SettingsModel.FRAME_RATES[i]; model.frameRate = fps }, Modifier.weight(1f))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FlatDropdown(stringResource(R.string.pcr_bitrate_limit), "$bitrate Mbps", SettingsOptions.bitrateLabels,
-                    { i -> bitrate = SettingsModel.BITRATES_MBPS[i]; model.bitrateMbps = bitrate }, Modifier.weight(1f))
-                Spacer(Modifier.weight(1f))
-            }
-            }
-        }
-        Group(R.string.pcr_set_audio) {
-            FlatCheckbox(audio, stringResource(R.string.pcr_play_host_audio), { audio = it; model.playHostAudio = it })
-        }
-        Group(R.string.pcr_set_clipboard) {
-            FlatCheckbox(clipboard, stringResource(R.string.pcr_share_clipboard), { clipboard = it; model.shareClipboard = it })
-        }
-        Group(R.string.pcr_set_controls) {
-            FlatCheckbox(haptics, stringResource(R.string.pcr_haptics), { haptics = it; model.haptics = it })
-            FlatCheckbox(natural, stringResource(R.string.pcr_natural_scroll), { natural = it; model.naturalScroll = it })
-            SliderRow(R.string.pcr_pointer_speed, pointer, 0.5f..3f) { pointer = it; model.pointerSpeed = it }
-            SliderRow(R.string.pcr_gyro_sensitivity, gyro, 0.25f..3f) { gyro = it; model.gyroSensitivity = it }
-        }
-        Group(R.string.pcr_set_appearance) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(ThemeChoice.SYSTEM to R.string.pcr_theme_system, ThemeChoice.DARK to R.string.pcr_theme_dark,
-                    ThemeChoice.LIGHT to R.string.pcr_theme_light).forEach { (t, label) ->
-                    Segment(stringResource(label), selected = theme == t, Modifier.weight(1f)) {
-                        theme = t; model.theme = t; onThemeChanged()
+    Column(modifier.fillMaxSize().padding(start = 20.dp, end = 20.dp, top = 8.dp)) {
+        SegmentedControl(listOf("Streaming", "Controls", "Computers", "About"), section) { section = it }
+        Spacer(Modifier.height(10.dp))
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (section) {
+                0 -> {
+                    Group(R.string.pcr_set_video) {
+                        DropdownRow(stringResource(R.string.pcr_resolution), sizeLabel(resolution.first, resolution.second), SettingsOptions.resolutionLabels) { i ->
+                            resolution = SettingsOptions.resolutions[i]; model.resolution = resolution
+                        }
+                        DropdownRow(stringResource(R.string.pcr_frame_rate), "$fps fps", SettingsOptions.frameRateLabels) { i ->
+                            fps = SettingsModel.FRAME_RATES[i]; model.frameRate = fps
+                        }
+                        DropdownRow(stringResource(R.string.pcr_bitrate_limit), "$bitrate Mbps", SettingsOptions.bitrateLabels) { i ->
+                            bitrate = SettingsModel.BITRATES_MBPS[i]; model.bitrateMbps = bitrate
+                        }
+                    }
+                    GroupText("Sound and clipboard") {
+                        SwitchRow("Play sound here", audio) { audio = it; model.playHostAudio = it }
+                        SwitchRow("Share clipboard", clipboard) { clipboard = it; model.shareClipboard = it }
+                    }
+                }
+                1 -> {
+                    Group(R.string.pcr_set_controls) {
+                        SwitchRow(stringResource(R.string.pcr_haptics), haptics) { haptics = it; model.haptics = it }
+                        SwitchRow(stringResource(R.string.pcr_natural_scroll), natural) { natural = it; model.naturalScroll = it }
+                        SliderRow(R.string.pcr_pointer_speed, pointer, 0.5f..3f) { pointer = it; model.pointerSpeed = it }
+                        SliderRow(R.string.pcr_gyro_sensitivity, gyro, 0.25f..3f) { gyro = it; model.gyroSensitivity = it }
+                    }
+                    Group(R.string.pcr_set_appearance) {
+                        val themes = listOf(ThemeChoice.SYSTEM to R.string.pcr_theme_system, ThemeChoice.DARK to R.string.pcr_theme_dark,
+                            ThemeChoice.LIGHT to R.string.pcr_theme_light)
+                        Spacer(Modifier.height(4.dp))
+                        SegmentedControl(themes.map { stringResource(it.second) }, themes.indexOfFirst { it.first == theme }.coerceAtLeast(0)) { i ->
+                            theme = themes[i].first; model.theme = theme; onThemeChanged()
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                }
+                2 -> {
+                    GroupText("Paired on this phone") {
+                        if (computers.isEmpty()) {
+                            Text("No computers paired on this phone. Computers on your account connect without pairing.",
+                                color = c.textDim, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 8.dp))
+                        }
+                        computers.forEach { (id, name) ->
+                            SettingRow(name) { GhostButton(stringResource(R.string.pcr_forget), { forget(id) }, tint = c.bad, compact = true) }
+                        }
+                    }
+                    WakeGroup()
+                    UnlockGroup()
+                }
+                else -> {
+                    Group(R.string.pcr_set_about) {
+                        SettingRow("Version") { Text(com.pcremote.BuildConfig.VERSION_NAME, color = c.textDim, style = MaterialTheme.typography.bodyMedium) }
+                        SettingRow("Updates") { GhostButton("Check for updates", updates, compact = true) }
+                        LinkRow(R.string.pcr_help) { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(HELP_URL))) }
+                        LinkRow(R.string.pcr_source) { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) }
                     }
                 }
             }
-        }
-        WakeGroup()
-        UnlockGroup()
-        Group(R.string.pcr_set_about) {
-            LinkRow(R.string.pcr_help) { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(HELP_URL))) }
-            LinkRow(R.string.pcr_source) { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) }
         }
     }
 }
@@ -168,13 +192,16 @@ private fun UnlockGroup() {
     }
 }
 
-/** Settings card: radius 7, margin 10, title 14 strong inside at the top. */
+/** Settings group as on the desktop: surface, one quiet border, a 12sp muted title, then rows. */
 @Composable
-private fun Group(title: Int, content: @Composable ColumnScope.() -> Unit) {
+private fun Group(title: Int, content: @Composable ColumnScope.() -> Unit) = GroupText(stringResource(title), content)
+
+@Composable
+private fun GroupText(title: String, content: @Composable ColumnScope.() -> Unit) {
     val c = LocalMidnight.current
-    Column(Modifier.fillMaxWidth().clip(MidnightShapes.card).background(c.surface).padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(stringResource(title), color = c.text, style = MaterialTheme.typography.titleSmall)
+    Column(Modifier.fillMaxWidth().clip(MidnightShapes.card).background(c.surface)
+        .border(1.dp, c.border, MidnightShapes.card).padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 4.dp)) {
+        Text(title, color = c.textDim, style = MaterialTheme.typography.bodySmall)
         content()
     }
 }

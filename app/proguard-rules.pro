@@ -10,3 +10,10 @@
 # Okio / OkHttp
 -dontwarn org.codehaus.mojo.animal_sniffer.IgnoreJRERequirement
 -dontwarn okio.**
+# The managed engine (Moonlight, app/engine) is started from the manifest and from
+# native code, so its entry points survive shrinking.
+-keep class com.limelight.Game { *; }
+-keepclasseswithmembernames class * { native <methods>; }
+-keep class com.limelight.nvstream.jni.MoonBridge { *; }
+-keep class com.limelight.binding.input.driver.UsbDriverService { *; }
+-keep class com.pcremote.engine.NativeTunnel { *; }

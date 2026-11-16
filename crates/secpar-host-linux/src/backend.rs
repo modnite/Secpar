@@ -1,5 +1,6 @@
 //! Local application façade plus authenticated owner sessions.
 use crate::{
+    engine::{self, Engine},
     identity::Identity,
     media::Media,
     portal::Portal,
@@ -42,6 +43,12 @@ fn machine_name() -> String {
         .take(64)
         .collect()
 }
+/// The computer's account when it is not linked to a Secpar account.
+fn desktop_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "secpar".into())
+}
 /// The control port. Tests that must not touch a real host on this machine set `SECPAR_HOST_PORT`.
 fn host_port() -> u16 {
     std::env::var("SECPAR_HOST_PORT").ok().and_then(|p| p.parse().ok()).filter(|p| *p != 0).unwrap_or(48999)
@@ -56,7 +63,13 @@ struct Backend {
     store: Arc<Mutex<Store>>,
     identity: Identity,
     name: String,
+    /// The host data directory: the bundled engine and its private state live here.
+    directory: PathBuf,
     agent: Mutex<Option<AgentHandle>>,
+    /// The managed Sunshine engine and the tunnel in front of it, once both are ready.
+    engine: Mutex<Option<Arc<Engine>>>,
+    /// The account that vouches for this computer, or the desktop user when unlinked.
+    owner: Mutex<String>,
     active: Arc<secpar_host_core::limits::StreamSlots>,
     account: Result<Arc<secpar_host_core::account::Account>, String>,
     /// None when this host is not linked to an account that could vouch for a friend.
@@ -81,11 +94,13 @@ impl Backend {
         // An account failure must not interrupt existing manually paired devices.
         let account = crate::account::open(&directory, &identity.fingerprint());
         if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
-        let host = Self::new(store, identity, account);
+        let host = Self::new(directory, store, identity, account);
         // The first look at the GStreamer plugin registry takes a while. Every `welcome` lists the
         // host's capabilities, so without this the first device to connect waits for it.
         tokio::task::spawn_blocking(|| { let _ = thumb::available(); });
         let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),std::net::SocketAddr::from(([0, 0, 0, 0], host_port())),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on its port. Check whether another Secpar instance is open.")?;
+        // The managed engine and its tunnel start behind the control connection.
+        Self::start_engine(host.clone());
         if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
         let mut events = handle.events();
         *host.agent.lock().unwrap() = Some(handle);
@@ -130,7 +145,7 @@ impl Backend {
         });
         Ok(host)
     }
-    fn new(store: Store, identity: Identity, account: Result<Arc<secpar_host_core::account::Account>, String>) -> Arc<Self> {
+    fn new(directory: PathBuf, store: Store, identity: Identity, account: Result<Arc<secpar_host_core::account::Account>, String>) -> Arc<Self> {
         let store = Arc::new(Mutex::new(store));
         let active: Arc<secpar_host_core::limits::StreamSlots> = Arc::default();
         let busy = active.clone();
@@ -143,7 +158,10 @@ impl Backend {
             store,
             identity,
             name: machine_name(),
+            directory,
             agent: Mutex::new(None),
+            engine: Mutex::new(None),
+            owner: Mutex::new(desktop_user()),
             active,
             account,
             outgoing: Outgoing::default(),
@@ -151,11 +169,50 @@ impl Backend {
             media: Arc::new(Media::system()),
         })
     }
+    /// Starts the bundled engine and its tunnel in the background. The host
+    /// advertises `gamestream` only once both are ready (docs/gamestream-engine.md).
+    fn start_engine(host: Arc<Self>) {
+        // A build without the bundled engine simply does not offer `gamestream`.
+        if !engine::available(&host.directory) {
+            return;
+        }
+        let Some(runtime) = tokio::runtime::Handle::try_current().ok() else { return };
+        runtime.spawn(async move {
+            match Engine::start(&host.directory).await {
+                Ok(engine) => {
+                    eprintln!(
+                        "secpar: managed engine ready, tunnel on UDP port {}",
+                        engine.tunnel().port().unwrap_or(0)
+                    );
+                    *host.engine.lock().unwrap() = Some(Arc::new(engine));
+                }
+                Err(error) => eprintln!("secpar: {error}"),
+            }
+        });
+    }
+    /// Drops everything the engine granted to one device, and its way through
+    /// the tunnel, in the background.
+    fn revoke_engine(&self, owner: &str, device: &str) {
+        let Some(engine) = self.engine.lock().unwrap().clone() else { return };
+        let Some(runtime) = tokio::runtime::Handle::try_current().ok() else { return };
+        let (owner, device) = (owner.to_string(), device.to_string());
+        runtime.spawn(async move {
+            if let Err(error) = engine.revoke_grants(&owner, &device).await {
+                eprintln!("secpar: the managed engine kept a device grant: {error}");
+            }
+        });
+    }
     fn sync_account_owner(&self, owner: Option<String>) {
+        // Grants are journaled under the owner that was current when they were made.
+        let previous = std::mem::replace(
+            &mut *self.owner.lock().unwrap(),
+            owner.clone().unwrap_or_else(desktop_user),
+        );
         let revoked = self.store.lock().unwrap().set_account_owner(owner);
         if let Some(agent) = self.agent.lock().unwrap().as_ref() {
-            for device in revoked { agent.revoke(&device); }
+            for device in &revoked { agent.revoke(device); }
         }
+        for device in &revoked { self.revoke_engine(&previous, device); }
     }
     /// `pc` and a signed Worker address, so a phone outside the LAN can pair (once registered).
     fn add_relay_bootstrap(&self, link: &mut url::Url) {
@@ -222,8 +279,12 @@ impl Backend {
             }
             "revoke" => {
                 let id = args["id"].as_str().ok_or("Missing device")?;
-                let agent = self.agent.lock().unwrap();
-                agent.as_ref().ok_or("Host is not running")?.revoke(id);
+                {
+                    let agent = self.agent.lock().unwrap();
+                    agent.as_ref().ok_or("Host is not running")?.revoke(id);
+                }
+                let owner = self.owner.lock().unwrap().clone();
+                self.revoke_engine(&owner, id);
                 Ok(Value::Null)
             }
             "host_friends" => Ok(json!(self.account.as_ref().map_err(Clone::clone)?.friend_rows().await?)),
@@ -280,10 +341,32 @@ impl Handlers for Backend {
         if uinput::available() {
             caps.push("pad".into());
         }
+        // Both the engine and its tunnel must be up before the capability is
+        // offered (docs/gamestream-engine.md).
+        if self.engine.lock().unwrap().is_some() {
+            caps.push("gamestream".into());
+        }
         caps
     }
     fn session(&self, device: &str, out: Outbox) -> Box<dyn Session> {
         self.build(device, out, None)
+    }
+    fn gamestream_session(&self, device: &str, out: Outbox) -> Option<Box<dyn Session>> {
+        let engine = self.engine.lock().unwrap().clone()?;
+        // The engine's own client list shows each device by its Secpar name.
+        if let Some(name) = self
+            .store
+            .lock()
+            .unwrap()
+            .devices()
+            .into_iter()
+            .find(|d| d.id == device)
+            .map(|d| d.name)
+        {
+            engine.name_device(device, &name);
+        }
+        let owner = self.owner.lock().unwrap().clone();
+        Some(engine.agent_session(&owner, device, out))
     }
     fn guests(&self) -> Option<Arc<GuestAdmission>> {
         self.guests.clone()
@@ -475,6 +558,8 @@ impl Session for OwnerSession {
                 Err(code) => Some(ServerMsg::error(code, "unknown media command", Some("media.cmd"))),
             },
             ClientMsg::ThumbSub { on } => {
+                // The owner can keep this screen private: then no device or friend gets a still.
+                let on = on && self.store.lock().unwrap().config().previews;
                 self.thumb = on.then(|| self.thumbs.subscribe(self.out.clone()));
                 None
             }
@@ -674,7 +759,7 @@ mod tests {
         c.files_dir = dir.join("inbox").to_string_lossy().into_owned();
         store.set_config(c).unwrap();
         let identity = Identity::open(&config).unwrap();
-        let host = Backend::new(store, identity, Err("offline".into()));
+        let host = Backend::new(dir.clone(), store, identity, Err("offline".into()));
         let (out, rx) = Outbox::pair();
         let session = host.session("phone", out);
         Rig { host, dir, session, rx }

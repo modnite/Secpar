@@ -74,8 +74,18 @@ object ComputerList {
      */
     fun rows(cards: List<PcCardUi>, owned: List<OwnedComputer>, shared: List<FriendComputer> = emptyList()): List<ComputerRow> {
         val known = cards.mapNotNull { it.fingerprint.takeIf(String::isNotEmpty) }.toSet()
-        return cards.map { ComputerRow.Saved(it) } +
-            owned.filter { it.certificateFp == null || it.certificateFp !in known }.map { ComputerRow.FromAccount(it) } +
+        // One tile per computer: an installation enrolled twice keeps its name. A computer paired on this
+        // phone stands for it first, then the account record that is online and linked.
+        // An old pairing on this phone that is offline gives way to the account's record of the same
+        // computer when that one is online.
+        val onlineOwned = owned.filter { it.online }.map { it.name.lowercase() }.toSet()
+        val shownCards = cards.filter { it.online || it.name.lowercase() !in onlineOwned }
+        val names = shownCards.map { it.name.lowercase() }.toMutableSet()
+        val accountRows = owned.filter { it.certificateFp == null || it.certificateFp !in known || shownCards.none { c -> c.fingerprint == it.certificateFp } }
+            .sortedByDescending { (if (it.online) 2 else 0) + (if (it.linked) 1 else 0) }
+            .filter { names.add(it.name.lowercase()) }
+        return shownCards.map { ComputerRow.Saved(it) } +
+            accountRows.map { ComputerRow.FromAccount(it) } +
             shared.filter { s -> cards.none { it.id == s.id } && owned.none { it.id == s.id } }.map { ComputerRow.Friends(it) }
     }
 
@@ -90,7 +100,8 @@ object ComputerList {
     fun friendTiles(c: FriendComputer): List<FriendTile> = buildList {
         add(FriendTile(Mode.PAD, listOf("gamepad")))
         // Files opens as an upload page: the host never lets a friend browse, so only sending works.
-        add(FriendTile(Mode.FILES, listOf("files")))
+        // Browsing comes along only when the owner allows it; older hosts refuse a grant that asks.
+        add(FriendTile(Mode.FILES, if (c.browse) listOf("files", "browse") else listOf("files")))
         if (c.keyboard || c.mouse) add(FriendTile(Mode.REMOTE, listOfNotNull("keyboard".takeIf { c.keyboard }, "mouse".takeIf { c.mouse })))
         if (c.keyboard) add(FriendTile(Mode.SLIDES, listOf("keyboard")))
     }

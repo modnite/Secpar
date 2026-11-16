@@ -14,8 +14,8 @@ android {
         minSdk 26
         targetSdk 36
 
-        versionName "3.20.2"
-        versionCode = 550
+        versionName "4.0.0"
+        versionCode = 551
     }
 
     flavorDimensions.add("root")
@@ -84,12 +84,28 @@ android {
     packaging {
         resources {
             excludes += '/META-INF/*.md'
+            // BouncyCastle's post-quantum test vectors; the stream's certificate
+            // code never uses them.
+            excludes += 'org/bouncycastle/pqc/**'
+        }
+        // Native libraries are stored compressed, which halves the download.
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }
 
 dependencies {
     implementation 'com.squareup.okhttp3:okhttp:5.5.0'
+
+    // The pinned Moonlight Android engine, inside this same app (see app/engine).
+    implementation project(':engine')
+
+    // Without this library the app still streams, but through its own engine only.
+    if (!file('src/main/jniLibs/arm64-v8a/libsecpar_android.so').exists()) {
+        logger.warn('secpar: libsecpar_android.so is missing; the managed engine cannot open its tunnel. ' +
+            'Build it with scripts/build-android-core.sh into app/src/main/jniLibs/arm64-v8a.')
+    }
 
     implementation platform('androidx.compose:compose-bom:2025.10.00')
     implementation 'androidx.compose.material3:material3'

@@ -27,6 +27,8 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -193,8 +195,10 @@ fun FlatDropdown(label: String, value: String, options: List<String>, onPick: (I
     val c = LocalMidnight.current
     var open by remember { mutableStateOf(false) }
     Column(modifier) {
-        Text(label, color = c.textDim, style = MaterialTheme.typography.bodySmall)
-        Spacer(Modifier.height(4.dp))
+        if (label.isNotEmpty()) {
+            Text(label, color = c.textDim, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(4.dp))
+        }
         Box {
             Row(
                 Modifier.fillMaxWidth().height(32.dp).clip(MidnightShapes.control).background(c.surfaceHigh)
@@ -245,5 +249,60 @@ fun PageHeader(title: String, modifier: Modifier = Modifier, actions: @Composabl
         Text(title, color = c.text, style = MaterialTheme.typography.headlineMedium, maxLines = 1,
             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+    }
+}
+
+/** An on and off switch drawn like the desktop's: a 32 x 18 track, accent when on. 48dp to touch. */
+@Composable
+fun FlatSwitch(checked: Boolean, label: String, onChange: (Boolean) -> Unit) {
+    val c = LocalMidnight.current
+    val haptics = rememberHaptics()
+    Box(Modifier.size(48.dp).clickable(role = Role.Switch, onClickLabel = label) { haptics.tick(); onChange(!checked) }
+        .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
+        Box(Modifier.size(width = 34.dp, height = 20.dp).clip(RoundedCornerShape(10.dp))
+            .background(if (checked) c.accent else c.controlBorder)) {
+            Box(Modifier.align(if (checked) Alignment.CenterEnd else Alignment.CenterStart).padding(horizontal = 3.dp).size(14.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape).background(if (checked) c.onAccent else c.text))
+        }
+    }
+}
+
+/** One settings row, as on the desktop: the label at the left, its control at the right. */
+@Composable
+fun SettingRow(label: String, content: @Composable RowScope.() -> Unit) {
+    val c = LocalMidnight.current
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = c.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(end = 8.dp))
+        content()
+    }
+}
+
+/** A settings row whose value is a switch. */
+@Composable
+fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    SettingRow(label) { FlatSwitch(checked, label, onChange) }
+}
+
+/** A settings row whose value is a drop-down. */
+@Composable
+fun DropdownRow(label: String, value: String, options: List<String>, onPick: (Int) -> Unit) {
+    SettingRow(label) { FlatDropdown("", value, options, onPick, Modifier.width(170.dp)) }
+}
+
+/** A segmented control: one bordered strip, equal parts, the chosen one filled. */
+@Composable
+fun SegmentedControl(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    val c = LocalMidnight.current
+    val haptics = rememberHaptics()
+    Row(Modifier.fillMaxWidth().height(40.dp).clip(MidnightShapes.control).background(c.surface)
+        .border(1.dp, c.border, MidnightShapes.control).padding(2.dp)) {
+        options.forEachIndexed { i, text ->
+            val on = i == selected
+            Box(Modifier.weight(1f).fillMaxHeight().clip(MidnightShapes.control).background(if (on) c.surfaceHigh else Color.Transparent)
+                .clickable(role = Role.Tab) { if (!on) { haptics.tick(); onSelect(i) } }, contentAlignment = Alignment.Center) {
+                Text(text, color = if (on) c.accent else c.textDim, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+            }
+        }
     }
 }

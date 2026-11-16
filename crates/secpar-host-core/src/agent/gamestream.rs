@@ -1,14 +1,26 @@
 //! Validate before forwarding to the platform's authenticated engine session.
 use super::Session;
 use crate::proto::{ClientMsg,ServerMsg};
+use std::net::SocketAddr;
+
+/// More endpoints than any client needs; anything above is a malformed request.
+const MAX_CANDIDATES: usize = 8;
+
+fn hex_sha256(value: &str) -> bool {
+    value.len()==64 && value.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))
+}
 
 pub(super) fn dispatch(message:ClientMsg,session:&mut Option<Box<dyn Session>>)->Option<ServerMsg> {
     let (id,valid)=match &message {
         ClientMsg::GameStreamInfo{id}=>(id,true),
-        ClientMsg::GameStreamPair{id,client_id,certificate_sha256,pin}=>(id,
+        ClientMsg::GameStreamPair{id,client_id,certificate_sha256,pin,tunnel_certificate_sha256,tunnel_candidates}=>(id,
             !client_id.is_empty() && client_id.len()<=128 && !client_id.chars().any(char::is_control) &&
-            certificate_sha256.len()==64 && certificate_sha256.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)) &&
-            pin.len()==4 && pin.bytes().all(|b|b.is_ascii_digit())),
+            hex_sha256(certificate_sha256) &&
+            pin.len()==4 && pin.bytes().all(|b|b.is_ascii_digit()) &&
+            // Without the tunnel identity the host cannot let the device in.
+            hex_sha256(tunnel_certificate_sha256) &&
+            tunnel_candidates.len()<=MAX_CANDIDATES &&
+            tunnel_candidates.iter().all(|c|c.parse::<SocketAddr>().is_ok())),
         _=>unreachable!("Only engine messages are routed here"),
     };
     let valid_id=!id.is_empty() && id.len()<=64 && id.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'_'|b'-'));
@@ -54,7 +66,7 @@ mod tests {
     struct Engine {device:String,state:Arc<State>}
     impl Session for Engine {fn on_msg(&mut self,m:ClientMsg)->Option<ServerMsg>{
         self.state.requests.lock().unwrap().push((self.device.clone(),m.t()));
-        match m {ClientMsg::GameStreamInfo{id}=>Some(ServerMsg::GameStreamInfo{id,http_port:48989,https_port:48984,certificate_sha256:"a".repeat(64)}),
+        match m {ClientMsg::GameStreamInfo{id}=>Some(ServerMsg::GameStreamInfo{id,http_port:48989,https_port:48984,certificate_sha256:"a".repeat(64),tunnel_port:48988,tunnel_certificate_sha256:"c".repeat(64),tunnel_addresses:vec![]}),
             ClientMsg::GameStreamPair{id,..}=>Some(ServerMsg::GameStreamPaired{id}),_=>unreachable!()}
     }}
     impl Drop for Engine {fn drop(&mut self){self.state.dropped.fetch_add(1,Ordering::SeqCst);}}
@@ -102,6 +114,18 @@ mod tests {
         assert_eq!(next(&mut connection).await["id"],"info-1");
         assert_eq!(*state.created.lock().unwrap(),vec!["owner-one"]);
         assert_eq!(*state.requests.lock().unwrap(),vec![("owner-one".into(),"gamestream.info")]);
+    }
+    #[tokio::test]
+    async fn a_pair_requires_the_tunnel_identity_and_valid_endpoints(){
+        let (agent,state)=agent(true);let mut connection=connection(&agent);hello(&connection,"one").await;next(&mut connection).await;
+        let cert="a".repeat(64);
+        send(&connection,serde_json::json!({"t":"gamestream.pair","id":"no-tunnel","client_id":"fixture","certificate_sha256":cert,"pin":"1234"})).await;
+        assert_eq!(next(&mut connection).await["code"],"bad_request");
+        send(&connection,serde_json::json!({"t":"gamestream.pair","id":"bad-endpoint","client_id":"fixture","certificate_sha256":cert,"pin":"1234","tunnel_certificate_sha256":"b".repeat(64),"tunnel_candidates":["not-an-address"]})).await;
+        assert_eq!(next(&mut connection).await["code"],"bad_request");
+        send(&connection,serde_json::json!({"t":"gamestream.pair","id":"ok","client_id":"fixture","certificate_sha256":cert,"pin":"1234","tunnel_certificate_sha256":"b".repeat(64),"tunnel_candidates":["198.51.100.8:54321","192.168.1.30:54321"]})).await;
+        let reply=next(&mut connection).await;assert_eq!(reply["t"],"gamestream.paired");assert_eq!(reply["id"],"ok");
+        assert_eq!(state.requests.lock().unwrap().len(),1);
     }
     #[tokio::test]
     async fn revocation_drops_only_its_engine_session_and_other_device_stays_active(){

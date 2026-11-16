@@ -34,6 +34,8 @@ pub struct Config {
     pub friends: bool,
     pub anywhere: bool,
     pub files_dir: String,
+    /// Other devices and friends see a still of this screen. Off keeps the screen private.
+    pub previews: bool,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             anywhere: false,
             // empty: the signed-in user's Downloads\Secpar (see Store::files_dir)
             files_dir: String::new(),
+            previews: true,
         }
     }
 }
@@ -117,6 +120,7 @@ impl Store {
         if s.data.relay_key.is_empty() {
             s.data.relay_key = b64url(&random::<32>());
         }
+        s.fold_duplicates();
         s.save()?;
         Ok(s)
     }
@@ -130,6 +134,26 @@ impl Store {
 
     pub fn pc_id(&self) -> &str {
         &self.data.pc_id
+    }
+
+    /// The signed-in account that owns this computer, while the host is linked.
+    pub fn account_owner(&self) -> Option<&str> {
+        self.account_owner.as_deref()
+    }
+
+    /// The stable owner string engine grants are scoped to: the account owner when
+    /// there is one, otherwise this computer's id.
+    pub fn engine_owner(&self) -> String {
+        self.account_owner().unwrap_or(&self.data.pc_id).to_string()
+    }
+
+    /// The account a device was paired under, if the device is still known.
+    pub fn device_owner(&self, id: &str) -> Option<Option<String>> {
+        self.data
+            .devices
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.account_owner.clone())
     }
 
     pub fn new_otp(&mut self) -> String {
@@ -165,8 +189,27 @@ impl Store {
         let token = b64url(&random::<32>());
         let id = hex(&random::<8>());
         self.data.devices.push(Device { id: id.clone(), name: name.into(), token_sha256: token_hash(&token), revoked: false, account_owner: owner });
+        self.fold_duplicates();
         self.save()?;
         Ok((id, token))
+    }
+
+    /// One record per device: a device that pairs again under the same name
+    /// and owner replaces its older records, so repeated pairings do not pile
+    /// up in the list.
+    fn fold_duplicates(&mut self) {
+        let devices = &mut self.data.devices;
+        for newest in (0..devices.len()).rev() {
+            if devices[newest].revoked {
+                continue;
+            }
+            let (name, owner) = (devices[newest].name.to_lowercase(), devices[newest].account_owner.clone());
+            for older in 0..newest {
+                if !devices[older].revoked && devices[older].account_owner == owner && devices[older].name.to_lowercase() == name {
+                    devices[older].revoked = true;
+                }
+            }
+        }
     }
 
     /// Ok(device) for a live token, else the protocol error code.
