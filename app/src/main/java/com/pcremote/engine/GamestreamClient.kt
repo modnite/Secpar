@@ -20,7 +20,8 @@ class GamestreamClient(
     private val incoming: Flow<Msg>,
     private val timeoutMs: Long = 6_000,
     /** The computer answers a pairing after the engine has accepted it, which takes longer. */
-    private val pairTimeoutMs: Long = 20_000,
+    /** Longer than the computer waits for this device's pairing handshake. */
+    private val pairTimeoutMs: Long = 45_000,
 ) {
     private val counter = AtomicLong()
 

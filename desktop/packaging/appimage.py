@@ -33,6 +33,12 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     # this app, not a separate download.
     if not (ENGINE/"sunshine").is_file():raise RuntimeError("No staged engine at "+str(ENGINE)+" (set SECPAR_ENGINE_DIR)")
     shutil.copytree(ENGINE,exe/"engine")
+    # The engine is built relocatable (scripts/build-sunshine-linux.sh): it reads its shaders from
+    # ./usr/local/assets beside itself. Without them VA-API fails and it falls back to software.
+    assets=exe/"engine"/"usr"/"local"/"assets"
+    if (exe/"engine"/"assets").is_dir() and not assets.exists():
+        assets.parent.mkdir(parents=True);shutil.move(str(exe/"engine"/"assets"),str(assets))
+    if not (assets/"shaders"/"opengl"/"ConvertY.frag").is_file():raise RuntimeError("The engine's shaders are missing")
     for name in ENGINE_LIBS:
         staged=exe/"engine"/name
         if not staged.is_file():raise RuntimeError("Missing bundled engine library "+name)

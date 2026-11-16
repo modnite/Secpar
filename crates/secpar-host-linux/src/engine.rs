@@ -77,19 +77,39 @@ pub fn available(data: &Path) -> bool {
     executable(data).is_some() || packaged().is_some()
 }
 
-/// First run: copies the package's whole `engine/` folder, assets included, into
-/// `<data>/engine`, which is where the supervisor runs it from. A folder that is
-/// already there is left alone, and an incomplete copy never becomes the real
-/// one. Files are copied as they are; symbolic links are never followed.
+/// Copies the package's whole `engine/` folder, assets included, into
+/// `<data>/engine`, which is where the supervisor runs it from: on first run, and
+/// again whenever an update ships a different engine. An incomplete copy never
+/// becomes the real one. Files are copied as they are; symbolic links are never followed.
 fn install(data: &Path) -> Result<(), &'static str> {
     let engine = data.join("engine");
-    if engine.join("sunshine").is_file() {
-        return Ok(());
-    }
     match packaged() {
-        Some(from) => install_from(&from, data),
-        None => Ok(()),
+        Some(from) if !engine.join("sunshine").is_file() || layout(&from) != layout(&engine) => install_from(&from, data),
+        _ => Ok(()),
     }
+}
+
+/// Every file under `dir` with its size, to tell whether two engine folders differ.
+/// The engine's own run logs are not part of the package.
+fn layout(dir: &Path) -> std::collections::BTreeMap<PathBuf, u64> {
+    fn walk(root: &Path, dir: &Path, depth: u8, out: &mut std::collections::BTreeMap<PathBuf, u64>) {
+        if depth > MAX_DEPTH || out.len() > 4096 { return; }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else { continue };
+            let path = entry.path();
+            if kind.is_dir() {
+                walk(root, &path, depth + 1, out);
+            } else if kind.is_file() && !path.extension().is_some_and(|e| e == "log") {
+                if let (Ok(meta), Ok(rel)) = (entry.metadata(), path.strip_prefix(root)) {
+                    out.insert(rel.to_path_buf(), meta.len());
+                }
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(dir, dir, 0, &mut out);
+    out
 }
 
 fn install_from(from: &Path, data: &Path) -> Result<(), &'static str> {
@@ -338,15 +358,12 @@ impl Engine {
     /// Starts the bundled engine, then the tunnel. The first start can take up
     /// to a minute while the engine looks for capture and encoder support.
     pub async fn start(data: &Path, choice: &store::EncoderChoice) -> Result<Self, &'static str> {
-        let executable = match executable(data) {
-            Some(executable) => executable,
-            None => {
-                // The package's engine folder is copied into the data directory
-                // once, because the engine wants a writable working folder.
-                install(data)?;
-                executable(data).ok_or(NO_ENGINE)?
-            }
-        };
+        // The package's engine folder is copied into the data directory, because the
+        // engine wants a writable working folder; an update replaces an older copy.
+        if std::env::var_os("SECPAR_ENGINE_PATH").is_none() {
+            install(data)?;
+        }
+        let executable = executable(data).ok_or(NO_ENGINE)?;
         let config = Config {
             executable,
             state: data.join("gamestream"),
