@@ -39,6 +39,8 @@ pub enum Capture {
     X11,
     /// KDE Plasma on Wayland, through KWin's own screen capture.
     KWin,
+    /// Straight from the graphics driver; needs the engine's cap_sys_admin.
+    Kms,
 }
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum Encoder {
@@ -135,6 +137,9 @@ impl Config {
         }
         if matches!(self.capture, Capture::KWin) {
             text.push_str("capture = kwin\n");
+        }
+        if matches!(self.capture, Capture::Kms) {
+            text.push_str("capture = kms\n");
         }
         if matches!(self.capture, Capture::X11) {
             text.push_str("capture = x11\n");

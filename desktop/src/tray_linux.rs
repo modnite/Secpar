@@ -68,6 +68,26 @@ impl ksni::Tray for Item {
                 ..Default::default()
             }
             .into(),
+            StandardItem {
+                label: "Restart Secpar".into(),
+                activate: Box::new(|item: &mut Self| {
+                    // A fresh copy starts once this one has let go of its ports.
+                    let program = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from).or_else(|| std::env::current_exe().ok());
+                    if let Some(program) = program {
+                        let _ = std::process::Command::new("sh")
+                            .arg("-c")
+                            .arg("sleep 3; exec \"$0\"")
+                            .arg(program)
+                            .stdin(std::process::Stdio::null())
+                            .spawn();
+                    }
+                    item.quitting.store(true, Ordering::Relaxed);
+                    open(&item.ctx);
+                    item.ctx.send_viewport_cmd(ViewportCommand::Close);
+                }),
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
             StandardItem {
                 label: "Quit Secpar".into(),
