@@ -94,8 +94,12 @@ pub fn start(data_dir: &Path, addresses: Addresses, picture: Picture) -> Managed
             parts: Mutex::new(None),
         }),
     };
-    let launch = managed.clone();
-    tokio::spawn(async move { launch.run().await });
+    // Secpar's own stream engine serves every device; the bundled Sunshine engine is no longer
+    // shipped. SECPAR_WINDOWS_ENGINE=1 starts one placed in the data folder, for testing.
+    if std::env::var_os("SECPAR_WINDOWS_ENGINE").is_some() {
+        let launch = managed.clone();
+        tokio::spawn(async move { launch.run().await });
+    }
     managed
 }
 

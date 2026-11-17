@@ -242,6 +242,8 @@ impl Backend {
         // Linux hosts stream with Secpar's own engine and do not offer `gamestream`.
         // SECPAR_LINUX_ENGINE=1 turns it back on for testing.
         if std::env::var_os("SECPAR_LINUX_ENGINE").is_none() {
+            // The engine copy older versions made in the data folder is no longer used.
+            let _ = std::fs::remove_dir_all(host.directory.join("engine"));
             return;
         }
         // A build without the bundled engine simply does not offer `gamestream`.

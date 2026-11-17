@@ -14,8 +14,8 @@ android {
         minSdk 26
         targetSdk 36
 
-        versionName "4.0.8"
-        versionCode = 557
+        versionName "4.0.9"
+        versionCode = 558
     }
 
     flavorDimensions.add("root")
@@ -98,14 +98,6 @@ android {
 dependencies {
     implementation 'com.squareup.okhttp3:okhttp:5.5.0'
 
-    // The pinned Moonlight Android engine, inside this same app (see app/engine).
-    implementation project(':engine')
-
-    // Without this library the app still streams, but through its own engine only.
-    if (!file('src/main/jniLibs/arm64-v8a/libsecpar_android.so').exists()) {
-        logger.warn('secpar: libsecpar_android.so is missing; the managed engine cannot open its tunnel. ' +
-            'Build it with scripts/build-android-core.sh into app/src/main/jniLibs/arm64-v8a.')
-    }
 
     implementation platform('androidx.compose:compose-bom:2025.10.00')
     implementation 'androidx.compose.material3:material3'
