@@ -546,7 +546,8 @@ impl Panel {
                 });
                 if quality != old { self.send(Command::Patch(json!({"max_quality": quality}))); }
                 self.encoder_ui(ui, &config);
-                ui.label(egui::RichText::new("Changes apply to the next connection.").size(12.).color(design::MUTED));
+                self.setting_toggle(ui, &config, "pointer_in_picture", "Show pointer in picture", "");
+                ui.label(egui::RichText::new("Changes apply to the next connection. With the pointer left out, the connecting device draws it, so it follows the mouse without delay.").size(12.).color(design::MUTED));
             });
             // Full screen capture and controllers need a one-time step as administrator.
             let system = self.settings["system"].as_str().unwrap_or("missing").to_string();

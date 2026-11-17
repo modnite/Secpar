@@ -79,6 +79,10 @@ impl Tracker {
     pub fn known(&self) -> bool {
         self.known
     }
+    /// Where the pointer is, as far as this host has moved it.
+    pub fn pos(&self) -> (f64, f64) {
+        self.pos
+    }
     /// The real pointer was put at `pos` by an absolute move.
     pub fn set(&mut self, pos: (f64, f64)) {
         self.pos = (pos.0.clamp(0.0, last(self.logical.0)), pos.1.clamp(0.0, last(self.logical.1)));

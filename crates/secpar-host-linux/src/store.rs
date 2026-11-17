@@ -131,6 +131,9 @@ pub struct Config {
     pub files_dir: String,
     /// Other devices and friends see a still of this screen. Off keeps the screen private.
     pub previews: bool,
+    /// The desktop paints its pointer into the picture. Off leaves it out and the connecting
+    /// device draws the pointer itself, which follows the mouse without the desktop's delay.
+    pub pointer_in_picture: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -145,6 +148,7 @@ impl Default for Config {
             anywhere: false,
             files_dir: String::new(),
             previews: true,
+            pointer_in_picture: true,
         }
     }
 }
