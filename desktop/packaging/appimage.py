@@ -9,7 +9,7 @@ TAG = os.environ["SECPAR_RELEASE_TAG"]
 # The bundled hosting engine, staged by the release build, beside the
 # executable where the Linux host looks for it on first run. The connecting
 # side's engine (moonlight-common-c) is compiled into the app itself.
-ENGINE = Path(os.environ.get("SECPAR_ENGINE_DIR", ROOT/"dist-desktop/engine"))
+ENGINE = Path(os.environ["SECPAR_ENGINE_DIR"]) if os.environ.get("SECPAR_ENGINE_DIR") else None
 # Sunshine's own libraries are loaded through LD_LIBRARY_PATH=usr/lib (AppRun).
 ENGINE_LIBS = ("libcrypto.so.4", "libssl.so.4", "libminiupnpc.so.21")
 if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", TAG):raise RuntimeError("Use a plain vX.Y.Z release tag")
@@ -29,27 +29,27 @@ with tempfile.TemporaryDirectory(prefix="secpar-appimage-") as temp:
     shutil.copy2(ROOT/"assets/branding/secpar-icon.png",app/"com.secpar.desktop.png")
     shutil.copy2(ROOT/"desktop/packaging/appimage-install.sh",exe/"secpar-install")
     (exe/"secpar-install").chmod(0o755)
-    # One AppImage with both roles: the host's engine is an internal part of
-    # this app, not a separate download.
-    if not (ENGINE/"sunshine").is_file():raise RuntimeError("No staged engine at "+str(ENGINE)+" (set SECPAR_ENGINE_DIR)")
-    shutil.copytree(ENGINE,exe/"engine")
-    # The engine is built relocatable (scripts/build-sunshine-linux.sh): it reads its shaders from
-    # ./usr/local/assets beside itself. Without them VA-API fails and it falls back to software.
-    assets=exe/"engine"/"usr"/"local"/"assets"
-    if (exe/"engine"/"assets").is_dir() and not assets.exists():
-        assets.parent.mkdir(parents=True);shutil.move(str(exe/"engine"/"assets"),str(assets))
-    if not (assets/"shaders"/"opengl"/"ConvertY.frag").is_file():raise RuntimeError("The engine's shaders are missing")
-    # The system setup gives a root-owned copy of the engine capture permissions. Linux then
-    # ignores LD_LIBRARY_PATH for it, so the engine also looks in a fixed folder the setup fills.
-    # The user's own copy still finds its libraries through AppRun's LD_LIBRARY_PATH first.
-    patchelf=shutil.which("patchelf")
-    if not patchelf:raise RuntimeError("patchelf is needed to build the AppImage")
-    subprocess.run([patchelf,"--set-rpath","/usr/local/lib/secpar/engine/lib",str(exe/"engine"/"sunshine")],check=True)
-    for name in ENGINE_LIBS:
-        staged=exe/"engine"/name
-        if not staged.is_file():raise RuntimeError("Missing bundled engine library "+name)
-        shutil.copy2(staged,lib/name)
-        staged.unlink()
+    # Secpar's own stream engine hosts. The Sunshine engine is packaged only when one is staged
+    # with SECPAR_ENGINE_DIR, for testing; release builds leave it out.
+    if ENGINE is not None:
+        if not (ENGINE/"sunshine").is_file():raise RuntimeError("No staged engine at "+str(ENGINE))
+        shutil.copytree(ENGINE,exe/"engine")
+        # The engine is built relocatable (scripts/build-sunshine-linux.sh): it reads its shaders
+        # from ./usr/local/assets beside itself.
+        assets=exe/"engine"/"usr"/"local"/"assets"
+        if (exe/"engine"/"assets").is_dir() and not assets.exists():
+            assets.parent.mkdir(parents=True);shutil.move(str(exe/"engine"/"assets"),str(assets))
+        if not (assets/"shaders"/"opengl"/"ConvertY.frag").is_file():raise RuntimeError("The engine's shaders are missing")
+        # A root-owned copy with capture permissions ignores LD_LIBRARY_PATH, so the engine also
+        # looks in the fixed folder the system setup fills.
+        patchelf=shutil.which("patchelf")
+        if not patchelf:raise RuntimeError("patchelf is needed to package the engine")
+        subprocess.run([patchelf,"--set-rpath","/usr/local/lib/secpar/engine/lib",str(exe/"engine"/"sunshine")],check=True)
+        for name in ENGINE_LIBS:
+            staged=exe/"engine"/name
+            if not staged.is_file():raise RuntimeError("Missing bundled engine library "+name)
+            shutil.copy2(staged,lib/name)
+            staged.unlink()
     (app/"com.secpar.desktop.desktop").write_text('[Desktop Entry]\nType=Application\nName=Secpar\nExec=secpar-desktop\nIcon=com.secpar.desktop\nTerminal=false\nCategories=Network;RemoteAccess;\nX-AppImage-Version='+TAG[1:]+'\n')
     licenses=app/"usr/share/licenses/secpar";licenses.mkdir(parents=True)
     shutil.copy2(ROOT/"LICENSE.txt",licenses/"Secpar-GPL-3.0.txt")

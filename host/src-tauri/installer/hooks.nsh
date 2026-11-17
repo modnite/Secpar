@@ -110,6 +110,11 @@ FunctionEnd
   ; Only Secpar is started. No PC Remote, Sunshine, power or adapter settings are changed.
   ; the superseded second executable
   Delete "$INSTDIR\secpar-host.exe"
+  ; Folders older versions installed and nothing uses now: the Qt stream component and the
+  ; Sunshine engine, with the copy the host made of it.
+  RMDir /r "$INSTDIR\stream"
+  RMDir /r "$INSTDIR\engine"
+  RMDir /r "$%PROGRAMDATA%\Secpar\engine"
   nsExec::Exec 'sc.exe start "${PCR_SVC}"'
   Call SecparRepairShortcuts
 !macroend

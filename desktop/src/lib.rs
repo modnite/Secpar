@@ -17,7 +17,6 @@ mod design;
 mod dialogs;
 mod files;
 pub mod gamepad;
-mod gamestream;
 mod hosting;
 mod input;
 mod keys;
@@ -545,9 +544,6 @@ impl App {
         self.texture = None;
         self.displays.clear();
         self.cursor_shape = None;
-        // The managed engine is used for this person's own computers only: a
-        // friend's grant is not a device the computer's engine knows.
-        let managed = guest.is_none().then(|| gamestream::Settings::from_client(&self.client)).flatten();
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -574,10 +570,7 @@ impl App {
                     Err("Pair a computer first".into())
                 };
                 let result = match connection {
-                    Ok(c) => match (managed, c.caps.iter().any(|cap| cap == "gamestream")) {
-                        (Some(settings), true) => gamestream::run(c, settings, rx, ev_tx.clone()).await,
-                        _ => session::run(c, options, rx, ev_tx.clone()).await,
-                    },
+                    Ok(c) => session::run(c, options, rx, ev_tx.clone()).await,
                     Err(e) => Err(e),
                 };
                 let _ = ev_tx
@@ -1619,8 +1612,6 @@ impl eframe::App for App {
         }
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
-        // A stream on the managed engine is its own process: never let it outlive the app.
-        gamestream::stop_running();
         #[cfg(windows)]
         {
             self.hook = None;

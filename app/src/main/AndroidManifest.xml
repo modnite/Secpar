@@ -24,7 +24,6 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
-    <!-- The managed engine (Moonlight, compiled from app/engine) keeps the stream awake -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
@@ -76,25 +75,6 @@
             android:name="com.pcremote.scan.ScanActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
-        <!-- The managed engine's stream screen (Moonlight, compiled from app/engine).
-             Only the stream may enter picture-in-picture; nothing else in the app does. -->
-        <activity
-            android:name="com.limelight.Game"
-            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
-            android:noHistory="true"
-            android:supportsPictureInPicture="true"
-            android:resizeableActivity="true"
-            android:enableOnBackInvokedCallback="false"
-            android:launchMode="singleTask"
-            android:excludeFromRecents="true"
-            android:theme="@style/StreamTheme"
-            android:preferMinimalPostProcessing="true">
-            <meta-data android:name="com.nvidia.immediateInput" android:value="true" />
-            <meta-data android:name="com.nvidia.rawCursorInput" android:value="true" />
-        </activity>
-        <service
-            android:name="com.limelight.binding.input.driver.UsbDriverService"
-            android:exported="false" />
         <activity
             android:name="com.pcremote.modes.ShareToPcActivity"
             android:exported="true"

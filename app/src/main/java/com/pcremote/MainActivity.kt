@@ -226,7 +226,6 @@ class MainActivity : ComponentActivity() {
                 // Coming back from the managed engine's stream screen: the stream is over,
                 // so its tunnel and loopback ports go with it.
                 LifecycleResumeEffect(Unit) {
-                    com.pcremote.engine.EngineLaunch.finishIfStreaming()
                     onPauseOrDispose {}
                 }
                 fun finishOnboarding() {

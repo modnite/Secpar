@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "4.0.8"
+version = "4.0.9"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
@@ -9,7 +9,6 @@ publish = false
 sha2 = "0.10.9"
 secpar-client = { path = "../crates/secpar-client" }
 secpar-stream = { path = "../crates/secpar-stream" }
-secpar-moonlight = { path = "../crates/secpar-moonlight" }
 secpar-clipboard = { path = "../crates/secpar-clipboard" }
 base64 = "0.23.1"
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }

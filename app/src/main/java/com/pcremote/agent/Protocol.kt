@@ -108,7 +108,7 @@ sealed interface Msg {
     data class GameStreamInfoAsk(val id: String) : Msg
     /**
      * The engine's ports and pins. `tunnel_*` are absent on a host that has not opened the engine
-     * to this device yet; [com.pcremote.engine.Gamestream.read] keeps that apart from a broken answer.
+     * to this device yet; the client keeps that apart from a broken answer.
      */
     @Serializable @SerialName("gamestream.info") data class GameStreamInfo(
         val id: String,
