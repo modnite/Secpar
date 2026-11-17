@@ -19,6 +19,9 @@ pub struct Input {
     tracker: Tracker,
     /// The encoded picture size, which follows live resizes.
     stream: Arc<AtomicU64>,
+    /// The newest pointer position for the sender task. Only the latest is delivered, so a burst
+    /// of moves never queues up behind the desktop's answers.
+    moves: Option<tokio::sync::watch::Sender<(f64, f64)>>,
 }
 /// A picture size shared between the video thread and the input task.
 pub fn pack_size(w: u32, h: u32) -> u64 {
@@ -32,7 +35,31 @@ impl Input {
             keys: BTreeSet::new(),
             buttons: BTreeSet::new(),
             stream,
+            moves: None,
         }
+    }
+    /// Moves the pointer to `pos` without waiting for the desktop.
+    fn move_to(&mut self, pos: (f64, f64)) {
+        if let Some(moves) = &self.moves {
+            moves.send_replace(pos);
+            return;
+        }
+        let (tx, mut rx) = tokio::sync::watch::channel(pos);
+        rx.mark_changed();
+        let portal = self.portal.clone();
+        tokio::spawn(async move {
+            while rx.changed().await.is_ok() {
+                let (x, y) = *rx.borrow_and_update();
+                if portal.is_closed() {
+                    break;
+                }
+                let _ = portal
+                    .remote
+                    .notify_pointer_motion_absolute(&portal.session, portal.node_id, x, y, Default::default())
+                    .await;
+            }
+        });
+        self.moves = Some(tx);
     }
     /// The pointer position in stream pixels once after it moved. None when the compositor paints the
     /// pointer into the video itself: the client must then draw nothing of its own.
@@ -63,25 +90,22 @@ impl Input {
             ClientMsg::MouseMove { dx, dy } => {
                 // The compositor will not say where its pointer is, so a relative move is only
                 // followed from a place we put it: the middle of the monitor, once per session.
-                if !self.tracker.known() && self.portal.cursor == CursorMode::Hidden {
-                    let center = self.tracker.center();
-                    p.remote
-                        .notify_pointer_motion_absolute(s, p.node_id, center.0, center.1, Default::default())
-                        .await
-                        .map_err(|_| "The desktop portal rejected remote input.")?;
-                    self.tracker.set(center);
+                if !self.tracker.known() {
+                    self.tracker.set(self.tracker.center());
                 }
+                // Each move is sent as the absolute place it leads to. A relative move would get the
+                // desktop's pointer acceleration, and the real pointer would drift away from the
+                // cursor the device draws from this position.
                 self.tracker.relative(dx, dy);
-                p.remote
-                    .notify_pointer_motion(s, dx as f64, dy as f64, Default::default())
-                    .await
+                let pos = self.tracker.pos();
+                self.move_to(pos);
+                Ok(())
             }
             ClientMsg::MousePos { x, y } => {
                 let (ax, ay) = absolute(x, y, (p.width, p.height));
                 self.tracker.set((ax, ay));
-                p.remote
-                    .notify_pointer_motion_absolute(s, p.node_id, ax, ay, Default::default())
-                    .await
+                self.move_to((ax, ay));
+                Ok(())
             }
             ClientMsg::MouseButton { b, down } => {
                 let Some(button) = button_code(&b) else {
@@ -91,6 +115,11 @@ impl Input {
                     self.buttons.insert(button);
                 } else {
                     self.buttons.remove(&button);
+                }
+                // The click lands where the cursor is: the newest position goes first.
+                if self.moves.is_some() {
+                    let (x, y) = self.tracker.pos();
+                    let _ = p.remote.notify_pointer_motion_absolute(s, p.node_id, x, y, Default::default()).await;
                 }
                 p.remote
                     .notify_pointer_button(s, button, state(down), Default::default())

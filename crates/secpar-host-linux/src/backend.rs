@@ -234,6 +234,7 @@ impl Backend {
     /// Starts the bundled engine and its tunnel in the background. The host
     /// advertises `gamestream` only once both are ready (docs/gamestream-engine.md).
     fn start_engine(host: Arc<Self>) {
+        crate::portal::POINTER_IN_PICTURE.store(host.store.lock().unwrap().config().pointer_in_picture, std::sync::atomic::Ordering::Relaxed);
         Self::start_engine_after(host, std::time::Duration::ZERO);
     }
     /// `wait` lets a stopped engine let go of its ports before the next one starts.
@@ -358,6 +359,7 @@ impl Backend {
                 if autostart != config.autostart {
                     login_entry(config.autostart).map_err(|_| "Could not change the sign-in setting")?;
                 }
+                crate::portal::POINTER_IN_PICTURE.store(config.pointer_in_picture, std::sync::atomic::Ordering::Relaxed);
                 // The encoder is read when the engine starts, the next time Secpar opens. Restarting
                 // the engine here cannot work: every connected device's session holds the running one.
                 let _ = before;

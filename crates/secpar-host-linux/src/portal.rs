@@ -13,6 +13,10 @@ use std::{
     },
 };
 
+/// Settings › This computer › Picture › Show pointer in picture, read when a screen-sharing
+/// session opens.
+pub static POINTER_IN_PICTURE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 pub struct Portal {
     pub node_id: u32,
     /// Compositor logical dimensions, also used for absolute input coordinates.
@@ -61,7 +65,9 @@ impl Portal {
                 offered.contains(screencast::CursorMode::Embedded),
                 // a portal that does not say anything honours Hidden
                 offered.is_empty() || offered.contains(screencast::CursorMode::Hidden),
-                std::env::var("SECPAR_CURSOR").ok().as_deref(),
+                std::env::var("SECPAR_CURSOR").ok().as_deref().or(
+                    (!POINTER_IN_PICTURE.load(std::sync::atomic::Ordering::Relaxed)).then_some("hidden"),
+                ),
             );
             cast.select_sources(
                 &session,
