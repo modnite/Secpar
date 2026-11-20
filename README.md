@@ -19,7 +19,7 @@ Each package is one app. On Windows and Linux the same app hosts this computer a
 ## What it does
 
 - **Computers.** Every computer signed in to your account, with a still of its screen. Connect directly on your network or across the internet, or through Secpar's relay when a direct route is blocked. Up to three devices can stream from one computer at once.
-- **Friends.** Add people by username. For each friend, choose Ask first or Any time, and allow keyboard, mouse and file browsing separately. Friends are kept on your account, so they follow you to every device.
+- **Friends.** Add people by username and select their computers to connect. For each friend, choose Ask first or Any time, and allow keyboard, mouse and file browsing separately; Ask first needs one approval, from the notification or the app. Friends are kept on your account, so they follow you to every device.
 - **Files and clipboard.** Browse a computer's files and copy them either way. Copied text is shared while you are connected.
 - **Sound and controllers.** The computer's sound plays on the connecting device, and controllers attached to that device work on the computer.
 - **Power.** Lock, sleep, sign out, restart or shut down your computers from Android.
