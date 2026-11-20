@@ -86,6 +86,9 @@ pub struct OwnedComputer {
     pub certificate_fp: Option<String>,
     pub linked: u8,
     pub online: u8,
+    /// Who is using it now, as its host reported. An older service leaves this out.
+    #[serde(default)]
+    pub viewers: Vec<String>,
 }
 /// A computer of an accepted friend that is online and lets friends connect.
 #[derive(Clone, Deserialize)]
@@ -136,13 +139,11 @@ pub enum Guest {
     Refused(String),
     Grant(Grant),
 }
-/// What a click on a friend's computer asks for: everything the owner allows. The owner's
-/// settings in the Friends tab are the only place these are chosen.
-pub fn connect_permissions(computer: &FriendComputer) -> Vec<String> {
-    let mut list: Vec<String> = ["view", "audio", "gamepad", "clipboard"].map(String::from).to_vec();
-    if computer.keyboard { list.push("keyboard".into()); }
-    if computer.mouse { list.push("mouse".into()); }
-    list
+/// What a click on a friend's computer asks for. Keyboard and mouse are always asked for: the
+/// account service keeps only what the owner allows right now, and the host follows later changes
+/// in the owner's Friends tab, so a settings list that is a few seconds old cannot leave them out.
+pub fn connect_permissions(_computer: &FriendComputer) -> Vec<String> {
+    ["view", "audio", "gamepad", "clipboard", "keyboard", "mouse"].map(String::from).to_vec()
 }
 pub const PERMISSION_LABELS: [&str; 5] = ["View", "Audio", "Keyboard and mouse", "Controller", "Clipboard"];
 pub const PERMISSION_DEFAULTS: [bool; 5] = [true, true, true, false, false];
@@ -688,8 +689,12 @@ impl Panel {
             let mut tiles: Vec<Tile> = shown.iter().map(|computer| {
                 let presence = if computer.online == 1 { Presence::Online } else { Presence::Offline };
                 let (status, color) = computer_status(computer.linked == 1, presence);
+                // Who is on it now, after its state.
+                let status = if computer.online == 1 && !computer.viewers.is_empty() {
+                    format!("{} · {}", computer.viewers.join(", "), status)
+                } else { status.to_string() };
                 Tile {
-                    name: computer.name.clone(), status: status.to_string(), color, platform: platform_name(&computer.platform),
+                    name: computer.name.clone(), status, color, platform: platform_name(&computer.platform),
                     preview: self.textures.get(&computer.id).filter(|_| computer.online == 1).cloned(),
                     connect: !self.busy && computer.linked == 1 && computer.online == 1,
                     files: !self.busy && computer.linked == 1 && computer.online == 1,
@@ -957,6 +962,7 @@ impl Panel {
         use eframe::egui;
         let own = self.user.as_ref().map(|u| u.id.clone()).unwrap_or_default();
         let waiting: Vec<Incoming> = self.requests.iter().filter(|r| r.owner == own && r.state == "pending").cloned().collect();
+        let mut answered = None;
         for request in waiting {
             ui.horizontal(|ui| {
                 let computer = request.computer_name.clone().unwrap_or_else(|| "your computer".into());
@@ -964,12 +970,18 @@ impl Panel {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add_enabled(!self.busy, egui::Button::new("Deny")).clicked() {
                         self.send(Command::Answer(Answer::DenyConnection, request.id.clone()));
+                        answered = Some(request.id.clone());
                     }
                     if ui.add_enabled(!self.busy, egui::Button::new("Allow")).clicked() {
                         self.send(Command::Answer(Answer::AllowConnection, request.id.clone()));
+                        answered = Some(request.id.clone());
                     }
                 });
             });
+        }
+        // An answered request leaves at once rather than at the next refresh.
+        if let Some(id) = answered {
+            self.requests.retain(|r| r.id != id);
         }
     }
     /// The waiting line and the permission choice for a friend's computer. True when one is showing,
@@ -1718,7 +1730,7 @@ async fn next_wake(rx: &mut mpsc::Receiver<Command>, tick: Duration, sync_fut: &
     })
 }
 #[derive(Default)]
-struct Seen { friends: std::collections::HashSet<String>, requests: std::collections::HashSet<String>, primed: bool }
+struct Seen { friends: std::collections::HashSet<String>, requests: std::collections::HashSet<String>, primed: bool, connected: std::collections::HashSet<String>, connected_primed: bool }
 /// Alerts for requests this account has not been told about yet. Friend requests that were already
 /// waiting when the app started are not announced again, because they carry no time.
 fn new_alerts(me: &str, friends: &[Friend], requests: &[Incoming], seen: &mut Seen) -> Vec<crate::alerts::Alert> {
@@ -1746,6 +1758,18 @@ fn new_alerts(me: &str, friends: &[Friend], requests: &[Incoming], seen: &mut Se
             });
         }
     }
+    out
+}
+/// One notice per friend who started using one of this account's computers, whether they were let
+/// in at any time or approved. Sessions already running when the app started are not announced.
+fn new_connections(me: &str, requests: &[Incoming], seen: &mut Seen) -> Vec<String> {
+    let mut out = vec![];
+    for r in requests.iter().filter(|r| r.owner == me && r.state == "claimed") {
+        if seen.connected.insert(r.id.clone()) && seen.connected_primed {
+            out.push(format!("@{} is using {}.", r.guest_handle, r.computer_name.as_deref().unwrap_or("your computer")));
+        }
+    }
+    seen.connected_primed = true;
     out
 }
 /// Runs when a toast button starts this program with a signed link. It answers and exits.
@@ -1796,6 +1820,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
             let mut next_owned = Instant::now();
             let mut next_alerts = Instant::now();
+            let mut pending_requests = false;
             let mut seen = Seen::default();
             let mut known: Vec<OwnedComputer> = vec![];
             let mut local_id: Option<String> = None;
@@ -2071,10 +2096,14 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     }
                 }
                 if let Some(me)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_alerts) {
-                    next_alerts=Instant::now()+Duration::from_secs(10);
+                    // While someone is waiting for an answer, look again soon, so a request answered
+                    // from the notification leaves this window quickly too.
+                    next_alerts=Instant::now()+Duration::from_secs(if pending_requests {2} else {10});
                     match api.live().await {
                         Ok((friends,requests))=>{
+                            pending_requests=requests.iter().any(|r| r.owner==me && r.state=="pending");
                             for alert in new_alerts(&me,&friends,&requests,&mut seen) { crate::alerts::show(alert,tx_alerts.clone()); }
+                            for note in new_connections(&me,&requests,&mut seen) { crate::alerts::info("Friend connected",&note); }
                             let _=events.send(Event::Live{friends,requests}).await;
                         }
                         Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;pending_pair=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}
@@ -2207,7 +2236,15 @@ mod tests {
         assert!(!u.visible);
     }
     fn friend(id: &str, state: &str, requester: &str) -> Friend {
-        Friend { id: id.into(), handle: id.into(), state: state.into(), requester: requester.into(), input: "view".into(), connect: "ask".into(), keyboard: None, mouse: None }
+        Friend { id: id.into(), handle: id.into(), state: state.into(), requester: requester.into(), input: "view".into(), connect: "ask".into(), keyboard: None, mouse: None, browse: None }
+    }
+    #[test]
+    fn a_friend_who_connects_is_announced_once_and_not_on_start() {
+        let mut seen = Seen::default();
+        assert!(new_connections("me", &[incoming("old", "me", "claimed")], &mut seen).is_empty(), "already running at start");
+        let got = new_connections("me", &[incoming("old", "me", "claimed"), incoming("new", "me", "claimed"), incoming("pending", "me", "pending"), incoming("theirs", "other", "claimed")], &mut seen);
+        assert_eq!(got, vec!["@bob is using Studio.".to_string()]);
+        assert!(new_connections("me", &[incoming("new", "me", "claimed")], &mut seen).is_empty(), "only once");
     }
     fn incoming(id: &str, owner: &str, state: &str) -> Incoming {
         Incoming { id: id.into(), owner: owner.into(), guest_handle: "bob".into(), computer_name: Some("Studio".into()), requested: "[\"view\"]".into(), state: state.into() }
@@ -2326,11 +2363,13 @@ mod tests {
         server.join().unwrap();
     }
     #[test]
-    fn friend_computer_lists_with_odd_rows_are_refused() {
+    fn odd_rows_in_a_friend_computer_list_are_left_out_and_the_rest_shown() {
         let pc = "0f0e0d0c-1111-2222-3333-444455556666";
-        let (base, server) = server(vec![("GET /v1/friend-computers ", format!(r#"[{{"id":"{pc}","name":"x","platform":"windows","owner":"o","owner_handle":"a/b"}}]"#))]);
+        let good = "0f0e0d0c-1111-2222-3333-444455556667";
+        let (base, server) = server(vec![("GET /v1/friend-computers ", format!(r#"[{{"id":"{pc}","name":"x","platform":"windows","owner":"o","owner_handle":"a/b"}},{{"id":"{good}","name":"y","platform":"linux","owner":"o","owner_handle":"bob"}}]"#))]);
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            assert!(api_for(base).friend_computers().await.is_err());
+            let list = api_for(base).friend_computers().await.unwrap();
+            assert_eq!(list.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec![good]);
         });
         server.join().unwrap();
     }
@@ -2558,7 +2597,7 @@ mod status_tests {
         assert_eq!(computer_status(false, Presence::Online), ("Host update required", WARN));
     }
     fn computer(id: &str) -> OwnedComputer {
-        OwnedComputer { id: id.into(), name: id.into(), platform: "linux".into(), certificate_fp: None, linked: 1, online: 1 }
+        OwnedComputer { id: id.into(), name: id.into(), platform: "linux".into(), certificate_fp: None, linked: 1, online: 1, viewers: vec![] }
     }
     #[test]
     fn this_computer_is_never_a_connect_target() {

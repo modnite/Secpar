@@ -795,6 +795,8 @@ mod tests {
             fps: 60,
             kbps: 2000,
             codecs: vec!["h264".into()],
+            encoder: "auto".into(),
+            preset: "fast".into(),
         };
         let mut capture = Capture::from_source(
             "videotestsrc is-live=true pattern=ball",

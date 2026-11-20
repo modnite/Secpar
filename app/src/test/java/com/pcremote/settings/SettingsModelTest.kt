@@ -82,7 +82,7 @@ class SettingsModelTest {
         SettingsModel(kv).frameRate = 120; assertEquals(120, SettingsModel(kv).frameRate)
         SettingsModel(kv).frameRate = 75; assertEquals(120, SettingsModel(kv).frameRate)
         kv.map["pcremote_frame_rate"] = "garbage"; assertEquals(60, SettingsModel(kv).frameRate)
-        assertEquals(listOf(30, 60, 90, 120), SettingsModel.FRAME_RATES)
+        assertEquals(listOf(60, 90, 120), SettingsModel.FRAME_RATES)
     }
 
     @Test fun `bitrate limit defaults to 30 Mbps and keeps only offered values`() {
@@ -101,7 +101,7 @@ class SettingsModelTest {
 
     @Test fun `dropdown labels match the desktop lists`() {
         assertEquals(listOf("Host native", "3840 × 2160", "2560 × 1440", "1920 × 1080", "1280 × 720", "854 × 480"), SettingsOptions.resolutionLabels)
-        assertEquals(listOf("30 fps", "60 fps", "90 fps", "120 fps"), SettingsOptions.frameRateLabels)
+        assertEquals(listOf("60 fps", "90 fps", "120 fps"), SettingsOptions.frameRateLabels)
         assertEquals(listOf("5 Mbps", "10 Mbps", "20 Mbps", "30 Mbps", "50 Mbps", "80 Mbps"), SettingsOptions.bitrateLabels)
     }
 }

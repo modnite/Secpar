@@ -70,7 +70,7 @@ class StringsTest {
         assertEquals("Friends", strings["pcr_tab_friends"])
         assertEquals("Settings", strings["pcr_tab_settings"])
         assertEquals("Add computer", strings["pcr_add_pc"])
-        assertEquals("No computers yet", strings["pcr_no_pcs_title"])
+        assertEquals("No computers yet. Sign in to Secpar on a computer with this account and it appears here.", strings["pcr_no_pcs_title"])
         assertEquals("Forget on this device", strings["pcr_forget_device"])
         assertEquals("Tap again to confirm", strings["pcr_pw_tap_again"])
         assertEquals("Updates", strings["pcr_updates"])

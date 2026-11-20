@@ -196,8 +196,14 @@ impl Backend {
                 let Ok(account) = &host.account else { continue };
                 let owner = account.state().await.owner;
                 let presence = {
+                    let (connected, guests) = host.agent.lock().unwrap().as_ref()
+                        .map(|a| (a.connected(), a.guests())).unwrap_or_default();
+                    let names = host.friends.lock().unwrap().clone();
                     let store = host.store.lock().unwrap();
+                    let viewers: Vec<String> = store.devices().into_iter().filter(|d| connected.contains(&d.id)).map(|d| d.name)
+                        .chain(guests.iter().map(|id| names.get(id).cloned().unwrap_or_else(|| "A friend".into()))).collect();
                     secpar_host_core::account::Presence::new(true, store.id(), Some(secpar_host_core::rendezvous::FRIENDS_URL))
+                        .with_viewers(viewers)
                 };
                 account.set_presence(presence).await;
                 host.sync_account_owner(owner.clone());
@@ -335,7 +341,10 @@ impl Backend {
             "disconnect_friend" => {
                 let id = args["id"].as_str().ok_or("Missing friend")?;
                 let agent = self.agent.lock().unwrap();
-                agent.as_ref().ok_or("Host is not running")?.disconnect_guest(id);
+                let agent = agent.as_ref().ok_or("Host is not running")?;
+                // A friend's account id or one of the owner's devices.
+                agent.disconnect_guest(id);
+                agent.disconnect(id);
                 Ok(Value::Null)
             }
             "host_account_state" => Ok(json!(self.account.as_ref().map_err(Clone::clone)?.state().await)),
@@ -933,6 +942,7 @@ mod tests {
             assert!(matches!(reply, Some(ServerMsg::Error { code, msg, of: Some(of) }) if code == "unsupported" && msg.starts_with("Gamepad unavailable") && of == "pad"));
         }
         assert_eq!(r.session.on_msg(ClientMsg::PadOff { id: 0 }), None);
-        assert!(matches!(r.session.on_msg(ClientMsg::Power { a: "lock".into() }), Some(ServerMsg::Error { code, .. }) if code == "unsupported"), "unported actions still say so");
+        // Power actions run for real, so only an unknown one is sent here: it is refused.
+        assert!(matches!(r.session.on_msg(ClientMsg::Power { a: "launch".into() }), Some(ServerMsg::Error { code, .. }) if code == "bad_request"), "an unknown power action is refused");
     }
 }

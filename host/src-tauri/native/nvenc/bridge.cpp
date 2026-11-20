@@ -67,7 +67,10 @@ struct Encoder {
         status = api.nvEncOpenEncodeSessionEx(&open, &session); if (status != NV_ENC_SUCCESS) return status;
         device = dev; device->AddRef();
         const GUID guid = codec == 1 ? NV_ENC_CODEC_H264_GUID : NV_ENC_CODEC_HEVC_GUID;
-        const GUID preset_guid = quality == 2 ? NV_ENC_PRESET_P7_GUID : quality == 1 ? NV_ENC_PRESET_P4_GUID : NV_ENC_PRESET_P1_GUID;
+        // `quality` is the NVENC preset number, 1 (P1, fastest) to 7 (P7, best quality).
+        static const GUID presets[] = {NV_ENC_PRESET_P1_GUID, NV_ENC_PRESET_P2_GUID, NV_ENC_PRESET_P3_GUID, NV_ENC_PRESET_P4_GUID,
+            NV_ENC_PRESET_P5_GUID, NV_ENC_PRESET_P6_GUID, NV_ENC_PRESET_P7_GUID};
+        const GUID preset_guid = presets[(quality >= 1 && quality <= 7 ? quality : 1) - 1];
         NV_ENC_PRESET_CONFIG preset{}; preset.version = NV_ENC_PRESET_CONFIG_VER; preset.presetCfg.version = NV_ENC_CONFIG_VER;
         status = api.nvEncGetEncodePresetConfigEx(session, guid, preset_guid, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset);
         if (status != NV_ENC_SUCCESS) return status;

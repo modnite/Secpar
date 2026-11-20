@@ -40,22 +40,22 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 #[derive(Serialize)]
-pub struct DeviceView {
-    id: String,
-    name: String,
-    connected: bool,
+pub(crate) struct DeviceView {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) connected: bool,
 }
 
 #[derive(Serialize)]
-pub struct StateView {
+pub(crate) struct StateView {
     name: String,
-    devices: Vec<DeviceView>,
+    pub(crate) devices: Vec<DeviceView>,
     /// Friends with a running session. Never in `devices`: a friend is not a paired device.
-    friends: Vec<DeviceView>,
+    pub(crate) friends: Vec<DeviceView>,
     locked: bool,
 }
 
-fn state(app: &App) -> StateView {
+pub(crate) fn state(app: &App) -> StateView {
     let connected = app.agent.connected();
     let devices = app
         .store
@@ -245,7 +245,10 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
             to_value(app.account.as_ref().map_err(Clone::clone)?.set_friend(&id, flag("keyboard"), flag("mouse"), connect.as_deref()).await?)
         }
         "disconnect_friend" => {
-            app.agent.disconnect_guest(&arg::<String>(&args, "id")?);
+            // A friend's account id or one of the owner's devices.
+            let id = arg::<String>(&args, "id")?;
+            app.agent.disconnect_guest(&id);
+            app.agent.disconnect(&id);
             Ok(Value::Null)
         }
         "rename" => {

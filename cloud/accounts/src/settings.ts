@@ -66,17 +66,8 @@ export async function saveSettings(env: Environment, owner: string, friend: stri
     // Taking browsing away ends a grant that carries it.
     if (!browse) await q(env, "UPDATE connection_requests SET state='revoked' WHERE owner=? AND guest=? AND state IN ('pending','approved','claimed') AND COALESCE(approved,requested) LIKE '%\"browse\"%'", owner, friend).run();
   }
-  const now = await friendSettings(env, owner, friend);
-  if (!now.keyboard && !now.mouse) await revokeInputGrants(env, owner, friend);
+  // Keyboard and mouse changes reach a running session through the host, which reads these
+  // settings every few seconds; the session itself goes on.
   return true;
 }
 
-/** View only ends any grant that already carries input. Lowering one of the two is handled by the host at its next check. */
-export async function revokeInputGrants(env: Environment, owner: string, friend: string) {
-  await q(
-    env,
-    "UPDATE connection_requests SET state='revoked' WHERE owner=? AND guest=? AND state IN ('pending','approved','claimed') AND (requested LIKE '%\"keyboard\"%' OR requested LIKE '%\"mouse\"%') AND (COALESCE(approved,requested) LIKE '%\"keyboard\"%' OR COALESCE(approved,requested) LIKE '%\"mouse\"%')",
-    owner,
-    friend,
-  ).run();
-}

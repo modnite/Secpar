@@ -14,7 +14,7 @@ fn checked(status:i32)->windows::core::Result<()> {
 pub(super) struct Encoder {raw:NonNull<c_void>,kbps:Cell<u32>}
 impl Encoder {
     pub fn new(dev:&ID3D11Device,codec:Codec,(w,h):(u32,u32),fps:u32,kbps:u32)->windows::core::Result<Self> {
-        Self::with_quality(dev,codec,(w,h),fps,kbps,0)
+        Self::with_quality(dev,codec,(w,h),fps,kbps,1)
     }
     pub fn with_quality(dev:&ID3D11Device,codec:Codec,(w,h):(u32,u32),fps:u32,kbps:u32,quality:u32)->windows::core::Result<Self> {
         if w==0||h==0||fps==0||kbps==0||kbps>u32::MAX/1000 {return Err(Error::from_hresult(HRESULT(0x80070057u32 as i32)));}

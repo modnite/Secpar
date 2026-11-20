@@ -167,42 +167,13 @@ impl Panel {
             sample,
         }
     }
-    pub fn open_settings(&mut self) {self.settings_open=true;}
-    fn send(&mut self, command: Command) {
-        if self.sample {
-            return;
-        }
-        let refresh=matches!(&command,Command::Refresh);
-        if self.tx.try_send(command).is_ok() {
-            if refresh {self.refreshing=true;} else {self.busy=true;}
-        }
-    }
-    /// Settings content shares the parent's scroll area and has no back navigation.
-    pub fn inline_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &mut crate::account::Panel) {
-        self.ui_inner(ui, ctx, account, true);
-    }
-    pub fn ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &mut crate::account::Panel) -> bool {
-        self.ui_inner(ui, ctx, account, false)
-    }
-    fn ui_inner(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        account: &mut crate::account::Panel,
-        inline: bool,
-    ) -> bool {
-        let mut back=false;
+    /// Takes in the host's answers and refreshes its state every few seconds.
+    fn pump(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.events.try_recv() {
             let refresh=matches!(&event,Event::Refresh(_));
             if refresh {self.refreshing=false;} else {self.busy=false;}
             match event {
                 Event::State(Ok((state, config))) | Event::Refresh(Ok((state, config))) => {
-                    // A friend who just connected gets a notice. The first read after launch does not.
-                    if let Some(old) = &self.state {
-                        for f in state.friends.iter().filter(|f| !old.friends.iter().any(|o| o.id == f.id)) {
-                            crate::alerts::info("Friend connected", &format!("{} is using this PC.", f.name));
-                        }
-                    }
                     self.state = Some(state);
                     self.friend_rows = config["friend_rows"].as_array().map(|rows| rows.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect()).unwrap_or_default();
                     self.settings = config;
@@ -234,6 +205,34 @@ impl Panel {
             self.last_refresh = Instant::now();
             self.send(Command::Refresh);
         }
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+    pub fn open_settings(&mut self) {self.settings_open=true;}
+    fn send(&mut self, command: Command) {
+        if self.sample {
+            return;
+        }
+        let refresh=matches!(&command,Command::Refresh);
+        if self.tx.try_send(command).is_ok() {
+            if refresh {self.refreshing=true;} else {self.busy=true;}
+        }
+    }
+    /// Settings content shares the parent's scroll area and has no back navigation.
+    pub fn inline_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &mut crate::account::Panel) {
+        self.ui_inner(ui, ctx, account, true);
+    }
+    pub fn ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, account: &mut crate::account::Panel) -> bool {
+        self.ui_inner(ui, ctx, account, false)
+    }
+    fn ui_inner(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        account: &mut crate::account::Panel,
+        inline: bool,
+    ) -> bool {
+        let mut back=false;
+        self.pump(ctx);
         if account.user.is_some() {
             self.pairing=false;
             self.link.clear();
@@ -330,43 +329,6 @@ impl Panel {
         ui.add_space(if self.settings_open { 0. } else { 10. });
         let mut contents = |ui: &mut egui::Ui| {
             if inline || self.settings_open { self.settings_ui(ui); }
-            if inline {
-                ui.add_space(8.);
-                let signed_out = account.user.is_none();
-                design::group(ui, "Paired devices", |ui| {
-                    match self.state.clone() {
-                        Some(state) => {
-                            if state.devices.is_empty() && state.friends.is_empty() {
-                                ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
-                                ui.add_space(6.);
-                            }
-                            for friend in &state.friends {
-                                design::row(ui, &format!("{} (friend)", friend.name), |ui| {
-                                    if ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked() {
-                                        self.send(Command::Disconnect(friend.id.clone()));
-                                    }
-                                });
-                            }
-                            for device in state.devices {
-                                design::row(ui, &device.name, |ui| {
-                                    if ui.add_enabled(!self.busy, egui::Button::new("Remove")).clicked() {
-                                        self.revoke = Some(device.clone());
-                                    }
-                                    ui.label(egui::RichText::new(if device.connected { "Connected" } else { "Paired" }).size(12.).color(if device.connected { design::ACCENT } else { design::MUTED }));
-                                });
-                            }
-                        }
-                        None => { ui.label(egui::RichText::new("Hosting unavailable").color(design::MUTED)); ui.add_space(6.); }
-                    }
-                    if signed_out {
-                        design::row(ui, "New device", |ui| {
-                            if ui.add_enabled(self.state.is_some() && !self.busy, egui::Button::new("Pair a device")).clicked() {
-                                self.pairing=true; self.link.clear(); self.qr=None; self.send(Command::Pair);
-                            }
-                        });
-                    }
-                });
-            }
             if !inline && !self.settings_open { if let Some(state) = self.state.clone() {
                 if state.devices.is_empty() {
                     ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
@@ -528,13 +490,13 @@ impl Panel {
             design::group(ui, "Picture", |ui| {
                 self.quality_ui(ui, &config);
                 self.encoder_ui(ui, &config);
-                self.setting_toggle(ui, &config, "pointer_in_picture", "Show pointer in picture", "");
-                ui.label(egui::RichText::new("Changes apply to the next connection. With the pointer left out, the connecting device draws it, so it follows the mouse without delay.").size(12.).color(design::MUTED));
+                self.setting_toggle(ui, &config, "pointer_in_picture", "Show host cursor", "");
+                ui.label(egui::RichText::new("Changes apply to the next connection.").size(12.).color(design::MUTED));
             });
             design::group(ui, "Who can use it", |ui| {
                 self.setting_toggle(ui, &config, "allow_files", "Receive and browse files", "Allow paired devices to send files to this computer and to browse it.");
                 self.setting_toggle(ui, &config, "allow_clip", "Share clipboard", "Allow clipboard exchange with paired devices.");
-                self.setting_toggle(ui, &config, "previews", "Show previews of this screen", "Your other devices and your friends see a small still of this screen. Off keeps it private.");
+                self.setting_toggle(ui, &config, "previews", "Show desktop preview thumbnail", "Your other devices and your friends see a small still of this screen. Off keeps it private.");
 
                 if !pad_ok {ui.horizontal(|ui| {
                     design::dot(ui,design::MUTED);
@@ -560,6 +522,55 @@ impl Panel {
         });
         if quality != old { self.send(Command::Patch(json!({"max_quality": quality}))); }
     }
+    /// Computers › Paired devices: who may use this computer and who is on it now. Each row is the
+    /// name, its state, then its buttons on the same line.
+    pub fn paired_devices_ui(&mut self, ui: &mut egui::Ui, signed_out: bool) {
+        self.pump(&ui.ctx().clone());
+        let row = |ui: &mut egui::Ui, name: &str, state: &str, on: bool, buttons: &mut dyn FnMut(&mut egui::Ui)| {
+            ui.horizontal(|ui| {
+                ui.set_min_height(design::CONTROL);
+                design::dot(ui, if on { design::ACCENT } else { design::MUTED });
+                ui.add(egui::Label::new(name).truncate());
+                ui.label(egui::RichText::new(state).size(12.).color(design::MUTED));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| buttons(ui));
+            });
+        };
+        design::group(ui, "Paired devices", |ui| {
+            match self.state.clone() {
+                Some(state) => {
+                    if state.devices.is_empty() && state.friends.is_empty() {
+                        ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
+                    }
+                    for friend in &state.friends {
+                        let mut disconnect = false;
+                        row(ui, &friend.name, "Friend · connected", true, &mut |ui| {
+                            disconnect = ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked();
+                        });
+                        if disconnect { self.send(Command::Disconnect(friend.id.clone())); }
+                    }
+                    for device in state.devices {
+                        let (mut disconnect, mut remove) = (false, false);
+                        row(ui, &device.name, if device.connected { "Connected" } else { "Paired" }, device.connected, &mut |ui| {
+                            remove = ui.add_enabled(!self.busy, egui::Button::new("Remove")).clicked();
+                            if device.connected {
+                                disconnect = ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked();
+                            }
+                        });
+                        if disconnect { self.send(Command::Disconnect(device.id.clone())); }
+                        if remove { self.revoke = Some(device.clone()); }
+                    }
+                }
+                None => { ui.label(egui::RichText::new("Hosting unavailable").color(design::MUTED)); }
+            }
+            if signed_out {
+                let mut pair = false;
+                row(ui, "New device", "", false, &mut |ui| {
+                    pair = ui.add_enabled(self.state.is_some() && !self.busy, egui::Button::new("Pair a device")).clicked();
+                });
+                if pair { self.pairing = true; self.link.clear(); self.qr = None; self.send(Command::Pair); }
+            }
+        });
+    }
     fn encoder_ui(&mut self, ui:&mut egui::Ui, config:&Value) {
         let choices=self.settings["encoders"].as_array().cloned().unwrap_or_default();
         if choices.is_empty() {return;}
@@ -584,10 +595,21 @@ impl Panel {
             }).response.on_hover_text("Applies to the next connection.");
         });
         let effective=if backend=="auto" {choices.iter().find(|c|c["available"].as_bool()==Some(true)).and_then(|c|c["id"].as_str()).unwrap_or("")}else{&backend};
-        let labels=if effective.contains("nvenc") {["P1 · fastest","P4 · balanced","P7 · highest quality"]}
-            else if effective.contains("qsv") {["Very fast","Medium","Slow"]}else{["Speed","Balanced","Quality"]};
-        if effective!="media-foundation" {
-            let index=match preset.as_str(){"balanced"=>1,"quality"=>2,_=>0};
+        if cfg!(windows) && effective=="nvenc" {
+            // NVIDIA's own encoder offers its whole preset range.
+            let current=match preset.as_str(){"balanced"=>"p4".to_string(),"quality"=>"p7".to_string(),"fast"=>"p1".to_string(),p=>p.to_string()};
+            let label=|id:&str| match id {"p1"=>"P1 · fastest".to_string(),"p7"=>"P7 · best quality".to_string(),p=>p.to_uppercase()};
+            let mut chosen=current.clone();
+            design::row(ui,"Encoder preset",|ui| {
+                egui::ComboBox::from_id_salt("host-encoder-preset").width(width).selected_text(label(&current)).show_ui(ui,|ui| {
+                    for id in ["p1","p2","p3","p4","p5","p6","p7"] {ui.selectable_value(&mut chosen,id.to_string(),label(id));}
+                });
+            });
+            if chosen!=current {preset=chosen;}
+        } else if effective!="media-foundation" {
+            let labels=if effective.contains("nvenc") {["P1 · fastest","P4 · balanced","P7 · best quality"]}
+                else if effective.contains("qsv") {["Very fast","Medium","Slow"]}else{["Speed","Balanced","Quality"]};
+            let index=match preset.as_str(){"balanced"|"p3"|"p4"|"p5"=>1,"quality"|"p6"|"p7"=>2,_=>0};
             design::row(ui,"Encoder preset",|ui| {
                 egui::ComboBox::from_id_salt("host-encoder-preset").width(width).selected_text(labels[index]).show_ui(ui,|ui| {
                     for (id,label) in ["fast","balanced","quality"].into_iter().zip(labels) {ui.selectable_value(&mut preset,id.into(),label);}
@@ -632,7 +654,7 @@ impl Panel {
             design::group(ui, "Who can use it", |ui| {
                 self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");
                 self.setting_toggle(ui,&config,"allow_clip","Share clipboard","Allow clipboard exchange with paired devices.");
-                self.setting_toggle(ui,&config,"previews","Show previews of this screen","Your other devices and your friends see a small still of this screen. Off keeps it private.");
+                self.setting_toggle(ui,&config,"previews","Show desktop preview thumbnail","Your other devices and your friends see a small still of this screen. Off keeps it private.");
                 if let Some(ok @ false) = self.settings["pad"]["ok"].as_bool() {
                     ui.horizontal(|ui| {
                         design::dot(ui, if ok { design::ACCENT } else { design::MUTED });

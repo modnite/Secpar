@@ -245,6 +245,9 @@ private fun AccountCard(computer: OwnedComputer, thumb: ImageBitmap?, connecting
     CardFrame {
         Screen(thumb, ready, stringResource(R.string.pcr_connect) + " " + computer.name) { acts.connect(computer) }
         CardTitle(computer.name, ComputerList.platform(computer.platform), status)
+        // Who is on it now.
+        if (computer.online && computer.viewers.isNotEmpty()) Text(computer.viewers.joinToString(", "), color = LocalMidnight.current.textDim,
+            style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (connecting == computer.id) GhostButton(stringResource(R.string.pcr_cancel), acts.cancelConnect)
     }
 }

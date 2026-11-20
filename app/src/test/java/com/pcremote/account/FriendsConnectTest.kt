@@ -56,12 +56,12 @@ class FriendsConnectTest {
         assertNull(f.requests.single().body)
     }
 
-    @Test fun `a friend computer row with a bad id or a control character is refused`() = runBlocking {
+    @Test fun `a friend computer row with a bad id or a control character is left out, not the whole list`() = runBlocking {
         for (row in listOf("""{"id":"x","name":"a","platform":"linux","owner":"$owner","owner_handle":"b"}""",
             """{"id":"$computer","name":"a\u0007b","platform":"linux","owner":"$owner","owner_handle":"b"}""",
             """{"id":"$computer","name":"a","platform":"linux","owner_handle":"b"}""")) {
             val f = Fake().apply { reply("[$row]") }
-            assertEquals(row, AccountError.INVALID_RESPONSE, kind { runBlocking { api(f).friendComputers() } })
+            assertEquals(row, emptyList<FriendComputer>(), api(f).friendComputers())
         }
     }
 
@@ -149,7 +149,7 @@ class FriendsConnectTest {
             val f = Fake().apply { reply("""{"error":"$code"}""", if (code.startsWith("access")) 403 else 409) }
             assertEquals(code, expected, kind { runBlocking { api(f).claimAccess(request) } })
         }
-        assertEquals("This computer is not letting friends connect right now.", AccountException(AccountError.HOST_NOT_SHARING).message)
+        assertEquals("That computer is offline, or it needs the latest Secpar.", AccountException(AccountError.HOST_NOT_SHARING).message)
     }
 
     @Test fun `a request can be cancelled through revoke`() = runBlocking {
@@ -368,7 +368,7 @@ class FriendsConnectTest {
         val c = signedIn(service) { _, _, _, id -> "guest:$id" }
         c.connectFriend(friendComputer, listOf("view")) { fail("no route") }
         runCurrent()
-        assertEquals("This computer is not letting friends connect right now.", c.state.value.error)
+        assertEquals("That computer is offline, or it needs the latest Secpar.", c.state.value.error)
         assertEquals(listOf(request), service.cancelled)
     }
 

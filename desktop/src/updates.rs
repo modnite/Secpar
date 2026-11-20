@@ -282,7 +282,7 @@ impl Panel {
             ready: None,
             busy: false,
             fallback: false,
-            message: "Automatic checks every six hours.".into(),
+            message: "Checks every hour.".into(),
             open: false,
         };
         if cfg!(feature = "ui-review")

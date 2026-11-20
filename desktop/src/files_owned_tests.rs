@@ -183,7 +183,7 @@ async fn ask_worker_pin(pin: &[u8; 32], vault: Option<Computer>) -> (account::Ow
 }
 
 fn computers() -> Vec<OwnedComputer> {
-    vec![OwnedComputer { id: ACCOUNT_ID.into(), name: "Office".into(), platform: "windows".into(), certificate_fp: None, linked: 1, online: 1 }]
+    vec![OwnedComputer { id: ACCOUNT_ID.into(), name: "Office".into(), platform: "windows".into(), certificate_fp: None, linked: 1, online: 1, viewers: vec![] }]
 }
 fn name_of(id: &str) -> String {
     computers().iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_default()

@@ -523,13 +523,15 @@ export async function handle(
         if (row.owner !== me.id) deny(403, "host_owner_required");
         if (!active || row.state !== "pending")
           deny(409, "request_not_pending");
-        const approved = perms((await body(request)).permissions),
+        const asked = perms((await body(request)).permissions),
           requested = new Set(JSON.parse(row.requested) as string[]);
-        if (!approved.every((p) => requested.has(p)))
+        if (!asked.every((p) => requested.has(p)))
           deny(400, "cannot_expand_requested_permissions");
         const may = await friendSettings(env, row.owner, row.guest);
-        if (approved.some((p) => (p === "keyboard" && !may.keyboard) || (p === "mouse" && !may.mouse) || (p === "browse" && !may.browse)))
-          deny(400, "input_not_allowed");
+        // Settings changed since the request leave out what is no longer allowed, rather than
+        // making the owner's approval fail.
+        const approved = asked.filter((p) => (p !== "keyboard" || may.keyboard) && (p !== "mouse" || may.mouse) && (p !== "browse" || may.browse));
+        if (!approved.length) deny(400, "input_not_allowed");
         const changed = await q(
           env,
           "UPDATE connection_requests SET state='approved',approved=? WHERE id=? AND state='pending' AND expires>?",

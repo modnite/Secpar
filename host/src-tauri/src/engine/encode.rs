@@ -34,7 +34,7 @@ impl Encoder {
         let choice=std::env::var("SECPAR_WINDOWS_ENCODER").unwrap_or_else(|_|configured.into());
         let quality=settings.quality();
         let backend=match choice.as_str() {
-            "nvenc"=>Backend::Nvenc(nvenc::Encoder::with_quality(dev,codec,size,fps,kbps,quality)?),
+            "nvenc"=>Backend::Nvenc(nvenc::Encoder::with_quality(dev,codec,size,fps,kbps,settings.nvenc_preset())?),
             #[cfg(not(feature="ffmpeg"))]
             "media-foundation"=>Backend::MediaFoundation(MfEncoder::new(dev,luid,codec,size,fps,kbps)?),
             #[cfg(feature="ffmpeg")]
