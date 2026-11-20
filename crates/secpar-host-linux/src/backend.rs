@@ -161,7 +161,13 @@ impl Backend {
         crate::portal::POINTER_IN_PICTURE.store(host.store.lock().unwrap().config().pointer_in_picture, std::sync::atomic::Ordering::Relaxed);
         // The engine copy older versions made in the data folder is no longer used.
         let _ = std::fs::remove_dir_all(host.directory.join("engine"));
-        if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
+        if let Some(base) = crate::rendezvous::url() {
+            crate::rendezvous::start(handle.clone(), host.store.clone(), base.into());
+            // Friends connect through Secpar's own relay.
+            if base != secpar_host_core::rendezvous::FRIENDS_URL {
+                crate::rendezvous::start(handle.clone(), host.store.clone(), secpar_host_core::rendezvous::FRIENDS_URL.into());
+            }
+        }
         let mut events = handle.events();
         *host.agent.lock().unwrap() = Some(handle);
         let names = Arc::downgrade(&host);
@@ -191,7 +197,7 @@ impl Backend {
                 let owner = account.state().await.owner;
                 let presence = {
                     let store = host.store.lock().unwrap();
-                    secpar_host_core::account::Presence::new(true, store.id(), crate::rendezvous::url())
+                    secpar_host_core::account::Presence::new(true, store.id(), Some(secpar_host_core::rendezvous::FRIENDS_URL))
                 };
                 account.set_presence(presence).await;
                 host.sync_account_owner(owner.clone());

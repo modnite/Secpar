@@ -257,7 +257,8 @@ private fun FriendCard(computer: FriendComputer, thumb: ImageBitmap?, account: A
     val ready = account.guest == null
     CardFrame {
         Screen(thumb, ready && progress == null, stringResource(R.string.pcr_connect) + " " + computer.name) {
-            acts.connectFriend(computer, GuestChoices().permissions(), Mode.SCREEN)
+            // Everything the owner allows; permissions are chosen in the Friends tab only.
+            acts.connectFriend(computer, ComputerList.connectPermissions(computer), Mode.SCREEN)
         }
         CardTitle(computer.name, ComputerList.platform(computer.platform), ComputerStatus.ONLINE)
         Text(FriendsConnect.owner(computer.ownerHandle) + " · " + ComputerList.access(computer), color = c.textDim,

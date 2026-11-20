@@ -20,6 +20,11 @@ const BACKOFF_S: [u64; 5] = [1, 2, 5, 10, 30];
 /// The deployed Worker; `PCR_RENDEZVOUS_URL` at build time overrides it (empty turns it off).
 const DEFAULT_URL: &str = "wss://pcr-rendezvous.sadikhossain747.workers.dev";
 
+/// Secpar's own relay, which also serves friends (`/v1/guest`). Hosts stay connected to the
+/// relay above for their owners' devices and connect here too, and tell the account service
+/// this one is where friends reach them.
+pub const FRIENDS_URL: &str = "wss://relay.secpar.win";
+
 /// The Worker's base URL, or None when remote access is built out.
 pub fn url() -> Option<&'static str> {
     let u = option_env!("PCR_RENDEZVOUS_URL").unwrap_or(DEFAULT_URL);

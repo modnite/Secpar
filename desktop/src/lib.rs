@@ -3,6 +3,8 @@ mod signin;
 mod friend_previews;
 mod alerts;
 pub use account::answer_link;
+/// A plain system notification, for the answer process that has no window.
+pub fn notice(title: &str, body: &str) { alerts::info(title, body); }
 mod card;
 mod awake;
 use std::time::Instant;

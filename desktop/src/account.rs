@@ -136,6 +136,14 @@ pub enum Guest {
     Refused(String),
     Grant(Grant),
 }
+/// What a click on a friend's computer asks for: everything the owner allows. The owner's
+/// settings in the Friends tab are the only place these are chosen.
+pub fn connect_permissions(computer: &FriendComputer) -> Vec<String> {
+    let mut list: Vec<String> = ["view", "audio", "gamepad", "clipboard"].map(String::from).to_vec();
+    if computer.keyboard { list.push("keyboard".into()); }
+    if computer.mouse { list.push("mouse".into()); }
+    list
+}
 pub const PERMISSION_LABELS: [&str; 5] = ["View", "Audio", "Keyboard and mouse", "Controller", "Clipboard"];
 pub const PERMISSION_DEFAULTS: [bool; 5] = [true, true, true, false, false];
 const PERMISSIONS: [&str; 7] = ["view", "audio", "gamepad", "keyboard", "mouse", "clipboard", "files"];
@@ -638,8 +646,18 @@ impl Panel {
                     self.guest_waiting = Some(owner);
                 }
             } else if clicked.connect {
-                self.guest_choice = Some((computer, PERMISSION_DEFAULTS));
+                self.connect_friend(computer);
             }
+        }
+    }
+    /// Asks the owner's account for access to a friend's computer and connects once it is given.
+    fn connect_friend(&mut self, computer: FriendComputer) {
+        let owner = computer.owner_handle.clone();
+        let permissions = connect_permissions(&computer);
+        if self.tx.try_send(Command::RequestGuest { computer, permissions }).is_ok() {
+            self.guest_waiting = Some(owner);
+        } else {
+            self.note = "An account request is already in progress. Please wait.".into();
         }
     }
     /// The sign in, sign up and recovery form.
@@ -678,7 +696,9 @@ impl Panel {
                     friend: None, id: computer.id.clone(), manual: false,
                 }
             }).collect();
-            if let Some((id, name)) = self.manual.clone() {
+            // A computer paired here directly gives way to the same computer listed through a friend.
+            let listed_by_friend = |name: &str| self.friend_computers.iter().any(|c| c.name.eq_ignore_ascii_case(name));
+            if let Some((id, name)) = self.manual.clone().filter(|(_, name)| !listed_by_friend(name)) {
                 tiles.push(Tile {
                     name, status: "Paired on this device".into(), color: design::OK, platform: "",
                     preview: self.textures.get(&id).cloned(), connect: !self.busy, files: !self.busy, friend: None, id, manual: true,
@@ -736,7 +756,13 @@ impl Panel {
                                 self.guest_waiting = Some(owner);
                             }
                         } else if action.connect {
-                            self.guest_choice = Some((computer, PERMISSION_DEFAULTS));
+                            let owner = computer.owner_handle.clone();
+                            let permissions = connect_permissions(&computer);
+                            if self.tx.try_send(Command::RequestGuest { computer, permissions }).is_ok() {
+                                self.guest_waiting = Some(owner);
+                            } else {
+                                self.note = "An account request is already in progress. Please wait.".into();
+                            }
                         }
                     }
                 }
@@ -1008,7 +1034,7 @@ impl Panel {
                     ui.label(egui::RichText::new(format!("@{}", computer.owner_handle)).size(12.).color(crate::design::MUTED));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add_enabled(!self.session_open, egui::Button::new("Connect")).clicked() {
-                            self.guest_choice = Some((computer.clone(), PERMISSION_DEFAULTS));
+                            self.connect_friend(computer.clone());
                         }
                     });
                 });

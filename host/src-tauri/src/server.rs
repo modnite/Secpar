@@ -55,6 +55,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let agent = crate::agent::Agent::start(&identity, store.clone(), host, "0.0.0.0:48999".parse()?, Duration::from_secs(30)).await?;
     if let Some(url) = remote::url() {
         tokio::spawn(remote::rendezvous::run(agent.clone(), store.clone(), url.into()));
+        // Friends connect through Secpar's own relay.
+        if url != secpar_host_core::rendezvous::FRIENDS_URL {
+            tokio::spawn(remote::rendezvous::run(agent.clone(), store.clone(), secpar_host_core::rendezvous::FRIENDS_URL.into()));
+        }
     }
     let _mdns = mdns::Advert::start(store.lock().unwrap().pc_id(), &win::sys::pc_name());
     crate::log::line(&format!("server: up in session {}", win::session::current()));
@@ -100,7 +104,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             let owner = account.state().await.owner;
             let presence = {
                 let store = app.store.lock().unwrap();
-                secpar_host_core::account::Presence::new(true, store.pc_id(), crate::remote::url())
+                secpar_host_core::account::Presence::new(true, store.pc_id(), Some(secpar_host_core::rendezvous::FRIENDS_URL))
             };
             account.set_presence(presence).await;
             let revoked = app.store.lock().unwrap().set_account_owner(owner.clone());

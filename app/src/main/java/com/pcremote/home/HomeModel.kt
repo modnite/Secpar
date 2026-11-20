@@ -79,7 +79,9 @@ object ComputerList {
         // An old pairing on this phone that is offline gives way to the account's record of the same
         // computer when that one is online.
         val onlineOwned = owned.filter { it.online }.map { it.name.lowercase() }.toSet()
-        val shownCards = cards.filter { it.online || it.name.lowercase() !in onlineOwned }
+        // A computer paired here directly gives way to the same computer listed through a friend.
+        val friendNames = shared.map { it.name.lowercase() }.toSet()
+        val shownCards = cards.filter { (it.online || it.name.lowercase() !in onlineOwned) && it.name.lowercase() !in friendNames }
         val names = shownCards.map { it.name.lowercase() }.toMutableSet()
         val accountRows = owned.filter { it.certificateFp == null || it.certificateFp !in known || shownCards.none { c -> c.fingerprint == it.certificateFp } }
             .sortedByDescending { (if (it.online) 2 else 0) + (if (it.linked) 1 else 0) }
@@ -105,6 +107,10 @@ object ComputerList {
         if (c.keyboard || c.mouse) add(FriendTile(Mode.REMOTE, listOfNotNull("keyboard".takeIf { c.keyboard }, "mouse".takeIf { c.mouse })))
         if (c.keyboard) add(FriendTile(Mode.SLIDES, listOf("keyboard")))
     }
+
+    /** What a tap on a friend's computer asks for: everything the owner allows. */
+    fun connectPermissions(c: FriendComputer): List<String> =
+        listOf("view", "audio", "gamepad", "clipboard") + listOfNotNull("keyboard".takeIf { c.keyboard }, "mouse".takeIf { c.mouse })
 
     /** What the owner lets you do on a friend's computer, in the words of the Friends page. */
     fun access(c: FriendComputer): String {

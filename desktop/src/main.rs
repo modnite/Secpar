@@ -11,7 +11,12 @@ fn main() -> eframe::Result {
     }
     // A notification button starts this program with a signed link. It answers and exits.
     if let Some(link) = std::env::args().nth(1).filter(|a| a.starts_with("secpar-alert:")) {
-        let _ = secpar_desktop::answer_link(&link);
+        // Say what happened, so the owner knows one click was enough (or why it was not).
+        let note = match secpar_desktop::answer_link(&link) {
+            Ok(done) => done,
+            Err(error) => format!("Could not answer: {error}"),
+        };
+        secpar_desktop::notice("Secpar", &note);
         return Ok(());
     }
     if std::env::args().nth(1).as_deref() == Some("--send") {
