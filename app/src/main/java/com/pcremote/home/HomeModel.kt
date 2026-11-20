@@ -91,6 +91,11 @@ object ComputerList {
             shared.filter { s -> cards.none { it.id == s.id } && owned.none { it.id == s.id } }.map { ComputerRow.Friends(it) }
     }
 
+    /** Who is using a computer paired on this phone, from the account's record of the same computer. */
+    fun viewers(card: PcCardUi, owned: List<OwnedComputer>): List<String> =
+        (owned.firstOrNull { it.online && card.fingerprint.isNotEmpty() && it.certificateFp == card.fingerprint }
+            ?: owned.firstOrNull { it.online && it.name.equals(card.name, ignoreCase = true) })?.viewers.orEmpty()
+
     /** A mode a friend's card offers, and the permissions to ask for when it is opened. */
     data class FriendTile(val mode: Mode, val permissions: List<String>)
 
