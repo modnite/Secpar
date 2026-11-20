@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {fileURLToPath} from 'node:url';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import {SignJWT,importPKCS8,generateKeyPair,exportJWK} from 'jose';
 const base='https://accounts.secpar.win';
 const bundled=await build({entryPoints:[fileURLToPath(new URL('../src/index.ts',import.meta.url))],bundle:true,format:'esm',platform:'neutral',conditions:['workerd','worker','browser'],mainFields:['module','main'],external:['node:*'],write:false,target:'es2022'});
@@ -12,9 +12,12 @@ const grantKey=JSON.stringify(await exportJWK((await generateKeyPair('ES256',{ex
 const runtime=new Miniflare(convertV4MiniflareOptions({modules:true,script:bundled.outputFiles[0].text,compatibilityDate:'2026-11-04',compatibilityFlags:['nodejs_compat'],bindings:{PUBLIC_ORIGIN:base,GRANT_PRIVATE_JWK:grantKey},d1Databases:{DB:'enrollment-test'}}));
 try {
 const db=await runtime.getD1Database('DB');
-for(const migration of ['0001_accounts.sql','0002_passwords.sql','0003_hosts.sql','0004_owner_pairings.sql','0005_usernames.sql','0006_directory_and_friend_settings.sql','0007_host_presence.sql','0008_keyboard_and_mouse.sql']) {
+// Every migration, in order, so the runtime check matches the deployed schema.
+for(const migration of readdirSync(new URL('../migrations/',import.meta.url)).filter(f=>f.endsWith('.sql')).sort()) {
  const sql=readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8');
- for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
+ // Comments go first: one of them holds a semicolon.
+ const code=sql.split(String.fromCharCode(10)).map(l=>l.replace(/--.*$/,'')).join(String.fromCharCode(10));
+ for(const statement of code.split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(statement).run();
 }
 const sessionHash=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode('d'.repeat(64)))).toString('hex');
 await db.prepare('INSERT INTO accounts(id,github_id,handle,handle_lower,name) VALUES(?,?,?,?,?)').bind('runtime-fixture','runtime-fixture','Fixture','fixture','Fixture').run();
