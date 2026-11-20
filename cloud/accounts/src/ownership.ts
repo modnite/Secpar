@@ -93,8 +93,9 @@ export async function ownerRoutes(request: Request, env: Environment, owner: str
   }
   if (!owner) return null;
   if (path === "/v1/computers" && method === "GET") {
-    const rows = await q(env, "SELECT c.id,c.name,c.platform,k.certificate_fp,COALESCE(k.last_seen,0) AS last_seen,CASE WHEN k.computer IS NOT NULL THEN 1 ELSE 0 END AS linked,CASE WHEN k.last_seen>? THEN 1 ELSE 0 END AS online FROM computers c LEFT JOIN host_keys k ON k.computer=c.id WHERE c.owner=? ORDER BY c.name,c.id", now() - 90, owner).all();
-    return json(rows.results);
+    const rows = await q(env, "SELECT c.id,c.name,c.platform,k.certificate_fp,COALESCE(k.last_seen,0) AS last_seen,CASE WHEN k.computer IS NOT NULL THEN 1 ELSE 0 END AS linked,CASE WHEN k.last_seen>? THEN 1 ELSE 0 END AS online,CASE WHEN k.last_seen>? THEN k.viewers END AS viewers FROM computers c LEFT JOIN host_keys k ON k.computer=c.id WHERE c.owner=? ORDER BY c.name,c.id", now() - 90, now() - 90, owner).all();
+    // Who is connected, only while the computer is online.
+    return json(rows.results.map((r) => { let viewers: string[] = []; try { viewers = JSON.parse(String((r as { viewers?: unknown }).viewers ?? "[]")); } catch { /* old or empty */ } return { ...r, viewers: Array.isArray(viewers) ? viewers : [] }; }));
   }
   if (!path.startsWith("/v1/owner-pairings")) return null;
   // The native device session is the recipient capability. A second signed-in

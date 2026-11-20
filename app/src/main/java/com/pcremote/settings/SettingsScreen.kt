@@ -105,7 +105,7 @@ fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Mod
                 2 -> {
                     GroupText("Paired on this phone") {
                         if (computers.isEmpty()) {
-                            Text("No computers paired on this phone. Computers on your account connect without pairing.",
+                            Text("No computers paired on this phone.",
                                 color = c.textDim, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 8.dp))
                         }
                         computers.forEach { (id, name) ->

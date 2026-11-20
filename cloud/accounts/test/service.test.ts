@@ -49,6 +49,7 @@ class Database {
     this.db.exec(readFileSync(new URL("../migrations/0010_device_reach.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0011_knocks.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0012_friend_browse.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0013_host_viewers.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -372,6 +373,17 @@ describe("host enrollment and machine scope",()=>{
     expect((await finishHost(first.challenge)).status).toBe(201);
     const second=await startHost();db.db.exec("UPDATE host_challenges SET expires=0");
     expect((await finishHost(second.challenge)).status).toBe(409);
+  });
+  it("shows the owner who is using a computer, as its host reported",async()=>{
+    const host=await enrolledHost();
+    const names=["Galaxy S23","@bob","x".repeat(65),"badname",7,"a","b","c","d","e","f","g"];
+    expect((await machine("/v1/host/heartbeat",host.credential,"POST",{sharing:true,pc:"00000000-0000-4000-8000-0000000000c1",relay:"https://relay.example",viewers:names})).status).toBe(200);
+    const list=await (await call("/v1/computers","alice")).json();
+    const mine=list.find((c:{id:string})=>c.id===host.computer);
+    expect(mine.viewers).toEqual(["Galaxy S23","@bob","a","b","c","d","e","f"]);
+    await machine("/v1/host/heartbeat",host.credential,"POST",{sharing:true,pc:"00000000-0000-4000-8000-0000000000c1",relay:"https://relay.example"});
+    const after=(await (await call("/v1/computers","alice")).json()).find((c:{id:string})=>c.id===host.computer);
+    expect(after.viewers).toEqual([]);
   });
   it("scopes machine credentials away from account, friendship and other hosts",async()=>{
     const host=await enrolledHost();
@@ -751,7 +763,7 @@ describe("per-friend host settings", () => {
     const list = await (await call("/v1/friends", "alice")).json();
     expect(list[0]).toMatchObject({ keyboard: false, mouse: false });
   });
-  it("keeps input in the grant only for a friend with full access and revokes it when lowered", async () => {
+  it("keeps input in the grant only for a friend with full access, and lowering it leaves the session to the host", async () => {
     await friendship();
     const host = await computer();
     await settings("alice", "bob", { input: "full" });
@@ -761,8 +773,21 @@ describe("per-friend host settings", () => {
       (await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view", "keyboard"] })).status,
     ).toBe(200);
     await settings("alice", "bob", { input: "view" });
+    // The host reads the lowered settings and stops input; the friend keeps watching.
     const row = await (await call(`/v1/requests/${made.id}`, "alice")).json();
-    expect(row.state).toBe("revoked");
+    expect(row.state).toBe("approved");
+    expect(await (await settings("alice", "bob")).json()).toMatchObject({ keyboard: false, mouse: false });
+  });
+  it("drops from an approval what the owner no longer allows instead of failing", async () => {
+    await friendship();
+    const host = await computer();
+    await settings("alice", "bob", { input: "full" });
+    const made = await (await ask(host, ["view", "keyboard", "mouse"])).json();
+    await settings("alice", "bob", { input: "view" });
+    const approve = await call(`/v1/requests/${made.id}/approve`, "alice", "POST", { permissions: ["view", "keyboard", "mouse"] });
+    expect(approve.status).toBe(200);
+    const row = await (await call(`/v1/requests/${made.id}`, "alice")).json();
+    expect(JSON.parse(row.approved)).toEqual(["view"]);
   });
   it("approves at once when the friend may connect at any time", async () => {
     await friendship();

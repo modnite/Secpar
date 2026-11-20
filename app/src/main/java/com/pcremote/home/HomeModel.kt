@@ -108,9 +108,12 @@ object ComputerList {
         if (c.keyboard) add(FriendTile(Mode.SLIDES, listOf("keyboard")))
     }
 
-    /** What a tap on a friend's computer asks for: everything the owner allows. */
-    fun connectPermissions(c: FriendComputer): List<String> =
-        listOf("view", "audio", "gamepad", "clipboard") + listOfNotNull("keyboard".takeIf { c.keyboard }, "mouse".takeIf { c.mouse })
+    /**
+     * What a tap on a friend's computer asks for. Keyboard and mouse are always asked for: the account
+     * service keeps only what the owner allows now, and the host follows later changes live.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun connectPermissions(c: FriendComputer): List<String> = listOf("view", "audio", "gamepad", "clipboard", "keyboard", "mouse")
 
     /** What the owner lets you do on a friend's computer, in the words of the Friends page. */
     fun access(c: FriendComputer): String {

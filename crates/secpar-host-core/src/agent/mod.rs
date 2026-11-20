@@ -225,6 +225,15 @@ impl AgentHandle {
         self.ctx.guest.close_one(guest, "owner");
     }
 
+    /// Ends the sessions of one of the owner's devices now. It stays paired.
+    pub fn disconnect(&self, device: &str) {
+        for (dev, tx) in self.ctx.sessions.lock().unwrap().values() {
+            if dev == device {
+                let _ = tx.send(Out::Close("disconnected"));
+            }
+        }
+    }
+
     pub fn events(&self) -> broadcast::Receiver<Event> {
         self.ctx.events.subscribe()
     }

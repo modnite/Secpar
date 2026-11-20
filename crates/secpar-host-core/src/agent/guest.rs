@@ -13,7 +13,7 @@ use std::time::Duration;
 pub const MAX_FRIENDS: usize = 3;
 
 /// How often the host asks the Worker whether the lease is still good.
-const RECHECK: Duration = Duration::from_secs(10);
+const RECHECK: Duration = Duration::from_secs(3);
 /// Consecutive failed rechecks before the session ends. Offline for this long stops output.
 const MISSES: u32 = 3;
 const LOCK_POLL: Duration = Duration::from_millis(500);
@@ -81,12 +81,11 @@ impl GuestAdmission {
             return Recheck::Unreachable;
         };
         match admit(&roster, &lease, pass.grant.permissions(), &pass.guest) {
-            Ok(fresh) => {
-                if !fresh.gate().keyboard() {
-                    pass.gate.strip_keyboard();
-                }
-                if !fresh.gate().mouse() {
-                    pass.gate.strip_mouse();
+            Ok(_) => {
+                // Keyboard and mouse follow the owner's Friends tab live, both ways.
+                if let Some(policy) = roster.policy(&pass.guest) {
+                    pass.gate.set_keyboard(policy.allows_keyboard());
+                    pass.gate.set_mouse(policy.allows_mouse());
                 }
                 Recheck::Good
             }

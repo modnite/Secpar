@@ -15,7 +15,7 @@ fn fp_hex(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
 fn computer(id: &str, fp: Option<u8>, linked: u8, online: u8) -> OwnedComputer {
-    OwnedComputer { id: id.into(), name: format!("PC {}", &id[9..13]), platform: "linux".into(), certificate_fp: fp.map(fp_hex), linked, online }
+    OwnedComputer { id: id.into(), name: format!("PC {}", &id[9..13]), platform: "linux".into(), certificate_fp: fp.map(fp_hex), linked, online, viewers: vec![] }
 }
 fn credential(fp: u8) -> Computer {
     Computer { id: "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb".into(), name: "PC".into(), hosts: vec!["127.0.0.1".into()], port: 1, fingerprint: [fp; 32], token: "dG9rZW4".into(), relay: None }

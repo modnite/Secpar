@@ -509,7 +509,9 @@ impl App {
         if self.command.is_some() { return; }
         self.session_account=self.computer_account.clone();
         self.guest_session=guest.is_some();
-        self.session_keyboard=guest.as_ref().is_none_or(|grant|grant.allows("keyboard"));
+        // A friend's keyboard and mouse follow the owner's settings live; the host drops what is not
+        // allowed at the moment, so this side always sends.
+        self.session_keyboard=true;
         self.guest_error=false;
         if guest.is_some() { self.session_account=self.account.user.as_ref().map(|u|u.id.clone()); }
         let lan_first = self.computer_account.is_some();
@@ -1519,6 +1521,9 @@ impl eframe::App for App {
                                 if forget { self.account.forget_computer(); }
                                 if connect.connect { self.start(ctx); }
                             }
+                            // Who may use this computer, and who is on it now.
+                            ui.add_space(12.);
+                            self.hosting.paired_devices_ui(ui, self.account.user.is_none());
                             // Without an account a computer is still paired by its link, kept out of the way.
                             if self.account.user.is_none() {
                                 ui.add_space(8.);

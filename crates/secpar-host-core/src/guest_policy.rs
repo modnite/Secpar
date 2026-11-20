@@ -111,6 +111,9 @@ struct GateState {
     open: AtomicBool,
     keyboard_off: AtomicBool,
     mouse_off: AtomicBool,
+    /// Given by the owner during the session, beyond what the grant carried.
+    keyboard_on: AtomicBool,
+    mouse_on: AtomicBool,
     streaming: AtomicBool,
     announced: AtomicBool,
     handle: std::sync::Mutex<String>,
@@ -125,11 +128,13 @@ impl PartialEq for Gate {
 impl Eq for Gate {}
 impl Gate {
     fn new(permissions: BTreeSet<String>) -> Self {
-        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), keyboard_off: AtomicBool::new(false), mouse_off: AtomicBool::new(false), streaming: AtomicBool::new(false), announced: AtomicBool::new(false), handle: std::sync::Mutex::new(String::new()), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
+        Self(Arc::new(GateState { permissions, open: AtomicBool::new(true), keyboard_off: AtomicBool::new(false), mouse_off: AtomicBool::new(false), keyboard_on: AtomicBool::new(false), mouse_on: AtomicBool::new(false), streaming: AtomicBool::new(false), announced: AtomicBool::new(false), handle: std::sync::Mutex::new(String::new()), closed: tokio::sync::Notify::new(), reason: std::sync::Mutex::new("ended") }))
     }
     pub fn has(&self, permission: &str) -> bool {
         self.0.open.load(Ordering::SeqCst)
-            && self.0.permissions.contains(permission)
+            && (self.0.permissions.contains(permission)
+                || (permission == "keyboard" && self.0.keyboard_on.load(Ordering::SeqCst))
+                || (permission == "mouse" && self.0.mouse_on.load(Ordering::SeqCst)))
             && !(self.0.keyboard_off.load(Ordering::SeqCst) && permission == "keyboard")
             && !(self.0.mouse_off.load(Ordering::SeqCst) && permission == "mouse")
     }
@@ -210,6 +215,17 @@ impl Gate {
     }
     pub fn strip_mouse(&self) {
         self.0.mouse_off.store(true, Ordering::SeqCst);
+    }
+    /// The owner's current choice for this friend, applied while the session runs: on gives
+    /// keyboard input even when the grant did not carry it, off takes it away.
+    pub fn set_keyboard(&self, on: bool) {
+        self.0.keyboard_on.store(on, Ordering::SeqCst);
+        self.0.keyboard_off.store(!on, Ordering::SeqCst);
+    }
+    /// As `set_keyboard`, for the mouse.
+    pub fn set_mouse(&self, on: bool) {
+        self.0.mouse_on.store(on, Ordering::SeqCst);
+        self.0.mouse_off.store(!on, Ordering::SeqCst);
     }
 }
 /// `signed` is the permission set of the verified grant.
@@ -351,4 +367,22 @@ mod tests {
         let after = Roster::parse(&json!([{"id":"bob","input":"view","connect":"ask"}])).unwrap();
         assert!(!admit(&after, &lease("bob", &["view", "keyboard"], true), &signed, "bob").unwrap().gate().keyboard());
     }
+    #[test]
+    fn the_owner_can_give_and_take_keyboard_and_mouse_during_a_session() {
+        let gate = Gate::new(set(&["view"]));
+        assert!(!gate.keyboard() && !gate.mouse(), "the grant carried no input");
+        gate.set_keyboard(true);
+        gate.set_mouse(true);
+        assert!(gate.keyboard() && gate.mouse(), "turned on in the Friends tab");
+        gate.set_keyboard(false);
+        assert!(!gate.keyboard() && gate.mouse(), "turned off again");
+        let full = Gate::new(set(&["view", "keyboard", "mouse"]));
+        full.set_mouse(false);
+        assert!(full.keyboard() && !full.mouse(), "a granted permission can be taken away");
+        full.set_mouse(true);
+        assert!(full.mouse(), "and given back");
+        full.close();
+        assert!(!full.keyboard(), "a closed gate allows nothing");
+    }
+
 }

@@ -44,6 +44,8 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
       }
       const sharing=presence.sharing===true;
       let pc:string|null=null, relay:string|null=null;
+      // Who is connected, for the owner's Computers tab: up to eight short plain names.
+      const viewers=Array.isArray(presence.viewers)?presence.viewers.filter((v):v is string=>typeof v==="string"&&v.length>0&&v.length<=64&&!/[\u0000-\u001f]/.test(v)).slice(0,8):[];
       if(sharing) {
         if(typeof presence.pc!=="string"||!/^[a-f0-9-]{36}$/.test(presence.pc)) api.fail(400,"invalid_presence");
         pc=presence.pc;
@@ -53,7 +55,7 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
           relay=url.origin;
         } catch { api.fail(400,"invalid_presence"); }
       }
-      await q(env,"UPDATE host_keys SET last_seen=?,sharing=?,pc=NULLIF(?,''),relay=NULLIF(?,'') WHERE computer=?",now(),sharing?1:0,pc??"",relay??"",machine.computer).run();
+      await q(env,"UPDATE host_keys SET last_seen=?,sharing=?,pc=NULLIF(?,''),relay=NULLIF(?,''),viewers=? WHERE computer=?",now(),sharing?1:0,pc??"",relay??"",JSON.stringify(viewers),machine.computer).run();
       return json({...publicMachine,sharing});
     }
     if(path==="/v1/host/link" && method==="DELETE") {

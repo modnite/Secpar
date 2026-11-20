@@ -103,8 +103,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             let Ok(account) = &app.account else { continue };
             let owner = account.state().await.owner;
             let presence = {
+                let viewers = {
+                    let state = crate::commands::state(&app);
+                    state.devices.into_iter().filter(|d| d.connected).map(|d| d.name)
+                        .chain(state.friends.into_iter().map(|f| f.name)).collect::<Vec<_>>()
+                };
                 let store = app.store.lock().unwrap();
                 secpar_host_core::account::Presence::new(true, store.pc_id(), Some(secpar_host_core::rendezvous::FRIENDS_URL))
+                    .with_viewers(viewers)
             };
             account.set_presence(presence).await;
             let revoked = app.store.lock().unwrap().set_account_owner(owner.clone());

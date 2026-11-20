@@ -11,10 +11,18 @@ impl Settings {
         if !["auto","nvenc","ffmpeg-nvenc","ffmpeg-amf","ffmpeg-qsv","media-foundation"].contains(&self.backend.as_str()) {
             return Err("Unknown video encoder".into())
         }
-        if !["fast","balanced","quality"].contains(&self.preset.as_str()) {return Err("Unknown encoder preset".into())}
+        if !["fast","balanced","quality","p1","p2","p3","p4","p5","p6","p7"].contains(&self.preset.as_str()) {return Err("Unknown encoder preset".into())}
         Ok(())
     }
-    pub fn quality(&self)->u32 {match self.preset.as_str(){"balanced"=>1,"quality"=>2,_=>0}}
+    /// Three levels for the FFmpeg encoders; NVENC's own presets fold into them.
+    pub fn quality(&self)->u32 {match self.preset.as_str(){"balanced"|"p3"|"p4"|"p5"=>1,"quality"|"p6"|"p7"=>2,_=>0}}
+    /// NVENC preset P1 (fastest) to P7 (best quality). The three named levels are P1, P4 and P7.
+    pub fn nvenc_preset(&self)->u32 {
+        match self.preset.as_str() {
+            "balanced"=>4, "quality"=>7,
+            p=>p.strip_prefix('p').and_then(|n|n.parse().ok()).filter(|n|(1..=7).contains(n)).unwrap_or(1),
+        }
+    }
 }
 pub fn automatic(dev:&ID3D11Device)->&'static str {
     // SAFETY: the live D3D device retains its DXGI adapter; no raw pointer ownership changes.

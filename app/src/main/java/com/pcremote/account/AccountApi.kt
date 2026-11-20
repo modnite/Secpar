@@ -123,7 +123,9 @@ data class DirectoryEntry(val handle: String, val cursor: String, val relation: 
 data class ConnectionRequest(val id: String, val owner: String, val guestHandle: String, val computerName: String?,
     val requested: List<String>, val state: String)
 enum class Answer { ALLOW_CONNECTION, DENY_CONNECTION, ACCEPT_FRIEND, DECLINE_FRIEND }
-data class OwnedComputer(val id: String, val name: String, val platform: String, val certificateFp: String?, val linked: Boolean, val online: Boolean)
+data class OwnedComputer(val id: String, val name: String, val platform: String, val certificateFp: String?, val linked: Boolean, val online: Boolean,
+    /** Who is using it now, as its host reported. An older service leaves this out. */
+    val viewers: List<String> = emptyList())
 /** A computer of an accepted friend that is online and lets friends connect. */
 data class FriendComputer(val id: String, val name: String, val platform: String, val owner: String, val ownerHandle: String,
     /** What the owner lets this account do there. An older service leaves these out. */
@@ -232,7 +234,9 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
             valid(!linked || fp != null)
             OwnedComputer(o.text("id").also { valid(UUID.matches(it)) },
                 o.text("name").also { valid(safeText(it, 320)) },
-                o.text("platform").also { valid(safeText(it, 16)) }, fp, linked, o.bit("online"))
+                o.text("platform").also { valid(safeText(it, 16)) }, fp, linked, o.bit("online"),
+                // Display only: anything malformed is left out rather than failing the list.
+                (o["viewers"] as? JsonArray).orEmpty().mapNotNull { v -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { safeText(it, 64) } }.take(8))
         }
     }
 

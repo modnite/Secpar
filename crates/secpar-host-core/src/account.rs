@@ -73,6 +73,10 @@ pub struct Presence {
     /// The host's rendezvous id and the relay Worker's origin.
     pub pc: String,
     pub relay: String,
+    /// Who is using this computer now: the owner's device names and friends' handles. The owner's
+    /// Computers tab shows them. Left out when nobody is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub viewers: Vec<String>,
 }
 impl Presence {
     /// Sharing needs a relay the service will accept: a plain https origin. Anything else means off,
@@ -88,9 +92,21 @@ impl Presence {
             r.strip_prefix("https://").is_some_and(|host| !host.is_empty() && !host.contains(['/', '?', '#', '@', ' ']))
         });
         match origin {
-            Some(origin) if friends_on && valid_id(pc) => Self { sharing: true, pc: pc.into(), relay: origin.into() },
+            Some(origin) if friends_on && valid_id(pc) => Self { sharing: true, pc: pc.into(), relay: origin.into(), viewers: vec![] },
             _ => Self::default(),
         }
+    }
+    /// Adds who is connected, at most eight short plain names.
+    pub fn with_viewers(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        if self.sharing {
+            self.viewers = names
+                .into_iter()
+                .map(|n| n.chars().filter(|c| !c.is_control()).take(64).collect::<String>())
+                .filter(|n| !n.trim().is_empty())
+                .take(8)
+                .collect();
+        }
+        self
     }
 }
 struct Inner {
