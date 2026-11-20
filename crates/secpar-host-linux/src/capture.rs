@@ -820,7 +820,7 @@ mod tests {
     #[test]
     fn startup_preserves_the_actual_capture_failure() {
         gst::init().unwrap();
-        let options=VideoOptions {width:320,height:180,fps:30,kbps:2000,codecs:vec!["h264".into()]};
+        let options=VideoOptions {width:320,height:180,fps:30,kbps:2000,codecs:vec!["h264".into()],encoder:"auto".into(),preset:"fast".into()};
         let result=Capture::from_source("secpar_missing_capture_source",(320,180),options,None);
         let error=result.err().expect("Missing synthetic source must fail");
         assert!(error.contains("secpar_missing_capture_source"),"{error}");

@@ -189,14 +189,13 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
 
     let (bin_tx, mut bin_rx) = mpsc::channel(4);
     let outbox = Outbox { ctl: tx.clone(), bin: bin_tx };
-    // A friend is never registered as an owner device and gets no migration session.
-    let (mut session, mut gamestream, registration, link, gate) = match &guest {
+    // A friend is never registered as an owner device.
+    let (mut session, registration, link, gate) = match &guest {
         None => {
             let inner = ctx.handlers.session(&device, outbox.clone());
             let session: Box<dyn Session> = Box::new(OwnerWatch { inner, ctx: ctx.clone(), streaming: false });
-            let gamestream = ctx.handlers.gamestream_session(&device, outbox);
             let sid = ctx.register(&device, tx);
-            (session, gamestream, Some(Registration(ctx.clone(), sid)), None, None)
+            (session, Some(Registration(ctx.clone(), sid)), None, None)
         }
         Some((adm, pass)) => {
             let Some(inner) = ctx.handlers.guest_session(&pass.gate, &pass.guest, outbox) else {
@@ -205,7 +204,7 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
             };
             let session: Box<dyn Session> = Box::new(Filtered { inner, gate: pass.gate.clone(), ctx: ctx.clone(), guest_id: pass.guest.clone() });
             let link = Link::start(ctx.clone(), adm.clone(), pass);
-            (session, None, None, Some(link), Some(pass.gate.clone()))
+            (session, None, Some(link), Some(pass.gate.clone()))
         }
     };
     loop {
@@ -225,9 +224,6 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                         Ok(ClientMsg::Ping) => Some(ServerMsg::Pong),
                         Ok(m @ (ClientMsg::Pair { .. } | ClientMsg::Hello { .. })) => {
                             Some(ServerMsg::error("bad_request", "already authenticated", Some(m.t())))
-                        }
-                        Ok(m @ (ClientMsg::GameStreamInfo { .. } | ClientMsg::GameStreamPair { .. })) => {
-                            super::gamestream::dispatch(m, &mut gamestream)
                         }
                         Ok(m) => session.on_msg(m.sanitize()),
                         Err(_) => None,
@@ -261,7 +257,6 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
     drop(registration);
     drop(session); // releases held keys/buttons, stops subscriptions
     drop(link); // closes the gate, stops the lease watcher
-    drop(gamestream); // cancels this authenticated device's pending engine grants
 }
 
 /// Every online and local check for a friend, then consumes the grant. Order matters: the grant

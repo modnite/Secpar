@@ -23,13 +23,11 @@ pub struct Host {
     guests: Option<Arc<GuestAdmission>>,
     /// One count of virtual controllers for the whole PC, owner and friends together.
     pad_budget: Arc<pad::Budget>,
-    /// The bundled engine and its tunnel; it advertises itself once ready.
-    engine: crate::gamestream::Managed,
 }
 
 impl Host {
-    pub fn new(store: Arc<Mutex<Store>>, guests: Option<Arc<GuestAdmission>>, engine: crate::gamestream::Managed, net: Arc<Mutex<net::NetStatus>>) -> Self {
-        let host = Host { store, outgoing: Outgoing::default(), pads: Mutex::new(None), lingering: Default::default(), net, guests, pad_budget: Arc::default(), engine };
+    pub fn new(store: Arc<Mutex<Store>>, guests: Option<Arc<GuestAdmission>>, net: Arc<Mutex<net::NetStatus>>) -> Self {
+        let host = Host { store, outgoing: Outgoing::default(), pads: Mutex::new(None), lingering: Default::default(), net, guests, pad_budget: Arc::default() };
         host.bus();
         host
     }
@@ -89,11 +87,6 @@ impl Handlers for Host {
         if self.bus().is_some() {
             c.push("pad".into());
         }
-        // Only once the bundled engine and its tunnel are both up; without it clients
-        // keep using PRS exactly as before.
-        if self.engine.is_ready() {
-            c.push("gamestream".into());
-        }
         c
     }
 
@@ -103,11 +96,6 @@ impl Handlers for Host {
 
     fn session(&self, device: &str, out: Outbox) -> Box<dyn Session> {
         self.build(device, out, None)
-    }
-
-    fn gamestream_session(&self, device: &str, out: Outbox) -> Option<Box<dyn Session>> {
-        let owner = self.store.lock().unwrap().engine_owner();
-        self.engine.session(device, out, &owner)
     }
 
     fn guests(&self) -> Option<Arc<GuestAdmission>> {

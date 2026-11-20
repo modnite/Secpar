@@ -53,7 +53,9 @@ class SettingsModel(private val kv: KeyValue) {
         set(v) = kv.put(K_POINTER, v.coerceIn(0.5f, 3f).toString())
 
     var captureShortcut: com.pcremote.stream2.CaptureShortcut
-        get() = kv.get("secpar_capture_shortcut")?.let { value -> com.pcremote.stream2.CaptureShortcut.entries.firstOrNull { it.name == value } }
+        // Ctrl+Alt+Shift+Z was saved under an older name.
+        get() = kv.get("secpar_capture_shortcut")?.let { value -> if (value == "MOONLIGHT") "CTRL_ALT_SHIFT_Z" else value }
+            ?.let { value -> com.pcremote.stream2.CaptureShortcut.entries.firstOrNull { it.name == value } }
             ?: com.pcremote.stream2.CaptureShortcut.CTRL_ALT_G
         set(value) = kv.put("secpar_capture_shortcut", value.name)
 
@@ -69,7 +71,7 @@ class SettingsModel(private val kv: KeyValue) {
         const val K_FPS = "pcremote_frame_rate"
         const val K_BITRATE = "pcremote_bitrate_mbps"
         val DEFAULT_RESOLUTION = 1280 to 720
-        val FRAME_RATES = listOf(30, 60, 90, 120)
+        val FRAME_RATES = listOf(60, 90, 120)
         const val DEFAULT_FPS = 60
         val BITRATES_MBPS = listOf(5, 10, 20, 30, 50, 80)
         const val DEFAULT_BITRATE_MBPS = 30

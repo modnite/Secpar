@@ -8,7 +8,7 @@ use windows::Win32::Media::Audio::*;
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
 use windows::Win32::System::Threading::{AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject};
 
-// Match Sunshine's Windows capture scheduling. The guard cannot move threads:
+// Windows audio capture scheduling (MMCSS). The guard cannot move threads:
 // AvRevertMmThreadCharacteristics must run on the registering thread.
 struct AudioScheduling {
     handle: HANDLE,

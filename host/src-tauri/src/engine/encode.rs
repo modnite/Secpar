@@ -191,7 +191,7 @@ impl MfEncoder {
             let api: ICodecAPI = mft.cast()?;
             let _ = set(&api, &CODECAPI_AVEncCommonRateControlMode, VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32));
             set(&api, &CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(kbps * 1000))?;
-            // Sunshine's VBV: about one frame of bits, so a busy frame can't burst past the link.
+            // VBV of about one frame of bits, so a busy frame can't burst past the link.
             let _ = set(&api, &CODECAPI_AVEncCommonBufferSize, VARIANT::from(vbv_bits(kbps, fps)));
             let _ = set(&api, &CODECAPI_AVEncCommonQualityVsSpeed, VARIANT::from(0u32));
             let _ = set(&api, &CODECAPI_AVLowLatencyMode, VARIANT::from(true));

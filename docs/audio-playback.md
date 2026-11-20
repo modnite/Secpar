@@ -1,7 +1,7 @@
 # Android audio playback
 
 The user confirms Windows Development 6 fixed video and cursor performance. Rare
-slight audio crackle/slowdown remains on the S23 and is absent in Moonlight. Phone
+slight audio crackle/slowdown remains on the S23 and is absent in the reference client. Phone
 logs confirm the fast AudioTrack path; no useful underrun counters were previously
 logged by Secpar. Do not assume a general phone, dock or network problem.
 
@@ -41,7 +41,7 @@ resolved. Synthetic audio belongs only to androidTest assets, never the release 
 ## Preview 18: real-time recovery and transition smoothing
 
 The user reports Preview 17 hiccups cause permanent audio lag while video recovers;
-Moonlight on the same desktop does not have the fault. S23 logs show hardware video
+The reference client on the same desktop does not have the fault. S23 logs show hardware video
 still active, audio underruns rising to 15, a 60–70 ms PCM queue, up to eight pending
 audio packets, six overflow packets and six observed audio packet gaps. Partial
 writes and decoder input waits remain zero in that session. Preserving delayed

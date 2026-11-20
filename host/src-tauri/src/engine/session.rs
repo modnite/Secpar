@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 /// Enforce the host's advertised resolution/frame-rate ceiling for every client.
 pub fn quality_limit(profile: &str, w:u32, h:u32, fps:u32)->(u32,u32,u32) {
-    let (mw,mh,mfps)=match profile {"battery"=>(1280,720,30),"smooth"=>(1920,1080,60),"sharp"=>(2560,1440,60),"2160p60"=>(3840,2160,60),_=>(0,0,0)};
+    let (mw,mh,mfps)=match profile {"battery"=>(1280,720,60),"smooth"=>(1920,1080,60),"sharp"=>(2560,1440,60),"2160p60"=>(3840,2160,60),_=>(0,0,0)};
     if mw==0 {return (w,h,fps)}
     (if w==0 {mw}else{w.min(mw)},if h==0 {mh}else{h.min(mh)},fps.min(mfps))
 }
@@ -207,7 +207,7 @@ fn idle_repeat_due(since_real: Duration, since_send: Duration, interval: Duratio
     since_real <= Duration::from_millis(500) || since_send >= interval + interval / 2
 }
 
-/// Sunshine matches near-equal display rates (e.g. 59.94 rather than 60) so a
+/// Near-equal display rates are matched (e.g. 59.94 rather than 60) so a
 /// nominal stream clock cannot slowly run ahead of the captured display.
 fn stream_interval(fps: u32, refresh: Option<(u32,u32)>) -> Duration {
     let fps = fps.max(1) as u128;
@@ -377,7 +377,7 @@ impl Video {
         let cap = SharedCapture::open(&p.display).ok_or_else(|| err("capture_failed", "the desktop can't be captured right now (locked?)"))?;
         let (capture_dev, capture_ctx, luid, shown) = cap.device();
         let (dev, ctx) = if capture::isolated_gpu() {
-            // Sunshine gives conversion/encoding their own device, avoiding DXGI
+            // Conversion and encoding get their own device, avoiding DXGI
             // capture's immediate-context lock while the encoder waits for output.
             let (dev, ctx, _, adapter) = capture::device(&shown.id)
                 .ok_or_else(|| err("no_encoder", "the encoder GPU device could not be opened"))?;
@@ -523,7 +523,11 @@ impl Video {
             // for a send timer. Faster capture rates keep only their newest image.
             let encode_due = next_due.checked_sub(work_budget).unwrap_or(next_due);
             let now = Instant::now();
-            let current = !source_clock || source_in_slot(cap_us, now_us(), now, encode_due);
+            // A frame not sent yet also counts when it is at most one interval old. A game that
+            // presents its own 60 fps drifts against this grid; requiring its frames to land inside
+            // each slot turned about every other one into a repeat (30 fps from a 60 fps game).
+            let unsent_fresh = pending && now_us().saturating_sub(cap_us) <= interval.as_micros() as u64;
+            let current = !source_clock || unsent_fresh || source_in_slot(cap_us, now_us(), now, encode_due);
             if pending && prepared.is_empty() && sh.peer().is_some() && now >= encode_due && current {
                 if let (Some(src), Some(size)) = (img.as_ref(), self.cap.size()) {
                     if conv.is_none() {
@@ -615,7 +619,7 @@ impl Video {
     }
 }
 
-/// Frame-pacing scheduling for the video thread, as Sunshine does it: a 1 ms system timer so
+/// Frame-pacing scheduling for the video thread: a 1 ms system timer so
 /// sleeps land on the frame deadline (the default tick is 15.6 ms), and the "Games" MMCSS class
 /// so a busy desktop doesn't delay capture and encode.
 struct Realtime(Option<usize>);

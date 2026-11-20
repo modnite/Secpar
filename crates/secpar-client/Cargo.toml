@@ -8,7 +8,6 @@ publish = false
 [dependencies]
 secpar-network = { path = "../secpar-network" }
 secpar-stream = { path = "../secpar-stream" }
-secpar-tunnel = { path = "../secpar-tunnel" }
 base64 = "0.23.1"
 futures-util = { version = "0.3.34", features = ["sink"] }
 ring = "0.17.14"

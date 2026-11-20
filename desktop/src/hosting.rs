@@ -34,8 +34,6 @@ enum Command {
     Pair,
     Patch(Value),
     Revoke(String),
-    /// Linux: the one-time system setup (asks for the owner's password).
-    SystemSetup,
     Disconnect(String),
     Friend { id: String, keyboard: Option<bool>, mouse: Option<bool>, connect: Option<&'static str> },
 }
@@ -98,12 +96,6 @@ impl Panel {
                                 // Read fresh settings, preserving unrelated/unknown fields.
                                 match patch_config(patch).await {
                                     Ok(()) => Event::State(snapshot().await),
-                                    Err(e) => Event::Error(e),
-                                }
-                            }
-                            Command::SystemSetup => {
-                                match local_host::call("system_setup", Value::Null).await {
-                                    Ok(_) => Event::State(snapshot().await),
                                     Err(e) => Event::Error(e),
                                 }
                             }
@@ -534,36 +526,11 @@ impl Panel {
         ui.add_enabled_ui(self.state.is_some() && !self.busy, |ui| {
             ui.spacing_mut().item_spacing.y = 8.;
             design::group(ui, "Picture", |ui| {
-                let width = design::value_width(ui);
-                let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
-                let old = quality.clone();
-                let choices = [("auto", "No limit"), ("battery", "1280 × 720 · 30 fps"), ("smooth", "1920 × 1080 · 60 fps"), ("sharp", "2560 × 1440 · 60 fps"), ("2160p60", "3840 × 2160 · 60 fps")];
-                let label = choices.iter().find(|(value, _)| *value == quality).map(|(_, label)| *label).unwrap_or("Custom");
-                design::row(ui, "Quality limit", |ui| {
-                    egui::ComboBox::from_id_salt("host-quality").width(width).selected_text(label).show_ui(ui, |ui| {
-                        for (value, label) in choices { ui.selectable_value(&mut quality, value.into(), label); }
-                    });
-                });
-                if quality != old { self.send(Command::Patch(json!({"max_quality": quality}))); }
+                self.quality_ui(ui, &config);
                 self.encoder_ui(ui, &config);
                 self.setting_toggle(ui, &config, "pointer_in_picture", "Show pointer in picture", "");
                 ui.label(egui::RichText::new("Changes apply to the next connection. With the pointer left out, the connecting device draws it, so it follows the mouse without delay.").size(12.).color(design::MUTED));
             });
-            // Full screen capture and controllers need a one-time step as administrator.
-            let system = self.settings["system"].as_str().unwrap_or("missing").to_string();
-            let running = self.settings["system_running"].as_bool().unwrap_or(false);
-            if std::env::var_os("SECPAR_LINUX_ENGINE").is_some() { design::group(ui, "System", |ui| {
-                design::row(ui, "Screen capture and controllers", |ui| {
-                    if system == "ready" {
-                        ui.label(egui::RichText::new(if running { "Done" } else { "Quit and reopen Secpar to use it" }).color(design::MUTED));
-                    } else if ui.add(egui::Button::new(if system == "outdated" { "Update" } else { "Set up" }).min_size(egui::vec2(96., design::CONTROL)))
-                        .on_hover_text("Asks for your password once. Lets Secpar capture the screen directly, including the lock screen, and create controllers.")
-                        .clicked()
-                    {
-                        self.send(Command::SystemSetup);
-                    }
-                });
-            }); }
             design::group(ui, "Who can use it", |ui| {
                 self.setting_toggle(ui, &config, "allow_files", "Receive and browse files", "Allow paired devices to send files to this computer and to browse it.");
                 self.setting_toggle(ui, &config, "allow_clip", "Share clipboard", "Allow clipboard exchange with paired devices.");
@@ -578,6 +545,20 @@ impl Panel {
                 self.setting_toggle(ui, &config, "autostart", "Start in tray", "Open Secpar in the tray when you sign in, so this computer can be reached.");
             });
         });
+    }
+    /// The most a connecting device may ask for. Both hosts apply it to their own stream engine.
+    fn quality_ui(&mut self, ui: &mut egui::Ui, config: &Value) {
+        let width = design::value_width(ui);
+        let mut quality = config["max_quality"].as_str().unwrap_or("auto").to_string();
+        let old = quality.clone();
+        let choices = [("auto", "No limit"), ("battery", "1280 × 720 · 60 fps"), ("smooth", "1920 × 1080 · 60 fps"), ("sharp", "2560 × 1440 · 60 fps"), ("2160p60", "3840 × 2160 · 60 fps")];
+        let label = choices.iter().find(|(value, _)| *value == quality).map(|(_, label)| *label).unwrap_or("Custom");
+        design::row(ui, "Quality limit", |ui| {
+            egui::ComboBox::from_id_salt("host-quality").width(width).selected_text(label).show_ui(ui, |ui| {
+                for (value, label) in choices { ui.selectable_value(&mut quality, value.into(), label); }
+            });
+        });
+        if quality != old { self.send(Command::Patch(json!({"max_quality": quality}))); }
     }
     fn encoder_ui(&mut self, ui:&mut egui::Ui, config:&Value) {
         let choices=self.settings["encoders"].as_array().cloned().unwrap_or_default();
@@ -600,7 +581,7 @@ impl Panel {
                     if response.clicked() {backend=id.into();}
                     if !enabled {response.on_hover_text(choice["reason"].as_str().unwrap_or("Unavailable on this GPU"));}
                 }
-            }).response.on_hover_text(if cfg!(windows) {"Applies when Secpar next starts."} else {"Applies to the next connection."});
+            }).response.on_hover_text("Applies to the next connection.");
         });
         let effective=if backend=="auto" {choices.iter().find(|c|c["available"].as_bool()==Some(true)).and_then(|c|c["id"].as_str()).unwrap_or("")}else{&backend};
         let labels=if effective.contains("nvenc") {["P1 · fastest","P4 · balanced","P7 · highest quality"]}
@@ -644,8 +625,9 @@ impl Panel {
                     });
                 });
                 if display != old { self.send(Command::Patch(json!({"display":display}))); }
+                self.quality_ui(ui, &config);
                 self.encoder_ui(ui, &config);
-                ui.label(egui::RichText::new("Display and encoder changes apply when Secpar next starts.").size(12.).color(design::MUTED));
+                ui.label(egui::RichText::new("Changes apply to the next connection.").size(12.).color(design::MUTED));
             });
             design::group(ui, "Who can use it", |ui| {
                 self.setting_toggle(ui,&config,"allow_files","Receive files","Allow paired devices to send files to this computer.");

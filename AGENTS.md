@@ -56,7 +56,7 @@ Distribution: keep debug/test builds local; publish only optimized release-profi
 packages with no debug binaries or test fixtures. Use x.x.x versions: first number
 for major milestones, second for features and bug fixes, third for minor fixes and
 visual polish. Preserve updater compatibility from the old preview versions.
-Ask before installing or launching a new Windows release on this PC. Preserve PC Remote/Sunshine and other independent connections; subagents
+Ask before installing or launching a new Windows release on this PC. Preserve PC Remote and other independently installed remote desktop apps and connections; subagents
 must not modify running installations. Conserve agent usage; no more spawning
 without a new explicit need/authorization.
 
@@ -136,16 +136,15 @@ instructions local and untracked. Publish code, licenses and product documentati
 
 Secpar 4, current work since 2026-11-13 (branch secpar-4). This section overrides
 the 2026-11-10 engineering baseline above while working on that branch. Secpar 4
-embeds Sunshine as the hosting engine and Moonlight as the stream component,
-unmodified at the versions in upstream/pins.json, with a small Secpar layer:
-tunnel, device identity, account-decided access. Targets are Windows 10/11, Linux
-and Android; macOS and iOS are out of scope for 4. Read docs/secpar-4-status.md
-first, then docs/secpar-4-plan.md. Update secpar-4-status.md after each result the
+is the Secpar 3 apps with Secpar's own host and client streaming engines; the
+embedded third-party engines tried in 4.0.0 were removed in 4.0.9 and must not
+return. Targets are Windows 10/11, Linux and Android; macOS and iOS are out of
+scope for 4. Read docs/secpar-4-status.md first. Update it after each result the
 owner confirms. A local, untracked HANDOVER.local.md in the repository root holds
 the machine paths and commands when it exists.
 
 Owner's corrections of 2026-11-14 and 2026-11-15, which govern how to work:
-work lean and stop proving what Moonlight and Sunshine already do; the Android
+work lean and stop proving what already works; the Android
 app used from work to reach the home PC comes first; reuse the services and keys
 Secpar 3 already runs, because Secpar 4 is an update and not a separate system;
 usage is tight, so no test rigs, no long reports, no speculative work. Commit only

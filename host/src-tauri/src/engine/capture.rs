@@ -121,7 +121,7 @@ impl FrameTexture {
         if self.1.is_some() { TextureAccess::acquire(&self.0, secpar_stream::timing::Stage::CaptureTextureWait).map(Some) } else { Ok(None) }
     }
 }
-/// Sunshine's shared capture/encoder texture mutex uses key zero on both devices.
+/// The capture and encoder devices share the texture mutex with key zero on both sides.
 pub(crate) struct TextureAccess(IDXGIKeyedMutex);
 impl TextureAccess {
     pub(crate) fn lock(texture: &ID3D11Texture2D) -> windows::core::Result<Self> {
@@ -206,7 +206,7 @@ pub fn device(display: &str) -> Option<(ID3D11Device, ID3D11DeviceContext, IDXGI
         )
         .ok()?;
         let (dev, ctx): (ID3D11Device, ID3D11DeviceContext) = (dev?, ctx?);
-        // Match Sunshine's relative GPU scheduling hint without changing system power settings.
+        // A relative GPU scheduling priority hint; system power settings are not changed.
         // Kept opt-in while comparing device contention on the test host.
         if cfg!(feature = "gpu-isolation") || std::env::var("SECPAR_GPU_PRIORITY").as_deref() == Ok("1") {
             if let Ok(dxgi) = dev.cast::<IDXGIDevice>() {

@@ -78,7 +78,13 @@ impl Presence {
     /// Sharing needs a relay the service will accept: a plain https origin. Anything else means off,
     /// so a misconfigured address can never make the heartbeat fail.
     pub fn new(friends_on: bool, pc: &str, relay: Option<&str>) -> Self {
-        let origin = relay.map(|r| r.trim_end_matches('/')).filter(|r| {
+        // Hosts reach the relay over a WebSocket (`wss://`); the service and the devices that
+        // connect take its https origin and make their own WebSocket address from it.
+        let relay = relay.map(|r| match r.strip_prefix("wss://") {
+            Some(rest) => format!("https://{rest}"),
+            None => r.to_string(),
+        });
+        let origin = relay.as_deref().map(|r| r.trim_end_matches('/')).filter(|r| {
             r.strip_prefix("https://").is_some_and(|host| !host.is_empty() && !host.contains(['/', '?', '#', '@', ' ']))
         });
         match origin {
@@ -525,6 +531,8 @@ mod tests {
     #[test]
     fn presence_is_on_only_for_a_plain_https_relay_and_a_real_id() {
         let pc = "00000000-0000-4000-8000-0000000000c1";
+        let ws = Presence::new(true, pc, Some("wss://relay.example"));
+        assert!(ws.sharing && ws.relay == "https://relay.example", "the hosts' own wss address shares too");
         let on = Presence::new(true, pc, Some("https://relay.example/"));
         assert!(on.sharing && on.relay == "https://relay.example" && on.pc == pc);
         for relay in [None, Some("http://relay.example"), Some("https://relay.example/v1"), Some("https://u@relay.example"), Some("https://")] {

@@ -381,7 +381,7 @@ class MainActivity : ComponentActivity() {
         val capture = desktopCapture
         val chosen = com.pcremote.settings.SettingsModel.get(this).captureShortcut
         val isToggle = chosen.matches(event.keyCode, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed) ||
-            com.pcremote.stream2.CaptureShortcut.MOONLIGHT.matches(event.keyCode, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed)
+            com.pcremote.stream2.CaptureShortcut.CTRL_ALT_SHIFT_Z.matches(event.keyCode, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed)
         if (capture != null && !capture.freePointer && isToggle) {
             if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 captureShortcutKey = event.keyCode

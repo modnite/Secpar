@@ -253,7 +253,7 @@ pub fn verdict(m: &ClientMsg, gate: &Gate) -> Verdict {
         // Browsing this computer's files: only when the owner lets this friend.
         FsList { .. } | FsGet { .. } => if gate.has("browse") && gate.has("files") { Allow } else { Deny },
         // Owner only, whatever the grant says.
-        Pair { .. } | Hello { .. } | Guest { .. } | GameStreamInfo { .. } | GameStreamPair { .. } | MediaSub { .. }
+        Pair { .. } | Hello { .. } | Guest { .. } | MediaSub { .. }
         | MediaCmd { .. } | Power { .. } | Net | Unlock { .. } => Deny,
     }
 }
@@ -269,7 +269,7 @@ pub fn out_allowed(m: &ServerMsg, gate: &Gate) -> bool {
         StreamReady { .. } | StreamError { .. } | StreamDisplays { .. } | CursorShape { .. } | StreamCand { .. } => {
             gate.view()
         }
-        Paired { .. } | GameStreamInfo { .. } | GameStreamPaired { .. } | GameStreamError { .. } | Media { .. }
+        Paired { .. } | Media { .. }
         | Net { .. } | Remote { .. } | UnlockResult { .. } => false,
         FsList { .. } => gate.has("browse") && gate.has("files"),
     }
@@ -403,7 +403,6 @@ mod tests {
             ClientMsg::FsGet { path: "C:/x".into(), batch: None },
             ClientMsg::Net,
             ClientMsg::MediaSub { on: true },
-            ClientMsg::GameStreamInfo { id: "x".into() },
         ] {
             assert!(matches!(verdict(&m, &g), Verdict::Deny), "{}", m.t());
         }

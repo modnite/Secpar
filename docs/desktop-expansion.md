@@ -12,7 +12,7 @@ Every cell is a target, not an assertion that it works today:
 | Linux | Planned | Planned | Planned | Planned |
 | macOS | Planned | Planned | Planned | Planned |
 
-The current applications are a Windows host and an Android client. Although the project has Moonlight/Sunshine history, its current streaming engine is custom PRS, not a bundled portable Moonlight/Sunshine engine. The Windows implementation directly uses DXGI, Media Foundation, WASAPI, Windows services, named pipes and Windows input APIs. Changing build targets alone cannot produce working Linux/macOS hosts.
+The current applications are a Windows host and an Android client. Although the project has reference client/host history, its current streaming engine is custom PRS, not a bundled portable reference client/host engine. The Windows implementation directly uses DXGI, Media Foundation, WASAPI, Windows services, named pipes and Windows input APIs. Changing build targets alone cannot produce working Linux/macOS hosts.
 
 ## Shared implementation
 

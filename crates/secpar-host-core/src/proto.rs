@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "t")]
 pub enum ClientMsg {
     #[serde(rename = "pair")]
-    /// `pin` was for v1 (Sunshine); still accepted, ignored.
+    /// `pin` was used by version 1 clients; still accepted, ignored.
     Pair {
         otp: String,
         device: String,
@@ -24,22 +24,6 @@ pub enum ClientMsg {
     Guest { grant: String },
     #[serde(rename = "ping")]
     Ping,
-    #[serde(rename = "gamestream.info")]
-    GameStreamInfo { id: String },
-    #[serde(rename = "gamestream.pair")]
-    GameStreamPair {
-        id: String,
-        client_id: String,
-        certificate_sha256: String,
-        pin: String,
-        /// The client's tunnel certificate pin (docs/gamestream-engine.md). Absent from
-        /// clients that only speak the first engine protocol.
-        #[serde(default)]
-        tunnel_certificate_sha256: String,
-        /// The client's UDP endpoints, for punching. Absent from older clients.
-        #[serde(default)]
-        tunnel_candidates: Vec<String>,
-    },
     #[serde(rename = "mouse.move")]
     MouseMove { dx: i32, dy: i32 },
     #[serde(rename = "mouse.button")]
@@ -185,8 +169,6 @@ impl ClientMsg {
             ClientMsg::Hello { .. } => "hello",
             ClientMsg::Guest { .. } => "guest",
             ClientMsg::Ping => "ping",
-            ClientMsg::GameStreamInfo { .. } => "gamestream.info",
-            ClientMsg::GameStreamPair { .. } => "gamestream.pair",
             ClientMsg::MouseMove { .. } => "mouse.move",
             ClientMsg::MouseButton { .. } => "mouse.button",
             ClientMsg::MouseScroll { .. } => "mouse.scroll",
@@ -242,23 +224,6 @@ pub enum ServerMsg {
     },
     #[serde(rename = "pong")]
     Pong,
-    #[serde(rename = "gamestream.info")]
-    GameStreamInfo {
-        id: String,
-        http_port: u16,
-        https_port: u16,
-        certificate_sha256: String,
-        /// The host tunnel's UDP port, shared by every address below.
-        tunnel_port: u16,
-        /// The host tunnel certificate pin the client must accept.
-        tunnel_certificate_sha256: String,
-        /// IPs to try, LAN first; may be empty.
-        tunnel_addresses: Vec<String>,
-    },
-    #[serde(rename = "gamestream.paired")]
-    GameStreamPaired { id: String },
-    #[serde(rename = "gamestream.error")]
-    GameStreamError { id: String, code: String, msg: String },
     #[serde(rename = "error")]
     Error {
         code: String,
@@ -533,50 +498,6 @@ mod tests {
         serde_json::to_value(m).unwrap()
     }
 
-    #[test]
-    fn gamestream_pair_carries_optional_tunnel_details() {
-        use serde_json::json;
-        let cert = "a".repeat(64);
-        let tunnel = "b".repeat(64);
-        assert_eq!(
-            c(&format!(
-                r#"{{"t":"gamestream.pair","id":"p1","client_id":"cid","certificate_sha256":"{cert}","pin":"1234","tunnel_certificate_sha256":"{tunnel}","tunnel_candidates":["198.51.100.8:54321"]}}"#
-            )),
-            ClientMsg::GameStreamPair {
-                id: "p1".into(),
-                client_id: "cid".into(),
-                certificate_sha256: cert.clone(),
-                pin: "1234".into(),
-                tunnel_certificate_sha256: tunnel,
-                tunnel_candidates: vec!["198.51.100.8:54321".into()],
-            }
-        );
-        // A client that predates the tunnel fields is still readable.
-        assert_eq!(
-            c(&format!(
-                r#"{{"t":"gamestream.pair","id":"p1","client_id":"cid","certificate_sha256":"{cert}","pin":"1234"}}"#
-            )),
-            ClientMsg::GameStreamPair {
-                id: "p1".into(),
-                client_id: "cid".into(),
-                certificate_sha256: cert,
-                pin: "1234".into(),
-                tunnel_certificate_sha256: String::new(),
-                tunnel_candidates: Vec::new(),
-            }
-        );
-        let info = ServerMsg::GameStreamInfo {
-            id: "r1".into(),
-            http_port: 46989,
-            https_port: 46984,
-            certificate_sha256: "a".repeat(64),
-            tunnel_port: 51234,
-            tunnel_certificate_sha256: "b".repeat(64),
-            tunnel_addresses: vec!["192.168.1.20".into(), "203.0.113.7".into()],
-        };
-        assert_eq!(s(&info)["tunnel_port"], 51234);
-        assert_eq!(s(&info)["tunnel_addresses"], json!(["192.168.1.20", "203.0.113.7"]));
-    }
 
     #[test]
     fn server_examples_serialize() {
