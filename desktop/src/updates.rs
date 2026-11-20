@@ -442,8 +442,10 @@ impl Panel {
                         if ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update").min_size(size)).clicked() {
                             self.message = match launch_installer(&path) {
                                 Ok(()) => {
+                                    // The new copy installs once this one has ended. Closing the window
+                                    // would only hide it in the tray, so end the process.
                                     #[cfg(target_os = "linux")]
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    crate::tray::quit(ctx);
                                     if cfg!(target_os = "linux") { "Installing update. Secpar will reopen.".into() }
                                     else { "Installer opened. Approve its system prompt to continue.".into() }
                                 },

@@ -25,6 +25,19 @@ struct Item {
     disconnect_asked: Arc<AtomicBool>,
 }
 
+/// Ends Secpar even when the window gets no frames. KDE Wayland stops drawing a minimised
+/// window, so a close sent to it would wait until someone restores it. The window is asked to
+/// close first; if it has not within a moment, the process ends here. Hosting lives in this
+/// process, and the system frees its ports.
+pub fn quit(ctx: &Context) {
+    ctx.send_viewport_cmd(ViewportCommand::Close);
+    ctx.request_repaint();
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        std::process::exit(0);
+    });
+}
+
 fn open(ctx: &Context) {
     ctx.send_viewport_cmd(ViewportCommand::Visible(true));
     ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
@@ -83,7 +96,7 @@ impl ksni::Tray for Item {
                     }
                     item.quitting.store(true, Ordering::Relaxed);
                     open(&item.ctx);
-                    item.ctx.send_viewport_cmd(ViewportCommand::Close);
+                    quit(&item.ctx);
                 }),
                 ..Default::default()
             }
@@ -95,7 +108,7 @@ impl ksni::Tray for Item {
                     // Hosting lives in this process, so closing the window ends it too.
                     item.quitting.store(true, Ordering::Relaxed);
                     open(&item.ctx);
-                    item.ctx.send_viewport_cmd(ViewportCommand::Close);
+                    quit(&item.ctx);
                 }),
                 ..Default::default()
             }
