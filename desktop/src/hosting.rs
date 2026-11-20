@@ -539,6 +539,8 @@ impl Panel {
             });
         };
         design::group(ui, "Paired devices", |ui| {
+            // Room between rows, so one row's buttons do not sit on the next row's.
+            ui.spacing_mut().item_spacing.y = 10.;
             match self.state.clone() {
                 Some(state) => {
                     if state.devices.is_empty() && state.friends.is_empty() {
