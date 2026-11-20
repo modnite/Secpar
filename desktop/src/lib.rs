@@ -1,4 +1,5 @@
 mod account;
+mod account_events;
 mod signin;
 mod friend_previews;
 mod alerts;

@@ -9,6 +9,8 @@ interface Helpers {
   fail(status: number, code: string): never;
   hash(value: string): Promise<string>;
   limit(request: Request, env: unknown, operation: string, maximum: number): Promise<void>;
+  /** The owner's apps, and their friends', should look again. */
+  changed?(owner: string): void;
 }
 const now = () => Math.floor(Date.now()/1000);
 const q = (env: Environment, sql: string, ...args: (string|number)[]) => env.DB.prepare(sql).bind(...args);
@@ -30,6 +32,7 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
     if(!token) api.fail(401,"host_auth_required");
     const machine=await q(env,"SELECT k.computer,c.owner,k.certificate_fp,c.name,c.platform,k.credential_hash FROM host_keys k JOIN computers c ON c.id=k.computer WHERE k.credential_hash=?",await api.hash(token)).first<Machine>();
     if(!machine) api.fail(401,"host_credential_revoked");
+    if(method!=="GET"&&path!=="/v1/host/heartbeat") api.changed?.(machine.owner);
     const ownerResponse = await ownerRoutes(request, env, null, machine, api);
     if(ownerResponse) return ownerResponse;
     const {credential_hash: _credentialHash, ...publicMachine} = machine;
@@ -55,6 +58,9 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
           relay=url.origin;
         } catch { api.fail(400,"invalid_presence"); }
       }
+      // Only a beat that changes what others see tells their apps: coming online, sharing, who is on.
+      const before=await q(env,"SELECT last_seen,sharing,COALESCE(pc,'') AS pc,COALESCE(relay,'') AS relay,COALESCE(viewers,'[]') AS viewers FROM host_keys WHERE computer=?",machine.computer).first<{last_seen:number|null;sharing:number;pc:string;relay:string;viewers:string}>();
+      if(!before||(before.last_seen??0)<=now()-90||before.sharing!==(sharing?1:0)||before.pc!==(pc??"")||before.relay!==(relay??"")||before.viewers!==JSON.stringify(viewers)) api.changed?.(machine.owner);
       await q(env,"UPDATE host_keys SET last_seen=?,sharing=?,pc=NULLIF(?,''),relay=NULLIF(?,''),viewers=? WHERE computer=?",now(),sharing?1:0,pc??"",relay??"",JSON.stringify(viewers),machine.computer).run();
       return json({...publicMachine,sharing});
     }
