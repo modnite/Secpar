@@ -532,7 +532,10 @@ impl Panel {
                 design::dot(ui, if on { design::ACCENT } else { design::MUTED });
                 ui.add(egui::Label::new(name).truncate());
                 ui.label(egui::RichText::new(state).size(12.).color(design::MUTED));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| buttons(ui));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 10.;
+                    buttons(ui)
+                });
             });
         };
         design::group(ui, "Paired devices", |ui| {
