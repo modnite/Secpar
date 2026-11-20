@@ -184,10 +184,16 @@ class AccountController(
         }
     }
 
+    /** The signed-in session's token, for the live channel only. */
+    fun liveToken(): String? = session?.token
+
+    @Volatile private var refreshAgain = false
+
     fun refresh() {
         val saved = session ?: return
         val service = api ?: return
-        if (refreshJob?.isActive == true) return
+        // A change announced while a refresh runs is fetched right after it, not dropped.
+        if (refreshJob?.isActive == true) { refreshAgain = true; return }
         val epoch = generation
         refreshJob = scope.launch {
             try {
@@ -213,6 +219,7 @@ class AccountController(
                     requests = requests ?: state.value.requests, friendComputers = shared ?: state.value.friendComputers)
                 if (removed) changes.value++
                 if (shared != null) syncPreviews(service, shared)
+                if (refreshAgain) { refreshAgain = false; scope.launch { refresh() } }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 if (epoch == generation) {

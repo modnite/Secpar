@@ -19,6 +19,9 @@
     },
   ],
   // The relay service's own door for this service; see cloud/rendezvous.
+  // Live updates for signed-in apps: one object per account holds its open WebSockets.
+  "durable_objects": { "bindings": [{ "name": "EVENTS", "class_name": "Events" }] },
+  "migrations": [{ "tag": "events-v1", "new_sqlite_classes": ["Events"] }],
   "services": [{ "binding": "RELAY", "service": "secpar-rendezvous", "entrypoint": "Turn" }],
   "keep_vars": true,
   "workers_dev": false,

@@ -268,9 +268,17 @@ class MainActivity : ComponentActivity() {
                     }
                     composable(Routes.HOME) {
                         val account = com.pcremote.account.AccountRuntime.get(this@MainActivity).controller
+                        // Changes arrive on the live channel; polling every 15 seconds is the fallback.
                         LifecycleResumeEffect(account) {
-                            val poll = lifecycleScope.launch { while (true) { account.refresh(); kotlinx.coroutines.delay(5_000) } }
+                            val poll = lifecycleScope.launch { while (true) { account.refresh(); kotlinx.coroutines.delay(15_000) } }
                             onPauseOrDispose { poll.cancel(); account.cancelConnection() }
+                        }
+                        val liveUser = account.state.collectAsState().value.user?.id
+                        LifecycleResumeEffect(account, liveUser) {
+                            val token = account.liveToken()
+                            val live = token?.let { com.pcremote.account.AccountEvents.start(lifecycleScope, it) {
+                                lifecycleScope.launch { account.refresh() } } }
+                            onPauseOrDispose { live?.cancel() }
                         }
                         val accountRevision by account.revision.collectAsState()
                         LifecycleResumeEffect(accountRevision) { home.start(); onPauseOrDispose { home.stop() } }

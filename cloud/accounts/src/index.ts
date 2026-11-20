@@ -2,6 +2,8 @@ import { hostRoutes } from "./hosts";
 import { deviceKeyRoutes, deviceRoutes } from "./devices";
 import { EFFECTIVE, flags, friendSettings, saveSettings } from "./settings";
 import { passwordRoutes } from "./passwords";
+import { Events, connect, poke, related } from "./events";
+export { Events };
 import { SignJWT, importJWK, calculateJwkThumbprint, type JWK } from "jose";
 
 export interface Env {
@@ -11,7 +13,10 @@ export interface Env {
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   RELAY?: { credentials(): Promise<string> };
+  EVENTS?: DurableObjectNamespace;
 }
+/** Accounts whose apps should look again after this request: `spread` also tells their friends. */
+export type Touched = { direct: Set<string>; spread: Set<string> };
 type Account = { id: string; handle: string; name: string; visible: number };
 type Grant = {
   id: string;
@@ -215,6 +220,7 @@ export async function handle(
   request: Request,
   env: Env,
   providerFetch: typeof fetch = fetch,
+  touched?: Touched,
 ): Promise<Response> {
   try {
     const url = new URL(request.url);
@@ -230,12 +236,22 @@ export async function handle(
     }
     const passwordResponse = await passwordRoutes(request, env, providerFetch);
     if (passwordResponse) return passwordResponse;
-    const hostApi = {body,fail:deny,hash,limit:(r:Request,_env:unknown,operation:string,maximum:number)=>limit(r,env,operation,maximum)};
+    const hostApi = {body,fail:deny,hash,limit:(r:Request,_env:unknown,operation:string,maximum:number)=>limit(r,env,operation,maximum),changed:(owner:string)=>{touched?.spread.add(owner);}};
     const machineResponse=await hostRoutes(request,env,null,hostApi);
     if(machineResponse)return machineResponse;
     const deviceKeyResponse = await deviceKeyRoutes(request, env, { ...hostApi, signing: () => signing(env) });
     if (deviceKeyResponse) return deviceKeyResponse;
     const me = await user(request, env);
+    if (path === "/v1/events" && method === "GET") {
+      if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") deny(426, "websocket_required");
+      return connect(env, me.id, request);
+    }
+    if (method !== "GET" && touched) {
+      // A change by this account: its own apps and everyone it is friends with look again.
+      // Taken before the change too, so someone just removed still hears about it.
+      touched.spread.add(me.id);
+      for (const other of await related(env, me.id)) touched.direct.add(other);
+    }
     const ownerHostResponse=await hostRoutes(request,env,me,hostApi);
     if(ownerHostResponse)return ownerHostResponse;
     const deviceResponse = await deviceRoutes(request, env, me, { ...hostApi, signing: () => signing(env) });
@@ -609,8 +625,18 @@ export async function cleanup(env: Env) {
     q(env, "DELETE FROM connection_requests WHERE expires<?", now - 86400),
   ]);
 }
+async function notify(env: Env, touched: Touched) {
+  const accounts = new Set([...touched.direct, ...touched.spread]);
+  for (const id of touched.spread) for (const other of await related(env, id)) accounts.add(other);
+  await poke(env, accounts);
+}
 export default {
-  fetch: (request: Request, env: Env) => handle(request, env),
+  fetch: async (request: Request, env: Env, ctx: ExecutionContext) => {
+    const touched: Touched = { direct: new Set(), spread: new Set() };
+    const reply = await handle(request, env, fetch, touched);
+    if (reply.status < 400 && (touched.direct.size || touched.spread.size)) ctx.waitUntil(notify(env, touched).catch(() => {}));
+    return reply;
+  },
   scheduled: (_event: ScheduledController, env: Env, ctx: ExecutionContext) =>
     ctx.waitUntil(cleanup(env)),
 };

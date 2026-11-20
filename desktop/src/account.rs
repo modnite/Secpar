@@ -235,6 +235,8 @@ pub enum Action {
     Input { id: String, keyboard: Option<bool>, mouse: Option<bool>, browse: Option<bool> },
 }
 pub enum Command {
+    /// The account service says something changed: fetch the lists again, quietly.
+    Changed,
     HostRefresh,
     LinkHost,
     UnlinkHost,
@@ -1789,6 +1791,7 @@ pub fn answer_link(uri: &str) -> Result<String, String> {
 pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiver<Event>) {
     let (tx, mut rx) = mpsc::channel(16);
     let tx_alerts = tx.clone();
+    let tx_changes = tx.clone();
     let (events, output) = mpsc::channel(32);
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -1817,6 +1820,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut friend_tasks = crate::friend_previews::Tasks::default();
             let mut next_friend_computers = Instant::now();
             let mut was_focused = true;
+            let mut live: Option<(String, tokio::task::JoinHandle<()>)> = None;
             let mut signed_owner: Option<String> = None;
             let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
             let mut next_owned = Instant::now();
@@ -1929,10 +1933,12 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     ctx.request_repaint();
                     continue;
                 }
+                if matches!(command,Some(Command::Changed)) { command=None; next_friend_computers=Instant::now(); next_alerts=Instant::now(); }
                 if let Some(command)=command {
                     let _=events.send(Event::Busy(true)).await;
                     let skip_refresh=matches!(&command,Command::Remember(_)|Command::ForgetComputer|Command::HostRefresh|Command::LinkHost|Command::UnlinkHost|Command::ConnectOwned(_)|Command::RememberOwned{..});
                     let result: Result<String,(StatusCode,String)>= match command {
+                        Command::Changed=>Ok(String::new()),
                         Command::HostRefresh=>{let _=events.send(Event::Host(local_host::state().await)).await;let _=events.send(Event::Message(String::new())).await;Ok(String::new())},
                         Command::LinkHost=>match api.link_host().await {
                             Ok(state)=>{suppressed_owner=None;let _=vault::forget("host-auto-link-disabled");let _=events.send(Event::Host(Ok(state))).await;let _=events.send(Event::Message("Host linked. Friend access remains off.".into())).await;Ok(String::new())},
@@ -2034,13 +2040,23 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     let _=events.send(Event::Busy(false)).await;ctx.request_repaint();
                 }
                 if api.token.is_none() { friend_tasks.stop(); pending_pair=None; pending_guest=None; signed_owner=None; next_friend_computers=Instant::now(); sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
-                // While the window is in front, the lists stay fresh within a few seconds; looking
-                // at the window again refreshes them at once. In the background, every 30 seconds.
+                // The live channel follows the signed-in session.
+                match (api.token.clone().filter(|_| signed_owner.is_some()), &live) {
+                    (Some(token), Some((current, _))) if *current == token => {}
+                    (Some(token), _) => {
+                        if let Some((_, task)) = live.take() { task.abort(); }
+                        live = Some((token.clone(), tokio::spawn(crate::account_events::run(token, tx_changes.clone()))));
+                    }
+                    (None, Some(_)) => { if let Some((_, task)) = live.take() { task.abort(); } }
+                    (None, None) => {}
+                }
+                // Changes arrive on the live channel. Polling is only the fallback: every 15 seconds
+                // while the window is in front, at once on looking at it again, otherwise every minute.
                 let focused=ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
                 if focused && !was_focused { next_friend_computers=Instant::now(); }
                 was_focused=focused;
                 if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
-                    next_friend_computers=Instant::now()+Duration::from_secs(if focused {4} else {30});
+                    next_friend_computers=Instant::now()+Duration::from_secs(if focused {15} else {60});
                     let (shared,own)=tokio::join!(api.friend_computers(),api.computers());
                     if let Ok(list)=own { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
                     match shared {
