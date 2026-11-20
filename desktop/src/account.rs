@@ -1816,6 +1816,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut pending_guest: Option<PendingGuest> = None;
             let mut friend_tasks = crate::friend_previews::Tasks::default();
             let mut next_friend_computers = Instant::now();
+            let mut was_focused = true;
             let mut signed_owner: Option<String> = None;
             let mut suppressed_owner = vault::load("host-auto-link-disabled").ok().flatten();
             let mut next_owned = Instant::now();
@@ -1843,7 +1844,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                         signed_owner=Some(user.id.clone());next_owned=Instant::now();
                         if let Ok(list)=computers { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
                         let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;
-                        if let Ok(list)=shared { friend_tasks.sync(&api,&list,&events,&ctx); let _=events.send(Event::FriendComputers(list)).await; next_friend_computers=Instant::now()+Duration::from_secs(10); }
+                        if let Ok(list)=shared { friend_tasks.sync(&api,&list,&events,&ctx); let _=events.send(Event::FriendComputers(list)).await; next_friend_computers=Instant::now()+Duration::from_secs(4); }
                     }
                     Err((status,note))=>{
                         if status==StatusCode::UNAUTHORIZED {api.token=None;let _=vault::forget(CREDENTIAL);}
@@ -2033,9 +2034,16 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                     let _=events.send(Event::Busy(false)).await;ctx.request_repaint();
                 }
                 if api.token.is_none() { friend_tasks.stop(); pending_pair=None; pending_guest=None; signed_owner=None; next_friend_computers=Instant::now(); sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
+                // While the window is in front, the lists stay fresh within a few seconds; looking
+                // at the window again refreshes them at once. In the background, every 30 seconds.
+                let focused=ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
+                if focused && !was_focused { next_friend_computers=Instant::now(); }
+                was_focused=focused;
                 if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
-                    next_friend_computers=Instant::now()+Duration::from_secs(10);
-                    match api.friend_computers().await {
+                    next_friend_computers=Instant::now()+Duration::from_secs(if focused {4} else {30});
+                    let (shared,own)=tokio::join!(api.friend_computers(),api.computers());
+                    if let Ok(list)=own { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
+                    match shared {
                         Ok(list)=>{friend_tasks.sync(&api,&list,&events,&ctx);let _=events.send(Event::FriendComputers(list)).await;}
                         Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;pending_pair=None;pending_guest=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}
                         Err(_)=>{}

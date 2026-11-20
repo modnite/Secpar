@@ -538,30 +538,60 @@ impl Panel {
                 });
             });
         };
-        design::group(ui, "Paired devices", |ui| {
-            // Room between rows, so one row's buttons do not sit on the next row's.
-            ui.spacing_mut().item_spacing.y = 10.;
-            match self.state.clone() {
-                Some(state) => {
-                    if state.devices.is_empty() && state.friends.is_empty() {
-                        ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
-                    }
+        // Who is using this computer now, friends and the owner's own devices, always in view.
+        if let Some(state) = self.state.clone() {
+            if !state.friends.is_empty() || state.devices.iter().any(|d| d.connected) {
+                design::group(ui, "Connected to this computer", |ui| {
+                    ui.spacing_mut().item_spacing.y = 10.;
                     for friend in &state.friends {
                         let mut disconnect = false;
-                        row(ui, &friend.name, "Friend · connected", true, &mut |ui| {
+                        row(ui, &friend.name, "Friend", true, &mut |ui| {
                             disconnect = ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked();
                         });
                         if disconnect { self.send(Command::Disconnect(friend.id.clone())); }
                     }
-                    for device in state.devices {
-                        let (mut disconnect, mut remove) = (false, false);
-                        row(ui, &device.name, if device.connected { "Connected" } else { "Paired" }, device.connected, &mut |ui| {
-                            remove = ui.add_enabled(!self.busy, egui::Button::new("Remove")).clicked();
-                            if device.connected {
-                                disconnect = ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked();
-                            }
+                    for device in state.devices.iter().filter(|d| d.connected) {
+                        let mut disconnect = false;
+                        row(ui, &device.name, "Your device", true, &mut |ui| {
+                            disconnect = ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked();
                         });
                         if disconnect { self.send(Command::Disconnect(device.id.clone())); }
+                    }
+                });
+                ui.add_space(8.);
+            }
+        }
+        let open_id = egui::Id::new("paired-devices-open");
+        let mut open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or(open_id, true));
+        let count = self.state.as_ref().map_or(0, |s| s.devices.len());
+        design::surface().inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 6 }).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.;
+            let (rect, header) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.), egui::Sense::click());
+            crate::icons::paint(ui, if open { crate::icons::Icon::ChevronDown } else { crate::icons::Icon::Chevron },
+                egui::Rect::from_min_size(rect.min, egui::vec2(16., 16.)), design::MUTED);
+            ui.painter().text(egui::pos2(rect.min.x + 20., rect.center().y), egui::Align2::LEFT_CENTER,
+                if count > 0 { format!("Paired devices ({count})") } else { "Paired devices".into() },
+                egui::FontId::proportional(12.), design::MUTED);
+            header.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, "Paired devices"));
+            if header.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                open = !open;
+                ui.ctx().data_mut(|d| d.insert_persisted(open_id, open));
+            }
+            ui.add_space(4.);
+            if !open { return; }
+            // Room between rows, so one row's buttons do not sit on the next row's.
+            ui.spacing_mut().item_spacing.y = 10.;
+            match self.state.clone() {
+                Some(state) => {
+                    if state.devices.is_empty() {
+                        ui.label(egui::RichText::new("No paired devices").color(design::MUTED));
+                    }
+                    for device in state.devices {
+                        let mut remove = false;
+                        row(ui, &device.name, if device.connected { "Connected" } else { "Paired" }, device.connected, &mut |ui| {
+                            remove = ui.add_enabled(!self.busy, egui::Button::new("Remove")).clicked();
+                        });
                         if remove { self.revoke = Some(device.clone()); }
                     }
                 }

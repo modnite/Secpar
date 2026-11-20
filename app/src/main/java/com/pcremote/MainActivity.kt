@@ -269,7 +269,7 @@ class MainActivity : ComponentActivity() {
                     composable(Routes.HOME) {
                         val account = com.pcremote.account.AccountRuntime.get(this@MainActivity).controller
                         LifecycleResumeEffect(account) {
-                            val poll = lifecycleScope.launch { while (true) { account.refresh(); kotlinx.coroutines.delay(15_000) } }
+                            val poll = lifecycleScope.launch { while (true) { account.refresh(); kotlinx.coroutines.delay(5_000) } }
                             onPauseOrDispose { poll.cancel(); account.cancelConnection() }
                         }
                         val accountRevision by account.revision.collectAsState()

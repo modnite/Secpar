@@ -177,7 +177,7 @@ private fun ComputersPage(
         if (rows.isEmpty() && account.user != null) item("empty", span = { GridItemSpan(maxLineSpan) }) { EmptyState() }
         items(rows, key = { it.key }) { row ->
             when (row) {
-                is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a)
+                is ComputerRow.Saved -> SavedCard(row.card, thumbs[row.card.id], implemented, a, ComputerList.viewers(row.card, account.computers))
                 is ComputerRow.FromAccount -> AccountCard(row.computer, thumbs[row.computer.id], account.connecting, acts)
                 is ComputerRow.Friends -> FriendCard(row.computer, thumbs[row.computer.id], account, acts)
             }
@@ -283,7 +283,7 @@ private fun FriendCard(computer: FriendComputer, thumb: ImageBitmap?, account: A
 }
 
 @Composable
-private fun SavedCard(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, a: HomeActions) {
+private fun SavedCard(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode>, a: HomeActions, viewers: List<String> = emptyList()) {
     val conn = a.connection(card)
     val unlock = rememberUnlocker(card.id, { m -> conn?.sendIfOnline(m) == true }, conn?.incoming)
     val modes = card.modes.filter { it in implemented && it != Mode.SCREEN }
@@ -308,6 +308,9 @@ private fun SavedCard(card: PcCardUi, thumb: ImageBitmap?, implemented: Set<Mode
         Screen(thumb.takeIf { card.online }, card.online || tapToWake,
             stringResource(if (tapToWake) R.string.pcr_wake else R.string.pcr_connect) + " " + card.name) { a.primary(card) }
         CardTitle(card.name, card.os.substringBefore(' '), ComputerList.status(card), endPad = 36.dp)
+        // Who is on it now, as the account last heard from the computer.
+        if (viewers.isNotEmpty()) Text(viewers.joinToString(", "), color = LocalMidnight.current.textDim,
+            style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (card.online && (modes.isNotEmpty() || (card.locked && card.canUnlock))) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             modes.forEach { m -> GlyphTile(m.iconRes(), stringResource(m.label()), Modifier.weight(1f)) { a.open(card, m) } }
             if (card.locked && card.canUnlock) GlyphTile(R.drawable.lucide_fingerprint, stringResource(R.string.pcr_unlock), Modifier.weight(1f), onClick = unlock)

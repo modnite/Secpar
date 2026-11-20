@@ -120,6 +120,8 @@ pub struct Account {
     fingerprint: String,
     client: Client,
     origin: String,
+    /// Wakes the heartbeat when presence changes, so friends and the owner see it in seconds.
+    changed: tokio::sync::Notify,
 }
 impl Account {
     pub fn open(storage: Arc<dyn CredentialStorage>, fingerprint: &str) -> Result<Arc<Self>, String> {
@@ -149,13 +151,17 @@ impl Account {
             storage,
             fingerprint: fingerprint.into(),
             client,
-            origin: ORIGIN.into(),
+            origin: ORIGIN.into(), changed: Default::default(),
         }))
     }
     /// Call whenever the owner's friends setting or the relay address changes. Takes effect on
     /// the next heartbeat.
     pub async fn set_presence(&self, presence: Presence) {
-        self.inner.lock().await.presence = presence;
+        let mut inner = self.inner.lock().await;
+        if inner.presence != presence {
+            inner.presence = presence;
+            self.changed.notify_one();
+        }
     }
     pub async fn state(&self) -> State {
         self.inner.lock().await.state.clone()
@@ -300,7 +306,7 @@ impl Account {
             storage: Arc::new(Nothing),
             fingerprint: "ab".repeat(32),
             client: Client::new(),
-            origin: origin.into(),
+            origin: origin.into(), changed: Default::default(),
         })
     }
     pub async fn computer(&self) -> Option<String> {
@@ -391,7 +397,10 @@ impl Account {
         let mut timer = tokio::time::interval(Duration::from_secs(30));
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            timer.tick().await;
+            tokio::select! {
+                _ = timer.tick() => {}
+                _ = self.changed.notified() => {}
+            }
             self.heartbeat().await;
         }
     }
@@ -437,7 +446,7 @@ mod tests {
     fn account(server: &MockServer, storage: Arc<Memory>) -> Account {
         // Each fixture must initialize TLS without depending on another test.
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-        Account { inner: Mutex::new(Inner { registration: None, state: State::default(), presence: Presence::default() }), storage, fingerprint: registration().certificate_fp, client: Client::new(), origin: server.uri() }
+        Account { inner: Mutex::new(Inner { registration: None, state: State::default(), presence: Presence::default() }), storage, fingerprint: registration().certificate_fp, client: Client::new(), origin: server.uri(), changed: Default::default() }
     }
     #[tokio::test]
     async fn the_host_lists_friends_and_changes_one() {
