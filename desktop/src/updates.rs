@@ -312,7 +312,7 @@ impl Panel {
                     if let Ok(release)=&result {notify_once(&notified,release);}
                     if tx.send(ResultEvent::BackgroundChecked(result)).is_err(){break;}
                     ctx.request_repaint();
-                    let (stopped,_)=stop.1.wait_timeout_while(stop.0.lock().unwrap(),Duration::from_secs(6*3600),|stopped|!*stopped).unwrap();
+                    let (stopped,_)=stop.1.wait_timeout_while(stop.0.lock().unwrap(),Duration::from_secs(3600),|stopped|!*stopped).unwrap();
                     if *stopped {break;}
                 }
             });
@@ -403,12 +403,13 @@ impl Panel {
             crate::design::row(ui, "Version", |ui| { ui.label(egui::RichText::new(env!("CARGO_PKG_VERSION")).color(crate::design::MUTED)); });
             let label = if self.release.is_some() { "Update available" } else { "Check for updates" };
             crate::design::row(ui, "Updates", |ui| {
-                if ui.add(egui::Button::new(label).min_size(egui::vec2(140., crate::design::CONTROL))).clicked() { self.open = true; }
+                if ui.add(egui::Button::new(label).min_size(egui::vec2(140., crate::design::CONTROL))).clicked() { self.open = true; self.start_check(ui.ctx()); }
             });
         });
     }
     pub fn button(&mut self, ui: &mut egui::Ui) {
-        if crate::icons::button(ui,crate::icons::Icon::Download,if self.release.is_some(){"Update available"}else{"Check for updates"},true) {self.open=true;}
+        // Opening the window checks again, so it never shows a result from before a release.
+        if crate::icons::button(ui,crate::icons::Icon::Download,if self.release.is_some(){"Update available"}else{"Check for updates"},true) {self.open=true;self.start_check(ui.ctx());}
     }
     pub fn window(&mut self, ctx: &egui::Context, streaming: bool) {
         if !self.open {

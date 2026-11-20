@@ -112,7 +112,7 @@ object Updater {
         if (js.getPendingJob(JOB) == null) {
             js.schedule(JobInfo.Builder(JOB, ComponentName(ctx, UpdateJob::class.java))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setPeriodic(6 * 3600 * 1000L)
+                .setPeriodic(3600 * 1000L)
                 .setPersisted(true)
                 .build())
         }
