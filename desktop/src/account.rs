@@ -1835,13 +1835,15 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             if api.token.is_some() {
                 // The profile and the computer list are independent: one round trip, not two.
                 let started = Instant::now();
-                let (snapshot, computers) = tokio::join!(api.snapshot(), api.computers());
+                // Friends' computers come in the same round trip, so they show with the owner's own.
+                let (snapshot, computers, shared) = tokio::join!(api.snapshot(), api.computers(), api.friend_computers());
                 connlog::note("account", "account_fetch", "startup", ms(started));
                 match snapshot {
                     Ok((user,friends,blocked))=>{
                         signed_owner=Some(user.id.clone());next_owned=Instant::now();
                         if let Ok(list)=computers { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
                         let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;
+                        if let Ok(list)=shared { friend_tasks.sync(&api,&list,&events,&ctx); let _=events.send(Event::FriendComputers(list)).await; next_friend_computers=Instant::now()+Duration::from_secs(10); }
                     }
                     Err((status,note))=>{
                         if status==StatusCode::UNAUTHORIZED {api.token=None;let _=vault::forget(CREDENTIAL);}
@@ -2032,7 +2034,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 }
                 if api.token.is_none() { friend_tasks.stop(); pending_pair=None; pending_guest=None; signed_owner=None; next_friend_computers=Instant::now(); sync_fut=None; auto_fut=None; auto_for=None; want_after_auto=None; known.clear(); local_id=None; synced=false; }
                 if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
-                    next_friend_computers=Instant::now()+Duration::from_secs(20);
+                    next_friend_computers=Instant::now()+Duration::from_secs(10);
                     match api.friend_computers().await {
                         Ok(list)=>{friend_tasks.sync(&api,&list,&events,&ctx);let _=events.send(Event::FriendComputers(list)).await;}
                         Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;pending_pair=None;pending_guest=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}

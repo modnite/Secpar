@@ -191,11 +191,16 @@ class AccountController(
         val epoch = generation
         refreshJob = scope.launch {
             try {
-                val computers = service.computers()
-                val friends = runCatching { service.friends() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
-                val blocked = runCatching { service.blocks() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
-                val requests = runCatching { service.requests() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
-                val shared = runCatching { service.friendComputers() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                // All five at once: the lists show after one round trip, not five.
+                val (computers, friends, blocked, requests, shared) = kotlinx.coroutines.coroutineScope {
+                    fun <T> optional(call: suspend () -> T) = async { runCatching { call() }.onFailure { if (it is CancellationException) throw it }.getOrNull() }
+                    val computers = async { service.computers() }
+                    val friends = optional { service.friends() }
+                    val blocked = optional { service.blocks() }
+                    val requests = optional { service.requests() }
+                    val shared = optional { service.friendComputers() }
+                    Refreshed(computers.await(), friends.await(), blocked.await(), requests.await(), shared.await())
+                }
                 if (epoch != generation) return@launch
                 val removed = withContext(io) {
                     store.owned(saved).filter { access -> computers.none {
@@ -569,3 +574,5 @@ class AccountController(
     private fun message(e: Exception) = (e as? AccountException)?.message ?: (e as? com.pcremote.guest.GuestException)?.message
         ?: "Could not complete the connection. Please try again."
 }
+
+private data class Refreshed(val computers: List<OwnedComputer>, val friends: List<Friend>?, val blocked: List<AccountUser>?, val requests: List<ConnectionRequest>?, val shared: List<FriendComputer>?)
