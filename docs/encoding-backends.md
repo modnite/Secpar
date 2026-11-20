@@ -13,7 +13,7 @@ requested keyframes and BT.709 limited-range output. Resolution and frame rate
 remain separate controls. A preset that exceeds the GPU's frame budget can still
 cause stutter.
 
-The implementation follows the pinned Sunshine revision recorded in
+The implementation follows the pinned the reference host revision recorded in
 `scripts/encoder-deps.lock.json`, including its Windows hardware-frame setup and
 the matching build-deps patches. FFmpeg links into the host through avcodec and
 avutil. No FFmpeg command-line program is launched. The Intel dispatcher loads
@@ -25,7 +25,7 @@ not download pixels to the CPU.
 Windows requires Visual Studio C++ build tools, CMake, Ninja, and MSYS2 with make,
 nasm and pkgconf. Run `scripts/build-windows-encoder-deps.ps1`, optionally passing
 `-CacheRoot` to reuse a source cache. `-Offline` requires every pinned source to
-be cached. The script applies the matching Sunshine patches and builds static
+be cached. The script applies the matching the reference host patches and builds static
 libraries without programs, decoders, container formats, network support or debug
 symbols. It writes source revisions and license notices beside the libraries.
 
@@ -47,6 +47,6 @@ every resolution or concurrent-session count.
 Linux desktop navigation and settings use the same UI code. Linux hosting and
 decoding still use their existing platform paths; this Windows bridge is not a
 Linux engine migration. Android currently uses Secpar's inherited PRS transport,
-MediaCodec decoding and AudioTrack playback. It does not run Moonlight or Artemis.
+MediaCodec decoding and AudioTrack playback. It does not run the reference client or Artemis.
 The full Android engine migration is deferred; preserve the accepted audio and
 input behavior while changing the host.

@@ -299,7 +299,7 @@ private fun KeyboardBar(state: ToolbarState, a: ToolbarActions) {
 
 
 
-/** Midnight connecting screen (replaces Moonlight's spinner dialog). */
+/** Midnight connecting screen. */
 @Composable
 private fun Connecting(pcName: String?, stage: String, cancel: () -> Unit) {
     val c = LocalMidnight.current

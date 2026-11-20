@@ -45,7 +45,7 @@ impl Settings {
         if std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO").is_some() {return Self::default()}
         let mut value=path().and_then(|p|std::fs::read(p).ok()).filter(|b|b.len()<=8192).and_then(|b|serde_json::from_slice::<Self>(&b).ok()).unwrap_or_default();
         if !RESOLUTIONS.contains(&(value.width,value.height)) {(value.width,value.height)=(1280,720);}
-        if ![30,60,90,120].contains(&value.fps) {value.fps=60;}
+        if ![60,90,120].contains(&value.fps) {value.fps=60;}
         value.kbps=value.kbps.clamp(1000,150000);value
     }
     pub fn save(&mut self) {
@@ -70,7 +70,7 @@ impl Settings {
                 });
             });
             design::row(ui,"Frame rate",|ui| {
-                egui::ComboBox::from_id_salt("client-fps").width(width).selected_text(format!("{} fps",self.fps)).show_ui(ui,|ui| {for fps in [30,60,90,120] {ui.selectable_value(&mut self.fps,fps,format!("{fps} fps"));}});
+                egui::ComboBox::from_id_salt("client-fps").width(width).selected_text(format!("{} fps",self.fps)).show_ui(ui,|ui| {for fps in [60,90,120] {ui.selectable_value(&mut self.fps,fps,format!("{fps} fps"));}});
             });
             design::row(ui,"Bitrate",|ui| {
                 egui::ComboBox::from_id_salt("client-bitrate").width(width).selected_text(format!("{} Mbps",self.kbps/1000)).show_ui(ui,|ui| {for kbps in [5000,10000,20000,30000,50000,80000] {ui.selectable_value(&mut self.kbps,kbps,format!("{} Mbps",kbps/1000));}});

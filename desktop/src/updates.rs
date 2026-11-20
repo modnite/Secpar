@@ -429,19 +429,37 @@ impl Panel {
                     if streaming { ui.label("Disconnect your current stream before installing."); }
                 }
                 ui.add_space(8.);
+                // Two buttons of the same width: Check, and the next step for an update in the same
+                // place (download, then install).
+                let width = ((ui.available_width() - ui.spacing().item_spacing.x) / 2.).max(120.);
+                let size = egui::vec2(width, crate::design::CONTROL);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!self.busy, egui::Button::new("Check for updates")).clicked() {
+                    if ui.add_enabled(!self.busy, egui::Button::new("Check for updates").min_size(size)).clicked() {
                         self.start_check(ctx);
                     }
-                    #[cfg(windows)]
-                    if self.release.is_some() && !self.fallback
-                        && ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update")).clicked() {
-                        self.start_silent_install(ctx);
+                    if let Some(path) = self.ready.clone() {
+                        if ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update").min_size(size)).clicked() {
+                            self.message = match launch_installer(&path) {
+                                Ok(()) => {
+                                    #[cfg(target_os = "linux")]
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    if cfg!(target_os = "linux") { "Installing update. Secpar will reopen.".into() }
+                                    else { "Installer opened. Approve its system prompt to continue.".into() }
+                                },
+                                Err(_) => "Could not open installer. Try again.".into(),
+                            };
+                        }
+                        return;
                     }
-                    let can_download = !self.busy && self.release.is_some() && self.ready.is_none()
-                        && (!cfg!(windows) || self.fallback);
-                    if (!cfg!(windows) || self.fallback)
-                        && ui.add_enabled(can_download, egui::Button::new("Download update")).clicked() {
+                    #[cfg(windows)]
+                    if !self.fallback {
+                        if ui.add_enabled(!self.busy && !streaming && self.release.is_some(), egui::Button::new("Install update").min_size(size)).clicked() {
+                            self.start_silent_install(ctx);
+                        }
+                        return;
+                    }
+                    let can_download = !self.busy && self.release.is_some();
+                    if ui.add_enabled(can_download, egui::Button::new("Download update").min_size(size)).clicked() {
                         self.busy = true;
                         self.message = "Downloading update…".into();
                         let r = self.release.clone().unwrap();
@@ -455,20 +473,6 @@ impl Panel {
                         });
                     }
                 });
-                if let Some(path) = self.ready.clone() {
-                    ui.add_space(8.);
-                    if ui.add_enabled(!self.busy && !streaming, egui::Button::new("Install update…")).clicked() {
-                        self.message = match launch_installer(&path) {
-                            Ok(()) => {
-                                #[cfg(target_os = "linux")]
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                if cfg!(target_os = "linux") { "Installing update. Secpar will reopen.".into() }
-                                else { "Installer opened. Approve its system prompt to continue.".into() }
-                            },
-                            Err(_) => "Could not open installer. Try again.".into(),
-                        };
-                    }
-                }
             });
         self.open = open;
     }

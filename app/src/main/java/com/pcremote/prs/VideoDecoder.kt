@@ -28,7 +28,7 @@ class VideoDecoder(
 ) {
     private val thread = HandlerThread("pcr-video", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
-    // Moonlight Android's balanced renderer keeps vsync off the decoder thread.
+    // A balanced renderer keeps vsync off the decoder thread.
     // MediaCodecDecoderRenderer.java: doFrame()/startChoreographerThread().
     private val displayThread = HandlerThread("secpar-display", android.os.Process.THREAD_PRIORITY_DEFAULT + android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE).apply { start() }
     private val displayHandler = Handler(displayThread.looper)
@@ -203,7 +203,7 @@ class VideoDecoder(
                     }
                 } catch (error: IllegalStateException) { fail("decoder render: ${error.message}") }
             }
-            // Stay subscribed during empty slots, as Moonlight does. A frame arriving
+            // Stay subscribed during empty slots. A frame arriving
             // just after a callback must not have to restart vsync registration.
             if (!dead) choreographer?.postFrameCallback(this)
         }

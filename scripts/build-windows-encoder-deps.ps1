@@ -18,7 +18,7 @@ foreach($source in $lock.sources){
  if($head -ne $source.commit){
   if($Offline){throw "The pinned source $($source.name) is not cached"}
   Run-Git $directory @('fetch','--filter=blob:none','--depth','1',$source.repo,$source.commit)
-  if($source.name -eq 'amf-sunshine'){
+  if($source.name -eq 'amf-src'){
    Run-Git $directory @('sparse-checkout','set','--no-cone','/amf/public/include/','/LICENSE.txt')
   }
   Run-Git $directory @('checkout','-q',$source.commit)
@@ -40,9 +40,9 @@ if($LASTEXITCODE){throw 'Intel dispatcher configuration failed'}
 if($LASTEXITCODE){throw 'Intel dispatcher build failed'}
 & cmake --install (Join-Path $CacheRoot 'vpl-build')
 if($LASTEXITCODE){throw 'Intel dispatcher installation failed'}
-$ffmpeg=(Join-Path $CacheRoot 'ffmpeg-sunshine').Replace('\','/')
+$ffmpeg=(Join-Path $CacheRoot 'ffmpeg-src').Replace('\','/')
 foreach($patch in $lock.patches){
- $file=Join-Path (Join-Path $CacheRoot 'sunshine-build-deps/patches/FFmpeg/FFmpeg') $patch
+ $file=Join-Path (Join-Path $CacheRoot 'encoder-build-deps/patches/FFmpeg/FFmpeg') $patch
  $previousPreference=$ErrorActionPreference
  try {
   $ErrorActionPreference='Continue'
@@ -59,11 +59,11 @@ if($LASTEXITCODE){throw 'FFmpeg encoder build failed'}
 $licenses=Join-Path $prefix 'share/licenses/encoders'
 New-Item -ItemType Directory -Force $licenses | Out-Null
 foreach($notice in @(
- @('ffmpeg-sunshine/COPYING.LGPLv2.1','FFmpeg-LGPL-2.1.txt'),
- @('ffmpeg-sunshine/COPYING.LGPLv3','FFmpeg-LGPL-3.txt'),
- @('sunshine-build-deps/LICENSE','Sunshine-build-deps-MIT.txt'),
+ @('ffmpeg-src/COPYING.LGPLv2.1','FFmpeg-LGPL-2.1.txt'),
+ @('ffmpeg-src/COPYING.LGPLv3','FFmpeg-LGPL-3.txt'),
+ @('encoder-build-deps/LICENSE','LizardByte-build-deps-MIT.txt'),
  @('libvpl/LICENSE','Intel-libvpl-MIT.txt'),
- @('amf-sunshine/LICENSE.txt','AMD-AMF-MIT.txt')
+ @('amf-src/LICENSE.txt','AMD-AMF-MIT.txt')
 )){Copy-Item -LiteralPath (Join-Path $CacheRoot $notice[0]) -Destination (Join-Path $licenses $notice[1]) -Force}
 $header=[IO.File]::ReadAllText((Join-Path $CacheRoot 'nv-sdk131/include/ffnvcodec/nvEncodeAPI.h'))
 $end=$header.IndexOf('*/')

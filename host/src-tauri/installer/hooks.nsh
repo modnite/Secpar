@@ -107,11 +107,11 @@ FunctionEnd
   nsExec::Exec 'sc.exe sdset "${PCR_SVC}" "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;LCRPWP;;;IU)(A;;CCLCSWLOCRRC;;;SU)"'
   nsExec::Exec 'sc.exe failure "${PCR_SVC}" reset= 86400 actions= restart/5000/restart/5000/restart/30000'
 
-  ; Only Secpar is started. No PC Remote, Sunshine, power or adapter settings are changed.
+  ; Only Secpar is started. Other remote desktop apps, power and adapter settings are not changed.
   ; the superseded second executable
   Delete "$INSTDIR\secpar-host.exe"
   ; Folders older versions installed and nothing uses now: the Qt stream component and the
-  ; Sunshine engine, with the copy the host made of it.
+  ; earlier stream engine, with the copy the host made of it.
   RMDir /r "$INSTDIR\stream"
   RMDir /r "$INSTDIR\engine"
   RMDir /r "$%PROGRAMDATA%\Secpar\engine"

@@ -61,7 +61,7 @@ struct Encoder {
         codec->pix_fmt = qsv ? AV_PIX_FMT_QSV : AV_PIX_FMT_D3D11;
         codec->sw_pix_fmt = AV_PIX_FMT_NV12;
         codec->rc_max_rate = static_cast<int64_t>(kbps) * 1000;
-        // Sunshine's AMF/QSV flags: CBR_WITH_VBR, NO_RC_BUF_LIMIT and RELAXED_COMPLIANCE.
+        // AMF/QSV flags: CBR_WITH_VBR, NO_RC_BUF_LIMIT and RELAXED_COMPLIANCE.
         codec->bit_rate = codec->rc_max_rate - (relaxed_rate_control ? 1 : 0);
         codec->rc_buffer_size = relaxed_rate_control ? 0 : static_cast<int>(codec->bit_rate / rate);
         if (relaxed_rate_control) codec->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
@@ -79,7 +79,7 @@ struct Encoder {
         auto* frames = reinterpret_cast<AVHWFramesContext*>(codec->hw_frames_ctx->data);
         frames->format = codec->pix_fmt; frames->sw_format = AV_PIX_FMT_NV12;
         frames->width = w; frames->height = h;
-        // Sunshine display_vram::init_hwframes uses a single render-target texture.
+        // A single render-target texture backs the hardware frames.
         // NV12 array textures without decoder binding are rejected by D3D11 drivers.
         frames->initial_pool_size = 1;
         if (!qsv) {
@@ -103,7 +103,7 @@ struct Encoder {
                 set("vcm","1"); set("recovery_point_sei","0");
                 set("pic_timing_sei","0"); set("max_dec_frame_buffering","1");
             }
-            // Sunshine's SDR high/main profiles, never B frames or lookahead.
+            // SDR high/main profiles, never B frames or lookahead.
             set("profile", format == 0 ? "high" : "main");
         } else if (std::strcmp(backend,"amf") == 0) {
             set("quality",quality == 2 ? "quality" : quality == 1 ? "balanced" : "speed");
@@ -158,7 +158,7 @@ void* secpar_avcodec_open(ID3D11Device* dev, const char* backend, unsigned codec
     try {
         auto encoder = std::make_unique<Encoder>();
         *status = encoder->open(dev,backend,codec,w,h,fps,kbps,quality);
-        // Sunshine retries old/low-end Intel GPUs without low-power encoding,
+        // Old/low-end Intel GPUs are retried without low-power encoding,
         // and AMF H.264 with low-latency usage when ultra-low-latency is rejected.
         if (*status < 0 && backend &&
             ((std::strcmp(backend,"qsv")==0 && codec<2) ||

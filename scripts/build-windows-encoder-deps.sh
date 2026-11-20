@@ -5,12 +5,12 @@ export PATH="$(cygpath -u "$VCToolsInstallDir")/bin/Hostx64/x64:$PATH"
 root=$(cygpath -u "${SECPAR_ENCODER_DEPS_ROOT:?}")
 prefix="$root/ffmpeg-win-full"
 mkdir -p "$prefix/include/AMF" "$root/ffmpeg-win-full-build"
-cp -R "$root/amf-sunshine/amf/public/include/." "$prefix/include/AMF/"
+cp -R "$root/amf-src/amf/public/include/." "$prefix/include/AMF/"
 cd "$root/nv-sdk131"
 make PREFIX="$prefix" install
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
 cd "$root/ffmpeg-win-full-build"
-"$root/ffmpeg-sunshine/configure" \
+"$root/ffmpeg-src/configure" \
   --toolchain=msvc --arch=x86_64 --target-os=win64 \
   --prefix="$prefix" --disable-all --disable-autodetect \
   --enable-avcodec --enable-avutil --enable-static --disable-shared \

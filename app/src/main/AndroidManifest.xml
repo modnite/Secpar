@@ -68,9 +68,6 @@
             </intent-filter>
         </activity>
         <activity android:name="com.pcremote.update.UpdatesActivity" android:exported="false" android:label="@string/pcr_update_title" />
-        <!-- Home-screen shortcuts pinned with v1 still open the app -->
-        <activity-alias android:name="com.limelight.PcView" android:targetActivity="com.pcremote.MainActivity" android:exported="true" />
-        <activity-alias android:name="com.limelight.ShortcutTrampoline" android:targetActivity="com.pcremote.MainActivity" android:exported="true" />
         <activity
             android:name="com.pcremote.scan.ScanActivity"
             android:exported="false"

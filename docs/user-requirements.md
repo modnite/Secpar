@@ -66,7 +66,7 @@ corrections take precedence over earlier preferences.
   do not burn through hours of allowance in minutes. No recursive delegation.
 - The user authorizes publishing optimized releases/fork changes and installing
   and launching Windows Secpar updates on this PC. Preserve independent PC Remote,
-  Sunshine and other remote access. OS administrator prompts still require the
+  the reference host and other remote access. OS administrator prompts still require the
   user's interaction. Do not claim an update installed before reading it back.
 - Keep debug/review/test builds local. Publish lean optimized packages, retaining
   Android signing identity and updater compatibility.
@@ -99,7 +99,7 @@ corrections take precedence over earlier preferences.
 
 ## Input, picture and audio
 
-- Moonlight/Artemis-like resolution and physical keyboard/mouse behaviour. USB
+- reference client-like resolution and physical keyboard/mouse behaviour. USB
   keyboard/mouse on a phone dock must work without the on-screen keyboard toggle
   or controls obstructing the desktop. Touch fallback should act as a trackpad.
 - No unwanted quick-tips popup. Android PiP is required and was confirmed working.
@@ -153,7 +153,7 @@ as the source for UI symbols. Prefer original library assets with a pinned versi
 and license; never improvise icons from text characters or ad hoc painter strokes.
 Use a consistent family/weight/size across menus. Secpar triangle is approved brand
 art, not a generic UI glyph. User rejects current hand-drawn desktop menu symbols.
-Linux hardware playback remains below Moonlight after3.11.0. Software is the known
+Linux hardware playback remains below the reference client after3.11.0. Software is the known
 smooth workaround; fallback is NOT proof that hardware rendering is fixed.
 
 2026-11-07 diagnostic: Linux1920x1080/60 Direct, RTT3ms,0.8Mbps,21.9 received FPS;
@@ -171,7 +171,7 @@ letter spacing/line height at10sp is inappropriate. Preserve accepted audio path
 
 Streaming architecture correction,2026-11-07: user reports720p also hitches with
 BOTH decoders; never mark it smooth60fps or imply hardware choice solves this.
-User explicitly requests using mature Artemis/Apollo/Moonlight/Sunshine code
+User explicitly requests using mature Artemis/Apollo/reference client/host code
 DIRECTLY instead of continuing the custom PRS streaming engine. Prioritize an
 upstream engine migration while retaining Secpar accounts, ownership, UI, automatic
 updates and one-app-per-OS packaging (Android client-only). Park the bespoke
@@ -180,7 +180,7 @@ Preserve the installed working connection while developing/testing replacements.
 
 2026-11-07: choose the better upstream streaming implementation based on code,
 platform support and validation; no requirement to prefer Artemis/Apollo by name.
-Selected migration baseline Moonlight Qt6.2.0, Moonlight Android12.2 and Sunshine
+Selected migration baseline the reference desktop client6.2.0, the reference Android client12.2 and the reference host
 2026.914.233613; keep Artemis/Apollo as feature references. Selection is not a
 claim of measured parity on X250/S23. Keep client devices awake throughout active
 remote sessions on ALL OSes and release sleep inhibition on disconnect. Android
@@ -208,10 +208,10 @@ not just received FPS. Include the shared host encoder/capture path in the diagn
 installing the private Windows3.19.0 host; this is encouraging physical feedback,
 not full Android/Linux release-gate acceptance. The S23 pacing APK is authorized
 but not yet installed because ADB is disconnected; preserve accepted audio.
-User explicitly authorizes a stripped custom FFmpeg dependency for the Sunshine
+User explicitly authorizes a stripped custom FFmpeg dependency for the the reference host
 encoding path, overriding the earlier no-FFmpeg restriction. Aim below10MB total,
 measure both delivered package and installed payload, and report actual sizes.
-Follow pinned Sunshine implementation and per-vendor routing, including native
+Follow pinned the reference host implementation and per-vendor routing, including native
 NVENC where upstream uses it. Expose a persisted host encoder selection and real
 supported encoder controls; unavailable backends must not masquerade as working.
 Do not silently fall back to Media Foundation for explicit encoder selections.
@@ -221,7 +221,7 @@ layout. Files belongs on computer cards, matching Android, not in Settings.
 2026-11-10 clarification: the user accepts deferring the full Android streaming
 engine migration. Keep its accepted audio, input and rendering fixes. Continue
 the host encoder integration, desktop UI and Linux client work. Do not describe
-MediaCodec or Moonlight-inspired timing as running the Moonlight/Artemis engine.
+MediaCodec or the reference client-inspired timing as running the reference client engine.
 
 2026-11-10 release workflow correction: use the normal optimized release artifacts
 for validation and eventual publication. Avoid a separate private test-build cycle.
@@ -257,7 +257,7 @@ Prioritize its recovery path, preserve video improvements, conserve the reported
 Secpar 4 corrections, 2026-11-14 and 2026-11-15: the owner relies on the Android
 app at work more than anything else and expected it to be developed alongside the
 desktop; put the phone-at-work-to-home-PC use first. Testing and proving every step
-is reinventing the wheel: Moonlight and Sunshine work, and 4 only has to end up
+is reinventing the wheel: the reference client and host work, and 4 only has to end up
 better than 3. Work lean, show usable results instead of screenshots, and say early
 how long something will take. Usage and cost are tight. Reuse the framework already
 in place (Secpar 3's relay and account services and their keys) instead of building
@@ -273,7 +273,7 @@ Release-shape corrections, 2026-11-15 (the owner's questions, verbatim intent):
   `Secpar-Linux-x64.AppImage` (+ .zsync), both updating in place. A zip or a tar
   is not a deliverable, and neither is a package without an update path. Keep the
   asset names the 3.x updater feed already uses, and keep the Android version code
-  following the release (4.0.0 -> 40000), not Moonlight's own counter.
+  following the release (4.0.0 -> 40000), not the reference client's own counter.
 - "Why can I only remove friends and can't change their permissions?" The
   account service already stores per-friend connect (ask/always) and control
   (view/ keyboard and mouse). The window and the phone must both expose it, on
@@ -285,7 +285,7 @@ Release-shape corrections, 2026-11-15 (the owner's questions, verbatim intent):
 - Live resolution change already existed in the 3.x hosts (Windows reopens the
   encoder at the new size; Linux renegotiates the capture with a fresh encoder
   chain and a source pinned to the display size). Do not claim it cannot be done
-  because the new engine is Sunshine; port the mechanism.
+  because the new engine is the reference host; port the mechanism.
 - "I am not ready until I say I am ready": keep working and shipping verified
   increments; do not present anything as finished or as a release until the owner
   says so. Say plainly what is proven, on which machine, and what is not.

@@ -63,10 +63,11 @@ class UpdatesActivity : ComponentActivity() {
                         if (state.release != null) {
                             Text(UPDATE_WARNING, color = c.textDim, style = MaterialTheme.typography.bodySmall)
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            GhostButton(stringResource(R.string.pcr_update_check), { Updater.checkNow(this@UpdatesActivity) }, enabled = !state.busy)
+                        // Two buttons of the same width across the row.
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            GhostButton(stringResource(R.string.pcr_update_check), { Updater.checkNow(this@UpdatesActivity) }, Modifier.weight(1f), enabled = !state.busy)
                             PrimaryButton(stringResource(R.string.pcr_updates_download), { Updater.downloadAndInstall(this@UpdatesActivity) },
-                                enabled = state.release != null && !state.busy)
+                                Modifier.weight(1f), enabled = state.release != null && !state.busy)
                         }
                     }
                 }

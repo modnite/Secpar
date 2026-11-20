@@ -173,7 +173,7 @@ installed in its own directory. It uses Windows service `Secpar`, named pipe
 Its own newly generated PC ID, relay key and TLS identity prevent it from
 replacing PC Remote's existing relay connection. Legacy settings/identity
 migration is disabled. It does not stop or kill PC Remote or alter its firewall,
-registry entries, power settings, network adapters, shared drivers or Sunshine.
+registry entries, power settings, network adapters, shared drivers or the reference host.
 The gamepad feature reuses an existing ViGEmBus installation, if available.
 
 Install into the default Secpar Host directory, never the PC Remote directory.
@@ -224,7 +224,7 @@ an on-screen keyboard.
 
 Ctrl+F12 toggles physical mouse/keyboard forwarding between the PC and Android.
 Ctrl+Alt+Shift+Z remains a fallback toggle. Settings > Controls > Mouse capture
-shortcut offers Ctrl+F12, Ctrl+Shift+F12, or the Moonlight chord. The shorter
+shortcut offers Ctrl+F12, Ctrl+Shift+F12, or the the reference client chord. The shorter
 choices avoid the combinations in Samsung's published DeX system shortcut
 list, but user mappings and OEM versions can differ. These shortcuts are local
 to an active Secpar stream; other desktop shortcuts are not remapped.

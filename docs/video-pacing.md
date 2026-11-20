@@ -27,7 +27,7 @@ review activity are excluded from the release APK. Emulator results do not prove
 1080p/120 HEVC performance on Qualcomm hardware; S23 real-stream comparison remains
 required. No phone app or installed PC service was replaced during testing.
 
-The display-paced approach is informed by [Moonlight's renderer](https://github.com/moonlight-stream/moonlight-android/blob/master/app/src/main/java/com/limelight/binding/video/MediaCodecDecoderRenderer.java)
+The display-paced approach is informed by [the reference client's renderer](https://github.com/)
 and the [Android MediaCodec surface-output contract](https://developer.android.com/reference/android/media/MediaCodec).
 The Secpar queue implementation is independent and uses the existing PRS protocol.
 

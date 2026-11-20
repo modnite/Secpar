@@ -40,16 +40,6 @@ try {
         $resources['encoder-licenses/']='licenses/encoders/'
         $changed=$true
     }
-    # The streaming engine, copied once into the host's data folder on first
-    # start. Stage it with SECPAR_ENGINE_DIR (sunshine.exe and its shaders,
-    # without the web interface Secpar does not use).
-    if ($env:SECPAR_ENGINE_DIR) {
-        $stagedEngine=Join-Path $repo 'host/src-tauri/engine'
-        Remove-Item -LiteralPath $stagedEngine -Recurse -Force -ErrorAction SilentlyContinue
-        Copy-Item -LiteralPath $env:SECPAR_ENGINE_DIR -Destination $stagedEngine -Recurse
-        $resources['engine/']='engine/'
-        $changed=$true
-    }
     if ($changed) {
         $unified.bundle.resources=$resources
         $bundleConfig=Join-Path $repo 'host/src-tauri/tauri.encoder-build.conf.json'

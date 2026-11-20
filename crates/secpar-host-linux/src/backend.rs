@@ -1,6 +1,5 @@
 //! Local application façade plus authenticated owner sessions.
 use crate::{
-    engine::{self, Engine},
     identity::Identity,
     media::Media,
     portal::Portal,
@@ -74,7 +73,7 @@ fn power(action: &str) -> Result<(), &'static str> {
 /// may ask for at most. `auto` leaves the request as it is.
 fn quality_limit(profile: &str, w: u32, h: u32, fps: u32) -> (u32, u32, u32) {
     let (mw, mh, mfps) = match profile {
-        "battery" => (1280, 720, 30),
+        "battery" => (1280, 720, 60),
         "smooth" => (1920, 1080, 60),
         "sharp" => (2560, 1440, 60),
         "2160p60" => (3840, 2160, 60),
@@ -125,11 +124,9 @@ struct Backend {
     store: Arc<Mutex<Store>>,
     identity: Identity,
     name: String,
-    /// The host data directory: the bundled engine and its private state live here.
+    /// The host data directory.
     directory: PathBuf,
     agent: Mutex<Option<AgentHandle>>,
-    /// The managed Sunshine engine and the tunnel in front of it, once both are ready.
-    engine: Mutex<Option<Arc<Engine>>>,
     /// The account that vouches for this computer, or the desktop user when unlinked.
     owner: Mutex<String>,
     active: Arc<secpar_host_core::limits::StreamSlots>,
@@ -161,8 +158,9 @@ impl Backend {
         // host's capabilities, so without this the first device to connect waits for it.
         tokio::task::spawn_blocking(|| { let _ = thumb::available(); });
         let handle=Agent::start(&host.identity,host.store.clone(),host.clone(),std::net::SocketAddr::from(([0, 0, 0, 0], host_port())),Duration::from_secs(60),crate::rendezvous::url().map(str::to_owned)).await.map_err(|_|"Could not start Secpar hosting on its port. Check whether another Secpar instance is open.")?;
-        // The managed engine and its tunnel start behind the control connection.
-        Self::start_engine(host.clone());
+        crate::portal::POINTER_IN_PICTURE.store(host.store.lock().unwrap().config().pointer_in_picture, std::sync::atomic::Ordering::Relaxed);
+        // The engine copy older versions made in the data folder is no longer used.
+        let _ = std::fs::remove_dir_all(host.directory.join("engine"));
         if let Some(base) = crate::rendezvous::url() { crate::rendezvous::start(handle.clone(), host.store.clone(), base.into()); }
         let mut events = handle.events();
         *host.agent.lock().unwrap() = Some(handle);
@@ -222,7 +220,6 @@ impl Backend {
             name: machine_name(),
             directory,
             agent: Mutex::new(None),
-            engine: Mutex::new(None),
             owner: Mutex::new(desktop_user()),
             active,
             account,
@@ -231,74 +228,12 @@ impl Backend {
             media: Arc::new(Media::system()),
         })
     }
-    /// Starts the bundled engine and its tunnel in the background. The host
-    /// advertises `gamestream` only once both are ready (docs/gamestream-engine.md).
-    fn start_engine(host: Arc<Self>) {
-        crate::portal::POINTER_IN_PICTURE.store(host.store.lock().unwrap().config().pointer_in_picture, std::sync::atomic::Ordering::Relaxed);
-        Self::start_engine_after(host, std::time::Duration::ZERO);
-    }
-    /// `wait` lets a stopped engine let go of its ports before the next one starts.
-    fn start_engine_after(host: Arc<Self>, wait: std::time::Duration) {
-        // The bundled Sunshine build crashes on Linux (free(): invalid pointer, SIGSEGV), so
-        // Linux hosts stream with Secpar's own engine and do not offer `gamestream`.
-        // SECPAR_LINUX_ENGINE=1 turns it back on for testing.
-        if std::env::var_os("SECPAR_LINUX_ENGINE").is_none() {
-            // The engine copy older versions made in the data folder is no longer used.
-            let _ = std::fs::remove_dir_all(host.directory.join("engine"));
-            return;
-        }
-        // A build without the bundled engine simply does not offer `gamestream`.
-        if !engine::available(&host.directory) {
-            return;
-        }
-        let Some(runtime) = tokio::runtime::Handle::try_current().ok() else { return };
-        runtime.spawn(async move {
-            tokio::time::sleep(wait).await;
-            // After a restart the engine being replaced may hold its state folder a while longer, and
-            // the engine sometimes crashes while it tests the GPU encoder at start: try again.
-            let mut tries = if wait.is_zero() { 3 } else { 15 };
-            let started = loop {
-                let choice = host.store.lock().unwrap().config().encoder.clone();
-                let result = Engine::start(&host.directory, &choice).await;
-                tries -= 1;
-                if result.is_ok() || tries == 0 { break result; }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            };
-            match started {
-                Ok(engine) => {
-                    eprintln!(
-                        "secpar: managed engine ready, tunnel on UDP port {}",
-                        engine.tunnel().port().unwrap_or(0)
-                    );
-                    *host.engine.lock().unwrap() = Some(Arc::new(engine));
-                }
-                Err(error) => eprintln!("secpar: {error}"),
-            }
-        });
-    }
-    /// Drops everything the engine granted to one device, and its way through
-    /// the tunnel, in the background.
-    fn revoke_engine(&self, owner: &str, device: &str) {
-        let Some(engine) = self.engine.lock().unwrap().clone() else { return };
-        let Some(runtime) = tokio::runtime::Handle::try_current().ok() else { return };
-        let (owner, device) = (owner.to_string(), device.to_string());
-        runtime.spawn(async move {
-            if let Err(error) = engine.revoke_grants(&owner, &device).await {
-                eprintln!("secpar: the managed engine kept a device grant: {error}");
-            }
-        });
-    }
     fn sync_account_owner(&self, owner: Option<String>) {
-        // Grants are journaled under the owner that was current when they were made.
-        let previous = std::mem::replace(
-            &mut *self.owner.lock().unwrap(),
-            owner.clone().unwrap_or_else(desktop_user),
-        );
+        *self.owner.lock().unwrap() = owner.clone().unwrap_or_else(desktop_user);
         let revoked = self.store.lock().unwrap().set_account_owner(owner);
         if let Some(agent) = self.agent.lock().unwrap().as_ref() {
             for device in &revoked { agent.revoke(device); }
         }
-        for device in &revoked { self.revoke_engine(&previous, device); }
     }
     /// `pc` and a signed Worker address, so a phone outside the LAN can pair (once registered).
     fn add_relay_bootstrap(&self, link: &mut url::Url) {
@@ -338,7 +273,7 @@ impl Backend {
             // `displays` stays empty: the portal picks the monitor, so there is nothing to switch here.
             "get_config" => {
                 let pad = uinput::status();
-                // The encoders the engine can use here: VA-API needs a render node, NVENC the NVIDIA driver.
+                // The encoders this computer can use: VA-API needs a render node, NVENC the NVIDIA driver.
                 let vaapi = std::path::Path::new("/dev/dri/renderD128").exists();
                 let nvenc = std::path::Path::new("/dev/nvidia0").exists();
                 let encoders = json!([
@@ -346,30 +281,18 @@ impl Backend {
                     {"id":"nvenc","name":"NVIDIA NVENC","available":nvenc,"reason":"No NVIDIA driver found"},
                     {"id":"software","name":"Software (x264)","available":true},
                 ]);
-                Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[],"encoders":encoders,"pad":{"ok":pad.ok,"text":pad.text},"system":engine::system_state(),
-                    "system_running":self.engine.lock().unwrap().as_ref().is_some_and(|e| e.system)}))
+                Ok(json!({"config":self.store.lock().unwrap().config(),"displays":[],"encoders":encoders,"pad":{"ok":pad.ok,"text":pad.text}}))
             }
             "set_config" => {
                 let config: Config = serde_json::from_value(args["config"].clone())
                     .map_err(|_| "Invalid hosting settings")?;
-                let (before, autostart) = {
-                    let store = self.store.lock().unwrap();
-                    (store.config().encoder.clone(), store.config().autostart)
-                };
+                let autostart = self.store.lock().unwrap().config().autostart;
                 if autostart != config.autostart {
                     login_entry(config.autostart).map_err(|_| "Could not change the sign-in setting")?;
                 }
                 crate::portal::POINTER_IN_PICTURE.store(config.pointer_in_picture, std::sync::atomic::Ordering::Relaxed);
-                // The encoder is read when the engine starts, the next time Secpar opens. Restarting
-                // the engine here cannot work: every connected device's session holds the running one.
-                let _ = before;
                 self.store.lock().unwrap().set_config(config).map_err(|_|"Remote hosting is not enabled on Linux yet")?;
                 Ok(Value::Null)
-            }
-            "system_setup" => {
-                tokio::task::spawn_blocking(engine::run_system_setup).await.map_err(|_| "Setup stopped")??;
-                // The system engine is used from the next start of Secpar.
-                Ok(json!({"system":engine::system_state()}))
             }
             "new_qr" => {
                 let addresses = stream::local_addresses();
@@ -394,8 +317,6 @@ impl Backend {
                     let agent = self.agent.lock().unwrap();
                     agent.as_ref().ok_or("Host is not running")?.revoke(id);
                 }
-                let owner = self.owner.lock().unwrap().clone();
-                self.revoke_engine(&owner, id);
                 Ok(Value::Null)
             }
             "host_friends" => Ok(json!(self.account.as_ref().map_err(Clone::clone)?.friend_rows().await?)),
@@ -452,32 +373,10 @@ impl Handlers for Backend {
         if uinput::available() {
             caps.push("pad".into());
         }
-        // Both the engine and its tunnel must be up before the capability is
-        // offered (docs/gamestream-engine.md).
-        if self.engine.lock().unwrap().is_some() {
-            caps.push("gamestream".into());
-        }
         caps
     }
     fn session(&self, device: &str, out: Outbox) -> Box<dyn Session> {
         self.build(device, out, None)
-    }
-    fn gamestream_session(&self, device: &str, out: Outbox) -> Option<Box<dyn Session>> {
-        let engine = self.engine.lock().unwrap().clone()?;
-        // The engine's own client list shows each device by its Secpar name.
-        if let Some(name) = self
-            .store
-            .lock()
-            .unwrap()
-            .devices()
-            .into_iter()
-            .find(|d| d.id == device)
-            .map(|d| d.name)
-        {
-            engine.name_device(device, &name);
-        }
-        let owner = self.owner.lock().unwrap().clone();
-        Some(engine.agent_session(&owner, device, out))
     }
     fn guests(&self) -> Option<Arc<GuestAdmission>> {
         self.guests.clone()

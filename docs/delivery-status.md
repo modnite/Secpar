@@ -159,7 +159,7 @@ Details and the udev rule: docs/linux.md.
 New worktree work/secpar-upstream-engine, branch feat/upstream-streaming-migration
 at42db09b (pushed), draft PR https://github.com/modnite/Secpar/pull/1.
 Foundation e5b7fec; fc6f614 merges Android3.12.1;42db09b adds actual interop.
-Pinned Moonlight Qt6.2.0, Moonlight Android12.2, Sunshine2026.914.233613; Artemis
+Pinned the reference desktop client6.2.0, the reference Android client12.2, the reference host2026.914.233613; Artemis
 20.2.6/Apollo0.4.6 retained as references. Prefer mature upstream media paths as
 whole components. User says choose whichever is better, not a mandated fork.
 Linux full upstream Qt release worker BUILT, no media alterations.511 tracked
@@ -167,10 +167,10 @@ source files audited against pinned/patched checkout. Stripped worker2.2MiB;
 runtime libraries still need packaging. Small patches
 only Secpar executable/settings identity and Alt+F. Actual isolated --version and
 stream --help pass; settings under temporary .config/Secpar/SecparStream.conf.
-No installed Moonlight/Secpar state touched. This is NOT yet product integration.
-Real upstream host/client interoperability PASS: pinned official Sunshine AppImage
+No installed the reference client/Secpar state touched. This is NOT yet product integration.
+Real upstream host/client interoperability PASS: pinned official the reference host AppImage
 SHA6f80297a853bcf8cda114ff131b5c0a8c9a4d96a2a9c3dee1f04c39c54206846,
-custom-named Moonlight Qt worker, two private X displays, separate Pulse sinks.
+custom-named the reference desktop client worker, two private X displays, separate Pulse sinks.
 Incorrect PIN rejected, correct separate client authenticated, actual frames
 received/decoded/rendered, generated500Hz tone verified at client output monitor.
 640x360/30 software fixture; NOT hardware/1080p/X250 performance evidence.511 source
@@ -182,8 +182,8 @@ host supervision/ownership authorization/product wiring, not more custom PRS tun
 Android original native core/JNI and audio renderer build as a private optional
 library for ARM64/x86-64; actual JNI initialization passes on owned5556. Complete
 upstream decoder/input/activity integration and ownership/pairing bridge remain.
-Next: supervised Sunshine with separate state/ports, per-device authenticated
-GameStream pairing broker, one-app packaging, UI integration and remote routing.
+Next: supervised the reference host with separate state/ports, per-device authenticated
+engine pairing broker, one-app packaging, UI integration and remote routing.
 All-OS keep-awake while connected and stream-only Android PiP are required gates.
 User adds: slowdown correlates with received bitrate falling below1Mbps. Compare
 actual received rate, target bitrate, loss and received FPS; no custom PRS tuning.
@@ -240,7 +240,7 @@ No local Windows release builds remain running during the user's retest.
 ## PRIORITY — upstream streaming engine migration,2026-11-07
 
 Latest user:720p also hitches with either decoder, so it is not smooth60fps.
-Explicit instruction to use Artemis/Apollo/Moonlight/Sunshine code directly.
+Explicit instruction to use Artemis/Apollo/reference client/host code directly.
 Stop extending custom PRS/VA renderer; retain prototype branch as parked work.
 Investigate/pin upstream client+host sources, replace mature media/input paths as
 whole components rather than reimplementing their scheduling. Preserve accounts,
@@ -524,7 +524,7 @@ unchanged from the approved Android3.8/Windows3.7 baseline.
 
 Windows3.9 installer is awaiting actual OS UAC approval (session41501); user asked
 asynchronously after consent.exe confirmed. Do not claim installed yet. Before
-launch0 active Secpar devices checked twice; original PC Remote/Sunshine stopped
+launch0 active Secpar devices checked twice; original PC Remote/the reference host stopped
 state preserved. Phone and5554 untouched.5556 remains running after automatic
 review blocked a combined notes-save/shutdown command ('blocked by policy').
 Use docs/next-milestone.md NEWEST entry for exact artifact checksums and next steps.
@@ -681,7 +681,7 @@ Use docs/next-milestone.md NEWEST entry for exact artifact checksums and next st
   path is now physically verified; no external Camera app is required for this check.
 
 - Android video pacing work (Preview 14): the user reports periodic video slowdown
-  and catch-up while audio stays synchronized, with Moonlight on the laptop smooth.
+  and catch-up while audio stays synchronized, with the reference client on the laptop smooth.
   Read-only S23 logs show c2.qti.hevc.decoder.low_latency at 1920×1080/120fps.
   Identified that every decoded picture was immediately sent to the surface and
   overflow discarded compressed frames without gating dependent P frames until
@@ -759,7 +759,7 @@ Use docs/next-milestone.md NEWEST entry for exact artifact checksums and next st
   Physical S23 host-fix test requested asynchronously. Do not install/restart the
   live Windows service or physical phone to force that result.
 - User confirms Desktop Development 6: video and cursor are perfect on the S23.
-  Rare slight audio crackle/slowdown remains and is absent in Moonlight. This is
+  Rare slight audio crackle/slowdown remains and is absent in the reference client. This is
   treated as a Secpar audio defect, not a general device/network limitation.
 - Android Preview 17 work corrects ignored/partial AudioTrack writes, false frame
   accounting and dropped MediaCodec input when busy. It primes 30 ms, preserves
@@ -783,7 +783,7 @@ Use docs/next-milestone.md NEWEST entry for exact artifact checksums and next st
   User asked to test Preview 17 via the new in-app updater. The physical phone and
   installed Windows service have not been modified by tools.
 - Preview 17 physical result: occasional hiccups produce permanent music lag;
-  video stays synchronized and Moonlight does not hiccup on the same desktop.
+  video stays synchronized and the reference client does not hiccup on the same desktop.
   Read-only S23 logs show 60–70 ms queued PCM, up to eight pending packets, 15
   underruns, six overflow packets and six observed audio gaps. No short writes or
   decoder input waits in that session. Do not claim Preview 17 fixed audio.
@@ -895,7 +895,7 @@ This list is a work record, not a claim that the app family is complete.
 
 - 2026-11-06: 3.1.0 Windows release built from optimized release profiles for both UI and host (6,501,246-byte installer). Isolated native tray check passed hidden→Open and minimized→Open. Desktop tests: 20 passed, one OS-vault integration check ignored. Installer payloads matched release binaries (expected NSIS marker patch only), transparent content-addressed ICO included, no debug/review binaries or PDBs. Shortcut icon repair covers upgrades and the finish-page desktop shortcut. Linux launcher identity/cache and Mac versioned-icon packaging corrected; native Mac runtime remains unverified. Installation/publication pending. User release/version rules are in docs/versioning.md.
 
-- 2026-11-06: Windows 3.1.0 published, then installed successfully on this PC (installer exit 0). Installed UI/host both report 3.1.0; UI launched and Secpar service is running. Both public Desktop and all-users Start-menu shortcuts explicitly reference the installed transparent, content-addressed Secpar ICO. Independent PC Remote/Sunshine not modified.
+- 2026-11-06: Windows 3.1.0 published, then installed successfully on this PC (installer exit 0). Installed UI/host both report 3.1.0; UI launched and Secpar service is running. Both public Desktop and all-users Start-menu shortcuts explicitly reference the installed transparent, content-addressed Secpar ICO. Independent PC Remote/the reference host not modified.
 - Android 3.2.0 / code 520: floating capture bubble removed; capture and PiP actions are full-width, single-line controls inside the panel. PiP keeps the video SurfaceView, releases remote input and hides local controls; hiding/dismissing the stream ends control. Native emulator entry/return/input tests passed (three earlier checks; two final PiP lifecycle checks). All 205 unit tests passed, including encrypted wake-link storage, request validation and migration of existing HA preferences. Optional HTTPS wake POST supports router/NAS/helper endpoints without requiring HA; local wake also sends directed subnet broadcasts. Release R8/vital lint passed; same signing certificate and package identity retained; APK is non-debuggable and review activities absent. Physical S23 PiP/remote wake still need user testing. Publication pending final UI review.
 - Linux native hosting work is preserved on linux-host: owner pairing over pinned TLS, portal-consented monitor capture and keyboard/mouse through KDE Wayland, GStreamer hardware candidates with software fallback, system-output audio, authenticated PRS transport in the same desktop executable. Ten native host tests and 20 desktop tests passed on OMV; optimized combined executable built. Synthetic capture test uses videotestsrc, never the server's screen or input. Real KDE consent/streaming is unverified. Remote relay/account hosting, guest sessions, distribution/update integration and macOS hosting remain unfinished. Do not publish client-only archives as completed desktop apps.
 
@@ -1103,7 +1103,7 @@ settings groups. No installed app, engine or version changes in this follow-up.
 The FFmpeg-enabled host excludes Media Foundation encoding. It saves backend and
 preset choices, uses native NVENC on NVIDIA by default, and includes FFmpeg NVENC,
 AMF and Quick Sync. Codec selection and encoder recreation use the saved settings.
-The dependency build pins Sunshine, its matching FFmpeg/SDK patches, and Intel's
+The dependency build pins the reference host, its matching FFmpeg/SDK patches, and Intel's
 static dispatcher. See encoding-backends.md for build instructions and limits.
 
 On an RTX2060, native NVENC and FFmpeg NVENC each passed five functional checks:
@@ -1122,7 +1122,7 @@ is still required before publication; packet-arrival measurements are insufficie
 
 Linux's decoding/presentation implementation and Android's transport are unchanged.
 The Linux package includes the shared desktop UI changes. Android retains the
-accepted audio fixes. Neither package constitutes a full Moonlight engine migration.
+accepted audio fixes. Neither package constitutes a full the reference client engine migration.
 Client and Host settings remain expanded; Files is available on computer cards.
 The encoder form was reviewed at 420x640 and 640x400 logical pixels.
 
@@ -1138,7 +1138,7 @@ client updates and physical testing by the user. This supersedes the publication
 hold recorded above. Non-UI changes no longer get additional local self-test
 cycles; UI changes retain local visual/layout checks.
 
-Windows audio capture uses the same Pro Audio MMCSS task as Sunshine. Registration
+Windows audio capture uses the same Pro Audio MMCSS task as the reference host. Registration
 is scoped to its capture thread, reverts when it exits, and falls back to normal
 scheduling if unavailable. Four existing host audio tests passed before the latest
 workflow instruction. The observed audio dips have not been declared fixed.
@@ -1173,7 +1173,7 @@ generation so callbacks from discarded work cannot overwrite a newer stream.
 Both pending GPU work and compressed input are bounded; a stalled decoder still
 falls back to software. The synchronous wait remains only in the capability probe.
 
-GPU-to-CPU NV12 readback remains. This is not a full Moonlight decoder/renderer
+GPU-to-CPU NV12 readback remains. This is not a full the reference client decoder/renderer
 migration or a verified1080p performance fix. Publish after compilation/package
 checks and let the user test the X250, following the non-UI workflow.
 Android3.20.2 feedback: volume dips gone, audio much improved, occasional hitches

@@ -1,9 +1,7 @@
 //! TLS WebSocket agent on 48999 (docs/protocol.md).
 
 mod session;
-mod gamestream;
 pub mod guest;
-pub mod engine;
 pub mod relay;
 pub use guest::{GuestAdmission, Pass};
 pub use session::{Rx, Tx};
@@ -128,9 +126,6 @@ pub trait Handlers: Send + Sync + 'static {
     /// Capabilities for `welcome`.
     fn caps(&self) -> Vec<String>;
     fn session(&self, device: &str, out: Outbox) -> Box<dyn Session>;
-    /// Only called AFTER owner-device authentication. The default keeps migration
-    /// unavailable; platforms must complete certificate binding/revocation first.
-    fn gamestream_session(&self, _device: &str, _out: Outbox) -> Option<Box<dyn Session>> { None }
     /// For `welcome.locked`.
     fn locked(&self) -> bool {
         false

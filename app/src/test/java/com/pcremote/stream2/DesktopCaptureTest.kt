@@ -58,7 +58,7 @@ class DesktopCaptureTest {
         assertFalse(CaptureShortcut.CTRL_F12.matches(142, true, true, false, false))
         assertFalse(CaptureShortcut.CTRL_F12.matches(142, true, false, false, true))
         assertFalse(CaptureShortcut.CTRL_F12.matches(141, true, false, false, false))
-        assertTrue(CaptureShortcut.MOONLIGHT.matches(54, true, true, true, false))
+        assertTrue(CaptureShortcut.CTRL_ALT_SHIFT_Z.matches(54, true, true, true, false))
     }
     @Test fun oneHandShortcutsRequireTheirExactModifiers() {
         assertTrue(CaptureShortcut.CTRL_ALT_G.matches(35,true,true,false,false))

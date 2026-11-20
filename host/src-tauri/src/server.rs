@@ -20,26 +20,12 @@ pub struct App {
     pub net: Arc<Mutex<net::NetStatus>>,
     /// Display names of friends with a running session, by account id.
     pub friends: Arc<Mutex<std::collections::HashMap<String, String>>>,
-    /// The bundled streaming engine, for revoking its grants with the device.
-    pub engine: crate::gamestream::Managed,
 }
 
 impl App {
-    /// Removes a device on every layer: the control sessions here and its engine
-    /// grants (Moonlight certificate and tunnel access). The engine part runs in
-    /// the background so the window's answer is not held up by the engine.
+    /// Removes a device: its control sessions end here.
     pub fn revoke(&self, device: &str) {
         self.agent.revoke(device);
-        let owner = {
-            let store = self.store.lock().unwrap();
-            store.device_owner(device).flatten().unwrap_or_else(|| store.engine_owner())
-        };
-        let (engine, device) = (self.engine.clone(), device.to_string());
-        tokio::spawn(async move {
-            if let Err(e) = engine.revoke_owner(&owner, &device).await {
-                crate::log::line(&format!("engine: revocation failed: {e}"));
-            }
-        });
     }
 }
 
@@ -60,14 +46,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let account = crate::host_account::open(&dir, &identity.fingerprint_hex);
     let guests = account.as_ref().ok().map(|a| secpar_host_core::agent::GuestAdmission::new(a.clone()));
     let net = Arc::new(Mutex::new(net::NetStatus::default()));
-    // The bundled engine starts in the background; host startup never waits for it.
-    let picture = {
-        let store = store.lock().unwrap();
-        let config = store.config();
-        crate::gamestream::Picture { encoder: config.encoder.backend.clone(), preset: config.encoder.preset.clone(), display: config.display.clone() }
-    };
-    let engine = crate::gamestream::start(&dir, engine_addresses(net.clone()), picture);
-    let host = Arc::new(crate::host::Host::new(store.clone(), guests, engine.clone(), net.clone()));
+    let host = Arc::new(crate::host::Host::new(store.clone(), guests, net.clone()));
     let (outgoing, net) = (host.outgoing.clone(), host.net.clone());
     if store.lock().unwrap().config().anywhere {
         let net = net.clone();
@@ -109,7 +88,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(start_tray(store.clone()));
 
     if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
-    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends, engine });
+    let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends });
     let weak = Arc::downgrade(&app);
     tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_secs(3));
@@ -137,16 +116,6 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let handler: ipc::Handler = Arc::new(move |cmd, args| Box::pin(crate::commands::dispatch(app.clone(), cmd, args)));
     ipc::serve(ipc::PIPE, handler, ui).await?;
     Ok(())
-}
-
-/// The tunnel addresses a client may try: this PC's LAN addresses, then the
-/// router's public one only when UPnP actually reported it. Nothing invented.
-fn engine_addresses(net: Arc<Mutex<net::NetStatus>>) -> crate::gamestream::Addresses {
-    Arc::new(move || {
-        let status = net.lock().unwrap().clone();
-        let public = if status.upnp { status.public } else { None };
-        crate::gamestream::addresses(crate::commands::rank_ips(crate::win::sys::adapters().0), public)
-    })
 }
 
 /// Tells phones (and the window) when the PC locks or unlocks.

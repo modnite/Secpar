@@ -7,7 +7,6 @@ pub mod backend;
 pub mod capture;
 #[cfg(target_os = "linux")]
 mod clipboard;
-pub mod engine;
 #[cfg(target_os = "linux")]
 pub mod files;
 pub mod identity;
