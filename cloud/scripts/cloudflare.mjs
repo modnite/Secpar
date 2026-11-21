@@ -159,7 +159,7 @@ async function findOrCreateWidget(id) {
 }
 async function siteSecrets() {
   const id = await account();
-  const key = process.env.BLOG_ADMIN_KEY;
+  const key = process.env.BLOG_ADMIN_KEY?.trim();
   if (!key || key.length < 32) throw new Error("Set the repository secret BLOG_ADMIN_KEY (at least 32 characters).");
   let found;
   try {
@@ -173,7 +173,8 @@ async function siteSecrets() {
   await api(path, "PUT", { name: "BLOG_ADMIN_KEY", type: "secret_text", text: key });
   console.log("Configured the blog comment secrets.");
   // The blog editor signs in through a GitHub OAuth app.
-  const clientId = process.env.BLOG_GITHUB_CLIENT_ID, clientSecret = process.env.BLOG_GITHUB_CLIENT_SECRET;
+  // Pasted values often carry stray spaces or line breaks.
+  const clientId = process.env.BLOG_GITHUB_CLIENT_ID?.trim(), clientSecret = process.env.BLOG_GITHUB_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) { console.log("::warning::Blog editor sign-in is off: set BLOG_GITHUB_CLIENT_ID and BLOG_GITHUB_CLIENT_SECRET."); return; }
   await api(path, "PUT", { name: "BLOG_GITHUB_CLIENT_ID", type: "secret_text", text: clientId });
   await api(path, "PUT", { name: "BLOG_GITHUB_CLIENT_SECRET", type: "secret_text", text: clientSecret });
