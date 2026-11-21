@@ -21,6 +21,10 @@ Each package is one app. On Windows and Linux the same app hosts this computer a
 - **Computers.** Every computer signed in to your account, with a still of its screen and who is using it. Paired devices are listed beneath, with Disconnect and Remove. Connect directly on your network or across the internet, or through Secpar's relay when a direct route is blocked. Up to three devices can stream from one computer at once.
 - **Friends.** Add people by username and select their computers to connect. For each friend, choose Ask first or Any time, and allow keyboard, mouse and file browsing separately; Ask first needs one approval, from the notification or the app. Keyboard and mouse changes reach a connected friend within seconds. Friends are kept on your account, so they follow you to every device.
 - **Files and clipboard.** Browse a computer's files and copy them either way. Copied text is shared while you are connected.
+- **Screens.** Switch between a computer's screens from the stream menu, or open another screen in its own window. On Windows, a virtual display adds a screen for a computer with no monitor, at the size you pick in Settings › This computer.
+- **Full colour.** Full colour (4:4:4) in Settings › Streaming keeps coloured text sharp, for about twice the video.
+- **Relay.** When a network blocks the relay's usual UDP traffic, Secpar reaches it over TLS on port 443.
+- **Lock screen.** You can sign in at a locked Windows or Linux computer from your own devices. Friends cannot.
 - **Sound and controllers.** The computer's sound plays on the connecting device, and controllers attached to that device work on the computer.
 - **Power.** Lock, sleep, sign out, restart or shut down your computers from Android.
 - **Privacy.** Turn off previews and no device or friend gets a still of your screen.
@@ -30,7 +34,8 @@ The [help page](https://secpar.win/help/) covers setup, the stream menu, setting
 
 ## Limits
 
-- Linux hosting needs a signed-in desktop session. It is tested on KDE Plasma (Wayland). The desktop asks once for permission to share the screen.
+- Linux hosting needs a signed-in desktop session. It is tested on KDE Plasma (Wayland). The desktop asks once for permission to share the screen. Typing at the Linux lock screen needs write access to `/dev/uinput`.
+- The virtual display is available on Windows only.
 - Router ports (UPnP) are available on Windows only.
 - Android connects to computers; it does not host.
 - macOS and iOS are not supported.
