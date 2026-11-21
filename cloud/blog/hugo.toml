@@ -1,0 +1,35 @@
+# blog.secpar.win, built with Hugo (https://gohugo.io, Apache-2.0).
+# The deploy workflow pins the Hugo version and builds into ../site/public/blog.
+baseURL = "https://blog.secpar.win/"
+title = "Secpar blog"
+locale = "en"
+disableKinds = ["taxonomy", "term"]
+enableRobotsTXT = false
+timeZone = "UTC"
+
+[frontmatter]
+# The date in the file name (2026-11-20-title.md) is the post date unless the post sets one.
+date = [":filename", ":default"]
+
+[permalinks.page]
+posts = "/:slug/"
+
+[pagination]
+pagerSize = 20
+
+[services.rss]
+limit = 20
+
+[outputs]
+home = ["html", "rss"]
+section = ["html"]
+
+[markup.goldmark.renderer]
+unsafe = false
+
+[markup.highlight]
+noClasses = false
+codeFences = false
+
+[minify]
+minifyOutput = true

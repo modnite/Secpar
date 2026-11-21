@@ -1,0 +1,6 @@
+{{ define "main" }}<h1>Blog</h1>
+{{ $paginator := .Paginate (where site.RegularPages "Section" "posts") }}
+{{ with $paginator.Pages }}<ol class="posts">{{ range . }}<li>{{ partial "date.html" . }}<h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>{{ with partial "summary.html" . | strings.TrimSpace }}<p>{{ . }}</p>{{ end }}</li>{{ end }}</ol>
+{{ else }}<p class="empty">No posts yet.</p>{{ end }}
+{{ if gt $paginator.TotalPages 1 }}<nav class="pager" aria-label="Pages">{{ with $paginator.Prev }}<a href="{{ .URL }}">Newer posts</a>{{ end }}{{ with $paginator.Next }}<a href="{{ .URL }}">Older posts</a>{{ end }}</nav>{{ end }}
+{{ end }}

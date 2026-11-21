@@ -1,0 +1,4 @@
+{{ define "main" }}<article class="post"><a class="back" href="/">Blog</a>{{ partial "date.html" . }}<h1>{{ .Title }}</h1>
+{{ .Content }}
+{{ if gt .Lastmod .Date }}{{ if ne (.Lastmod.Format "2006-01-02") (.Date.Format "2006-01-02") }}<p class="updated">Updated <time datetime="{{ .Lastmod.Format "2006-01-02" }}">{{ .Lastmod.Format "2 January 2006" }}</time></p>{{ end }}{{ end }}
+</article>{{ end }}

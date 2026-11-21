@@ -74,3 +74,8 @@ host/src-tauri/tauri.secpar4.conf.json
 app/engine/build/
 host/src-tauri/engine/
 host/src-tauri/tauri.encoder-build.conf.json
+
+# Built by Hugo from cloud/blog during deployment.
+cloud/site/public/blog/
+cloud/blog/.hugo_build.lock
+cloud/blog/resources/

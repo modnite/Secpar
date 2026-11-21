@@ -1,0 +1,1 @@
+{{/* The first paragraph, as plain text. */}}{{ with .Params.summary }}{{ . }}{{ else }}{{ with findRE `(?s)<p>.*?</p>` .Content 1 }}{{ index . 0 | plainify | htmlUnescape | truncate 240 }}{{ end }}{{ end }}

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} | {{ site.Title }}{{ end }}</title>
+<meta name="description" content="{{ if .IsHome }}News and release notes from Secpar.{{ else }}{{ partial "summary.html" . | strings.TrimSpace }}{{ end }}">
+<link rel="canonical" href="{{ .Permalink }}">
+{{ with site.Home.OutputFormats.Get "rss" }}<link rel="alternate" type="application/rss+xml" title="{{ site.Title }}" href="{{ .Permalink }}">{{ end }}
+<link rel="icon" href="/assets/secpar-icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/assets/blog.css">
+</head>
+<body><a class="skip" href="#main">Skip to content</a>
+<header class="nav wrap"><a class="brand" href="https://secpar.win/" aria-label="Secpar home"><img src="/assets/secpar-wordmark.svg" width="151" height="36" alt="Secpar"></a><nav aria-label="Main navigation"><a href="/"{{ if .IsHome }} aria-current="page"{{ end }}>Blog</a><a href="https://secpar.win/help/">Help</a><a href="https://secpar.win/#downloads">Download</a></nav></header>
+<main id="main" class="wrap blog">{{ block "main" . }}{{ end }}</main>
+<footer class="wrap"><a class="brand" href="https://secpar.win/" aria-label="Secpar home"><img src="/assets/secpar-wordmark.svg" width="126" height="30" alt="Secpar"></a><p><a href="https://github.com/modnite/Secpar">Source</a> · GPL-3.0</p><div><a href="/index.xml">RSS</a><a href="https://github.com/modnite/Secpar/releases">Releases</a></div></footer>
+</body></html>
