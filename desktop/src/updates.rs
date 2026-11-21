@@ -22,9 +22,14 @@ struct Release {
     size: u64,
 }
 #[derive(Eq, PartialEq, Ord, PartialOrd, Debug)]
-struct Version([u32; 3], bool, u32);
+struct Version([u32; 3], bool, u32, u32);
 fn version(tag: &str) -> Option<Version> {
     let text = tag.strip_prefix('v')?;
+    // A revision of a release: v4.2.0-r1 follows v4.2.0 and comes before v4.2.1.
+    let (text, revision) = match text.split_once("-r") {
+        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => (base, n.parse::<u32>().ok()?),
+        _ => (text, 0),
+    };
     let (base, preview) = if let Some((base, n)) = text.split_once("-secpar-desktop-dev.") {
         (base, Some(n.parse::<u32>().ok()?))
     } else {
@@ -39,6 +44,7 @@ fn version(tag: &str) -> Option<Version> {
         base.try_into().ok()?,
         preview.is_none(),
         preview.unwrap_or(0),
+        revision,
     ))
 }
 fn asset_name() -> Option<&'static str> {
@@ -525,6 +531,10 @@ mod tests {
         assert!(version("v3.1.1") > version("v3.1.0"));
         assert!(version("v3.2.0") > version("v3.1.99"));
         assert!(version("v4.0.0") > version("v3.99.99"));
+        assert!(version("v4.2.0-r1") > version("v4.2.0"));
+        assert!(version("v4.2.0-r2") > version("v4.2.0-r1"));
+        assert!(version("v4.2.1") > version("v4.2.0-r9"));
+        assert!(version("v4.2.0-rx").is_none());
     }
     #[test]
     fn stable_beats_same_version_preview() {

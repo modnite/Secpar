@@ -19,6 +19,8 @@ pub struct Tray {
     disconnect_asked: Arc<AtomicBool>,
     ctx: Context,
     enabled: std::cell::Cell<bool>,
+    viewers: std::cell::RefCell<Vec<(String, String)>>,
+    kicks: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 struct Item {
@@ -28,6 +30,9 @@ struct Item {
     quitting: Arc<AtomicBool>,
     disconnect_asked: Arc<AtomicBool>,
     stop: Stop,
+    /// Who is connected to this computer: (session id, label).
+    viewers: Vec<(String, String)>,
+    kicks: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 /// Ends Secpar even when the window gets no frames. KDE Wayland stops drawing a minimised
@@ -74,8 +79,26 @@ impl ksni::Tray for Item {
         open(&self.ctx);
     }
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        vec![
+        let mut viewers: Vec<MenuItem<Self>> = Vec::new();
+        if !self.viewers.is_empty() {
+            viewers.push(StandardItem { label: "Connected to this computer".into(), enabled: false, ..Default::default() }.into());
+            for (id, label) in &self.viewers {
+                let id = id.clone();
+                viewers.push(StandardItem {
+                    label: format!("Disconnect {label}"),
+                    activate: Box::new(move |item: &mut Self| {
+                        item.kicks.lock().unwrap().push(id.clone());
+                        item.ctx.request_repaint();
+                    }),
+                    ..Default::default()
+                }.into());
+            }
+        }
+        let mut menu: Vec<MenuItem<Self>> = vec![
             StandardItem { label: "Open Secpar".into(), activate: Box::new(|item: &mut Self| open(&item.ctx)), ..Default::default() }.into(),
+        ];
+        menu.extend(viewers);
+        menu.extend(vec![
             StandardItem {
                 label: "Disconnect".into(),
                 enabled: self.connected,
@@ -119,7 +142,8 @@ impl ksni::Tray for Item {
                 ..Default::default()
             }
             .into(),
-        ]
+        ]);
+        menu
     }
 }
 
@@ -147,13 +171,14 @@ impl Tray {
         let disconnect_asked = Arc::new(AtomicBool::new(false));
         let ctx = cc.egui_ctx.clone();
         let stop: Stop = Default::default();
-        let item = Item { ctx: ctx.clone(), icon, connected: false, quitting: quitting.clone(), disconnect_asked: disconnect_asked.clone(), stop: stop.clone() };
+        let kicks: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let item = Item { ctx: ctx.clone(), icon, connected: false, quitting: quitting.clone(), disconnect_asked: disconnect_asked.clone(), stop: stop.clone(), viewers: Vec::new(), kicks: kicks.clone() };
         let handle = item.spawn().map_err(|e| eprintln!("secpar: no tray icon: {e}")).ok()?;
         // Started at sign-in: stay out of the way until the tray icon is clicked.
         if std::env::args().any(|a| a == "--hidden") {
             hide(&ctx);
         }
-        Some(Self { handle, stop, quitting, disconnect_asked, ctx, enabled: std::cell::Cell::new(false) })
+        Some(Self { handle, stop, quitting, disconnect_asked, ctx, enabled: std::cell::Cell::new(false), viewers: Default::default(), kicks })
     }
     /// Greys out Disconnect while no stream is connected; `stop` ends the stream at once.
     pub fn set_connected(&self, connected: bool, stop: Option<Box<dyn Fn() + Send>>) {
@@ -161,6 +186,18 @@ impl Tray {
         if self.enabled.replace(connected) != connected {
             self.handle.update(|item| item.connected = connected);
         }
+    }
+    /// Shows who is connected to this computer, each with Disconnect.
+    pub fn set_viewers(&self, viewers: Vec<(String, String)>) {
+        if *self.viewers.borrow() == viewers {
+            return;
+        }
+        *self.viewers.borrow_mut() = viewers.clone();
+        self.handle.update(move |item| item.viewers = viewers);
+    }
+    /// The sessions picked for Disconnect in the tray since the last call.
+    pub fn take_kicks(&self) -> Vec<String> {
+        std::mem::take(&mut *self.kicks.lock().unwrap())
     }
     /// True once after Disconnect was picked in the tray menu.
     pub fn take_disconnect(&self) -> bool {

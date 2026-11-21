@@ -106,13 +106,19 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     // A host that moves to another screen with a new stream (Linux) says goodbye on the old one first:
     // that goodbye, and any from a stream already replaced, must not leave the computer.
     val moving = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    // Set once the controller exists: its own pipelines report when full colour is too slow.
+    val dropFullColour = remember { java.util.concurrent.atomic.AtomicReference<(() -> Boolean)?>() }
     val controller = remember(attempt) {
         StreamController(scope, session::send, session.conn.incoming, { ready, failed ->
             val sock = nextSock.getAndSet(null) ?: com.pcremote.remote.PeerSocket()
             lateinit var created: PrsPipeline
             created = PrsPipeline(ready, session.conn.connectedHost ?: session.pc.allHosts.first(), sock, surface!!.surface, session.pc.relay,
                 { m -> session.send(m) }, failed, onEnded = { if (pipe === created && !moving.get()) scope.launch { onBack() } },
-                appVsyncOffsetNs = (ctx as? Activity)?.window?.decorView?.display?.appVsyncOffsetNanos ?: 0L)
+                appVsyncOffsetNs = (ctx as? Activity)?.window?.decorView?.display?.appVsyncOffsetNanos ?: 0L,
+                onFullColourTooSlow = { scope.launch {
+                    if (dropFullColour.get()?.invoke() == true) android.widget.Toast.makeText(ctx,
+                        "Full colour is off for this stream: this device can't show it at full speed at this size.", android.widget.Toast.LENGTH_LONG).show()
+                } })
             pipe = created
             moving.set(false)
             created
@@ -124,6 +130,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
             }
         })
     }
+    dropFullColour.set(controller::dropFullColour)
     val ui by controller.ui.collectAsState()
 
     // start once the agent is online and the surface exists; stop when either goes away

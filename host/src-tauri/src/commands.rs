@@ -157,12 +157,12 @@ async fn set_config(app: &App, config: Config) -> Result<(), String> {
     config.encoder.validate()?;
     let old = app.store.lock().unwrap().config().clone();
     let size = crate::win::vdd::parse_size(&config.virtual_size);
-    if old.virtual_display != config.virtual_display {
-        let on = config.virtual_display;
-        tokio::task::spawn_blocking(move || crate::win::vdd::apply(on, size)).await.map_err(|e| e.to_string())??;
+    if old.virtual_display && !config.virtual_display {
+        // Off: gone now. On: added when the next stream starts.
+        tokio::task::spawn_blocking(|| crate::win::vdd::apply(false, (0, 0))).await.map_err(|e| e.to_string())??;
     } else if config.virtual_display && old.virtual_size != config.virtual_size {
-        // A new size: the driver's settings change (it starts again with them) and the screen is set to it.
-        tokio::task::spawn_blocking(move || crate::win::vdd::apply(true, size)).await.map_err(|e| e.to_string())??;
+        // A new size: a display in use now is set to it (the driver restarts with its new settings).
+        tokio::task::spawn_blocking(move || crate::win::vdd::resize_if_held(size)).await.map_err(|e| e.to_string())??;
     }
     app.store.lock().unwrap().set_config(config.clone()).map_err(|e| e.to_string())?;
     if old.anywhere != config.anywhere {

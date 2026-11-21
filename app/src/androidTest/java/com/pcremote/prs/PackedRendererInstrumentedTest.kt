@@ -26,8 +26,9 @@ import kotlin.math.roundToInt
  */
 @RunWith(AndroidJUnit4::class)
 class PackedRendererInstrumentedTest {
-    private val w = 64
-    private val h = 36
+    // Hardware encoders refuse very small pictures; this is the review view's own size.
+    private val w = 320
+    private val h = 180
 
     private fun ycc(r: Double, g: Double, b: Double): IntArray {
         val l = 0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -97,11 +98,14 @@ class PackedRendererInstrumentedTest {
         assertTrue(activity.surfaceReady.await(10, TimeUnit.SECONDS))
         var error: String? = null
         val renderer = PackedRenderer(activity.video.holder.surface, w, h) { error = it }
-        // As the app does: no surface, frames taken from the decoder's own buffers.
+        // As the app does: straight into the renderer's own input when this GPU reads raw YUV,
+        // otherwise no surface and frames taken from the decoder's own buffers.
+        val direct = renderer.input
         val dec = MediaCodec.createDecoderByType("video/avc")
         dec.configure(MediaFormat.createVideoFormat("video/avc", w, h * 2).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-        }, null, null, 0)
+            if (direct == null) setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+        }, direct, null, 0)
+        android.util.Log.i("PcrFullColourTest", "path=" + if (direct != null) "direct" else "cpu")
         dec.start()
         val info = MediaCodec.BufferInfo()
         // The end of the stream makes a software decoder hand over what it holds.
@@ -115,7 +119,7 @@ class PackedRendererInstrumentedTest {
                 if (i >= 0) { val (b, flags) = inputs[next++]; dec.getInputBuffer(i)!!.put(b); dec.queueInputBuffer(i, 0, b.size, next * 33_333L, flags) }
             }
             val o = dec.dequeueOutputBuffer(info, 10_000)
-            if (o >= 0) { dec.getOutputImage(o)?.let(renderer::frame); dec.releaseOutputBuffer(o, false) }
+            if (o >= 0) { if (direct != null) dec.releaseOutputBuffer(o, true) else { dec.getOutputImage(o)?.let(renderer::frame); dec.releaseOutputBuffer(o, false) } }
         }
         Thread.sleep(300)
         val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
@@ -127,9 +131,9 @@ class PackedRendererInstrumentedTest {
         renderer.release()
         activity.finish()
         assertTrue("a drawn frame (renderer: $error, drawn ${renderer.drawn}, copy $result)", renderer.drawn > 0 && result == PixelCopy.SUCCESS)
-        // 64 picture pixels over 320 view pixels: view column 5k+2 is the centre of picture column k.
-        val red = bitmap.getPixel(5 * 6 + 2, 90)
-        val blue = bitmap.getPixel(5 * 7 + 2, 90)
+        // One picture pixel per view pixel: even columns red, odd columns blue.
+        val red = bitmap.getPixel(160, 90)
+        val blue = bitmap.getPixel(161, 90)
         assertTrue("red stays red: ${Integer.toHexString(red)}", Color.red(red) > 200 && Color.blue(red) < 60)
         assertTrue("blue stays blue: ${Integer.toHexString(blue)}", Color.blue(blue) > 200 && Color.red(blue) < 60)
     }

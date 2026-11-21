@@ -1,6 +1,6 @@
 ﻿# Secpar 4: where it stands
 
-Last updated 2026-11-21. Branch `secpar-4`, merged into `main` for each release.
+Last updated 2026-11-21 (4.2.0-r1). Branch `secpar-4`, merged into `main` for each release.
 Read this first, then `docs/user-requirements.md` for what the owner wants.
 Update this file after each result the owner confirms.
 
@@ -52,3 +52,22 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   a network that blocks UDP, KDE screen choice, the virtual display size, Linux
   lock screen input through uinput (owner sessions only) and Windows lock screen
   input after the per-session pointer change.
+
+## Account service: self-hosted since 2026-11-21
+
+On 2026-11-21 the Cloudflare account ran out of the free plan's 100,000 Worker requests a day
+(error 1027), and sign-in stopped for everyone. The account service now runs on the OMV build box:
+
+- `/opt/secpar-accounts` on its system disk (never the data disk): the service under `wrangler dev`
+  in the `secpar-accounts` Docker container, data in `state/accounts` (SQLite, from the D1 export),
+  grant signing key in `accounts/.dev.vars` (new, root only), hourly job from root's crontab.
+- `accounts.secpar.win` reaches it through the `secpar-home` Cloudflare Tunnel (`secpar-tunnel`
+  container); tunnel traffic is not counted against Worker requests. `/__scheduled` is blocked there.
+- The relay stays on its Worker (`relay.secpar.win`): hosts' relay keys live in its storage and
+  cannot be exported, and its traffic is light.
+- The deploy workflow refuses to deploy the account Worker, which would take the name back with
+  stale data. `selfhost-tunnel.yml` and `accounts-export.yml` are the one-off jobs used.
+- Not yet on the box: email (needs a new Resend key) and TURN credentials for friends (needs a new
+  Cloudflare TURN key).
+- Apps poll less (desktop alerts 60 s, owned list 120 s; Android alerts 60 s) and keep the last
+  known computers when the service is unreachable, connecting with their saved keys.

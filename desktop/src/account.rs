@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 const ORIGIN: &str = "https://accounts.secpar.win";
 const CREDENTIAL: &str = "account-session";
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct User {
     pub id: String,
     pub handle: String,
@@ -78,6 +78,34 @@ pub fn friend_summary(friend: &Friend) -> String {
     };
     format!("{} · {control}", if friend.connect == "always" { "Any time" } else { "Ask first" })
 }
+/// The account and its computers as last heard from the service. Kept beside the client settings so
+/// that, when the service cannot be reached, the computers still show and connect with their saved
+/// keys on this network. Holds no secrets: the keys stay in the system's credential store.
+#[derive(Deserialize, Serialize)]
+struct Known {
+    user: User,
+    computers: Vec<OwnedComputer>,
+}
+fn known_path() -> Option<std::path::PathBuf> {
+    crate::client_settings::path().map(|p| p.with_file_name("account-known.json"))
+}
+fn load_known() -> Option<Known> {
+    serde_json::from_slice(&std::fs::read(known_path()?).ok()?).ok()
+}
+/// Saves the list when it changed since the last save; `last` holds what was written.
+fn save_known(user: &User, computers: &[OwnedComputer], last: &mut String) {
+    let Ok(text) = serde_json::to_string(&Known { user: user.clone(), computers: computers.to_vec() }) else { return };
+    if text == *last { return; }
+    if let Some(path) = known_path() {
+        if let Some(dir) = path.parent() { let _ = std::fs::create_dir_all(dir); }
+        if std::fs::write(&path, &text).is_ok() { *last = text; }
+    }
+}
+fn forget_known() {
+    if let Some(path) = known_path() { let _ = std::fs::remove_file(path); }
+}
+pub(crate) const UNREACHABLE: &str = "Secpar can't reach its account service right now. Your computers on this network still connect.";
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct OwnedComputer {
     pub id: String,
@@ -821,6 +849,7 @@ impl Panel {
                     note,
                 } => {
                     self.user = Some(user);
+                    self.signed_out = false;
                     self.friends = friends;
                     self.blocked = blocked;
                     self.form.reset();
@@ -1837,6 +1866,11 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
             let mut auto_for: Option<String> = None;
             let mut want_after_auto: Option<String> = None;
             let mut auto_tried: HashMap<String, Instant> = HashMap::new();
+            // When the saved sign-in could not be checked at startup, the next attempt.
+            let mut retry_sign_in: Option<Instant> = None;
+            // The signed-in account, and the last account and computer list written to disk.
+            let mut me: Option<User> = None;
+            let mut known_saved = String::new();
             if api.token.is_some() {
                 // The profile and the computer list are independent: one round trip, not two.
                 let started = Instant::now();
@@ -1845,19 +1879,50 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 connlog::note("account", "account_fetch", "startup", ms(started));
                 match snapshot {
                     Ok((user,friends,blocked))=>{
-                        signed_owner=Some(user.id.clone());next_owned=Instant::now();
+                        signed_owner=Some(user.id.clone());next_owned=Instant::now();me=Some(user.clone());
                         if let Ok(list)=computers { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
                         let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;
                         if let Ok(list)=shared { friend_tasks.sync(&api,&list,&events,&ctx); let _=events.send(Event::FriendComputers(list)).await; next_friend_computers=Instant::now()+Duration::from_secs(4); }
                     }
                     Err((status,note))=>{
-                        if status==StatusCode::UNAUTHORIZED {api.token=None;let _=vault::forget(CREDENTIAL);}
-                        let _=events.send(Event::SignedOut(note)).await;
+                        if status==StatusCode::UNAUTHORIZED {api.token=None;let _=vault::forget(CREDENTIAL);forget_known();let _=events.send(Event::SignedOut(note)).await;}
+                        else {
+                            // Busy or unreachable (429, 5xx, offline): the saved sign-in stays and is tried again,
+                            // and the computers last heard of stay in reach on this network meanwhile.
+                            retry_sign_in=Some(Instant::now()+Duration::from_secs(30));
+                            match load_known() {
+                                Some(last)=>{
+                                    signed_owner=Some(last.user.id.clone());me=Some(last.user.clone());next_owned=Instant::now()+Duration::from_secs(120);
+                                    known=last.computers.clone();
+                                    let _=events.send(Event::Owned(last.computers)).await;
+                                    let _=events.send(Event::SignedIn{user:last.user,friends:Vec::new(),blocked:Vec::new(),note:UNREACHABLE.into()}).await;
+                                }
+                                None=>{let _=events.send(Event::SignedOut(note)).await;}
+                            }
+                        }
                     }
                 }
                 ctx.request_repaint();
             }
             loop {
+                if let Some(user)=&me { save_known(user,&known,&mut known_saved); }
+                if retry_sign_in.is_some_and(|at|Instant::now()>=at) {
+                    retry_sign_in=None;
+                    if api.token.is_some() {
+                        let (snapshot, computers, shared) = tokio::join!(api.snapshot(), api.computers(), api.friend_computers());
+                        match snapshot {
+                            Ok((user,friends,blocked))=>{
+                                signed_owner=Some(user.id.clone());next_owned=Instant::now();me=Some(user.clone());
+                                if let Ok(list)=computers { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
+                                let _=events.send(Event::SignedIn{user,friends,blocked,note:String::new()}).await;
+                                if let Ok(list)=shared { friend_tasks.sync(&api,&list,&events,&ctx); let _=events.send(Event::FriendComputers(list)).await; next_friend_computers=Instant::now()+Duration::from_secs(4); }
+                                ctx.request_repaint();
+                            }
+                            Err((StatusCode::UNAUTHORIZED,note))=>{api.token=None;signed_owner=None;me=None;let _=vault::forget(CREDENTIAL);forget_known();let _=events.send(Event::SignedOut(note)).await;}
+                            Err(_)=>retry_sign_in=Some(Instant::now()+Duration::from_secs(60)),
+                        }
+                    }
+                }
                 // While a pairing is under way the loop looks at it often. Otherwise once a second is plenty.
                 let tick = if pending_pair.is_some() || auto_fut.is_some() { Duration::from_millis(150) } else { Duration::from_secs(1) };
                 let Some(wake) = next_wake(&mut rx, tick, &mut sync_fut, &mut auto_fut).await else { break };
@@ -1960,7 +2025,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                                     } else {
                                         let note=vault::save(CREDENTIAL,token).err().unwrap_or_default();api.token=Some(token.into());
                                         match api.snapshot().await {
-                                            Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;},
+                                            Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();me=Some(user.clone());let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;},
                                             Err((status,note))=>{if status==StatusCode::UNAUTHORIZED{api.token=None;let _=vault::forget(CREDENTIAL);}let _=events.send(Event::Auth{route,result:Err(note)}).await;}
                                         }
                                     }
@@ -1976,7 +2041,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                             // Revoke remotely first. Offline logout still forgets locally and reports the limit.
                             let revoked=if api.token.is_some(){api.call(Method::POST,"/auth/logout",None).await.is_ok()}else{true};
                             api.token=None;
-                            let note=match vault::forget(CREDENTIAL){Err(note)=>note,Ok(()) if !revoked=>"Signed out here. Could not revoke the remote session while offline.".into(),_=>String::new()};
+                            forget_known();me=None;known.clear();known_saved.clear();let note=match vault::forget(CREDENTIAL){Err(note)=>note,Ok(()) if !revoked=>"Signed out here. Could not revoke the remote session while offline.".into(),_=>String::new()};
                             let _=events.send(Event::SignedOut(note)).await;Ok(String::new())
                         }
                         Command::Remember(computer)=>{
@@ -2033,7 +2098,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                             else {let _=events.send(Event::Message(note)).await;}
                         }
                         Ok(note) if api.token.is_some()&&!skip_refresh=>match api.snapshot().await {
-                            Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;}
+                            Ok((user,friends,blocked))=>{signed_owner=Some(user.id.clone());next_owned=Instant::now();me=Some(user.clone());let _=events.send(Event::SignedIn{user,friends,blocked,note}).await;}
                             Err((status,note))=>{if status==StatusCode::UNAUTHORIZED{api.token=None;let _=vault::forget(CREDENTIAL);let _=events.send(Event::SignedOut(note)).await;}else{let _=events.send(Event::Message(note)).await;}}
                         },_=>{}
                     }
@@ -2056,7 +2121,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 if focused && !was_focused { next_friend_computers=Instant::now(); }
                 was_focused=focused;
                 if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
-                    next_friend_computers=Instant::now()+Duration::from_secs(if focused {15} else {60});
+                    next_friend_computers=Instant::now()+Duration::from_secs(if focused {60} else {300});
                     let (shared,own)=tokio::join!(api.friend_computers(),api.computers());
                     if let Ok(list)=own { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
                     match shared {
@@ -2094,7 +2159,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 }
                 if sync_fut.is_none() {
                     if let Some(owner)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_owned) {
-                        next_owned=Instant::now()+Duration::from_secs(30);
+                        next_owned=Instant::now()+Duration::from_secs(120);
                         let enroll=suppressed_owner.as_deref()!=Some(owner.as_str());
                         sync_fut=Some(Box::pin(synchronize_owned(api.clone(),owner,enroll)));
                     }
@@ -2124,7 +2189,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 if let Some(me)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_alerts) {
                     // While someone is waiting for an answer, look again soon, so a request answered
                     // from the notification leaves this window quickly too.
-                    next_alerts=Instant::now()+Duration::from_secs(if pending_requests {2} else {10});
+                    next_alerts=Instant::now()+Duration::from_secs(if pending_requests {5} else {60});
                     match api.live().await {
                         Ok((friends,requests))=>{
                             pending_requests=requests.iter().any(|r| r.owner==me && r.state=="pending");

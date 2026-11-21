@@ -49,11 +49,11 @@ class AlertTracker {
 private const val CHANNEL_WATCH = "secpar_watch"
 private const val CHANNEL_REQUESTS = "secpar_requests"
 private const val WATCH_ID = 7301
-private const val POLL_MS = 15_000L
+private const val POLL_MS = 60_000L
 
 /**
  * Watches for new requests while the user has turned notifications on. There is no push service, so
- * it asks the account service every 15 seconds and shows a persistent low priority notice, which
+ * it asks the account service every minute and shows a persistent low priority notice, which
  * Android requires for a service that keeps running.
  */
 class AlertService : Service() {

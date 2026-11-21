@@ -134,7 +134,9 @@ impl Backend {
 #[derive(Default)]
 struct State {
     queue: VecDeque<VideoFrame>,
-    image: Option<Picture>,
+    /// Decoded pictures not yet taken, oldest first. Two at most: a picture that arrives just after
+    /// another, before the window's next frame, is shown next rather than dropped.
+    images: VecDeque<Picture>,
     waiting_key: bool,
     request_key: bool,
     key_requested: Option<Instant>,
@@ -145,6 +147,7 @@ struct State {
     /// The decoder is still being created (a hardware decoder takes tens of milliseconds).
     warming: bool,
     fps:u32,
+    decoded: u64,
 }
 /// Frames kept while the decoder starts: about two seconds, the newest keyframe onward.
 const WARMING_LIMIT: usize = 120;
@@ -180,9 +183,13 @@ impl State {
 }
 pub struct Output {
     pub image: Option<Picture>,
+    /// Another picture is waiting: draw a frame again soon.
+    pub more: bool,
     pub request_key: bool,
     pub error: Option<String>,
     pub backend: Option<&'static str>,
+    /// Pictures the decoder has finished since it started, drawn or not.
+    pub decoded: u64,
 }
 #[derive(Clone)]
 struct Submitter {state:Arc<(Mutex<State>,Condvar)>}
@@ -239,7 +246,9 @@ impl Worker {
                 hardware.enable_async_output(move |generation,image| {
                     let mut state=output.0.lock().unwrap();
                     if !state.stopped && state.generation==generation {
-                        state.image=Some(image);
+                        state.images.push_back(image);
+                        if state.images.len()>2 {state.images.pop_front();}
+                        state.decoded+=1;
                         state.backend=Some("H.264 · VA-API");
                         secpar_stream::timing::mark(secpar_stream::timing::Stage::Decoded);
                         drop(state);
@@ -329,7 +338,7 @@ impl Worker {
                 };
                 let mut state = lock.lock().unwrap();
                 if generation == state.generation && !state.stopped {
-                    if let Some(image) = image { state.image = Some(image); state.backend=Some(if slow_fallback {"H.264 · software (hardware too slow)"}else{decoder.label(codec)}); }
+                    if let Some(image) = image { state.images.push_back(image); if state.images.len()>2 {state.images.pop_front();} state.decoded += 1; state.backend=Some(if slow_fallback {"H.264 · software (hardware too slow)"}else{decoder.label(codec)}); }
                 }
                 drop(state);
                 ctx.request_repaint();
@@ -343,7 +352,8 @@ impl Worker {
         let mut state = self.state.0.lock().unwrap();
         let request_key = state.request_key && state.key_requested.is_none_or(|at| at.elapsed() >= Duration::from_millis(250));
         if request_key { state.request_key = false; state.key_requested = Some(Instant::now()); }
-        Output { image: state.image.take(), request_key, error: state.error.take(), backend:state.backend.take() }
+        let image = state.images.pop_front();
+        Output { image, more: !state.images.is_empty(), request_key, error: state.error.take(), backend:state.backend.take(), decoded: state.decoded }
     }
 }
 impl Drop for Worker {

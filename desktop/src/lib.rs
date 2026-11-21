@@ -276,6 +276,10 @@ struct App {
     input: input::Input,
     dimensions: [usize; 2],
     stream_fps: u32,
+    /// Frames decoded and frames taken to draw in the current second, for the stats strip:
+    /// (window start, decoded count at its start, drawn so far, last decoded fps, last drawn fps).
+    frame_rates: (Instant, u64, u32, f32, f32),
+
     stream_stats: Option<(Option<u16>,f32,f32)>,
     options: Options,
     displays: Vec<(String, String)>,
@@ -393,6 +397,8 @@ impl App {
             input: Default::default(),
             dimensions: [0, 0],
             stream_fps: 60,
+            frame_rates: (Instant::now(), 0, 0, 0., 0.),
+
             stream_stats: None,
             options,
             displays: vec![],
@@ -951,6 +957,16 @@ impl App {
                 self.send(Command::Stop);
             }
             if output.request_key { self.send(Command::Keyframe); }
+            if output.more { ctx.request_repaint(); }
+            // Decoded against drawn: frames lost between them were decoded but never reached the window.
+            let (start, decoded_at, drawn, _, _) = self.frame_rates;
+            if output.image.is_some() { self.frame_rates.2 = drawn + 1; }
+            let span = start.elapsed().as_secs_f32();
+            if span >= 1. {
+                let decoded = output.decoded.saturating_sub(decoded_at) as f32 / span;
+                let drawn = self.frame_rates.2 as f32 / span;
+                self.frame_rates = (Instant::now(), output.decoded, 0, decoded, drawn);
+            }
             if let Some(mut picture) = output.image {
                 picture.packed = self.full_colour && picture.size[1] % 2 == 0;
                 self.dimensions = picture.shown_size();
@@ -1114,7 +1130,16 @@ impl eframe::App for App {
         if self.remote_keyboard {for m in self.input.modifiers(raw.modifiers){self.send(Command::Input(m));}}
         raw.events=local;
     }
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.update_inner(ctx, frame);
+    }
+    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.exit_inner();
+    }
+}
+impl App {
+    fn update_inner(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let _ = frame;
         #[cfg(feature="ui-review")]
         if std::env::var_os("SECPAR_REVIEW_KEYS").is_some() && self.review_frames<6 {
             eprintln!("review_tick focused={} stream={} keyboard={}",self.focused,self.stream_active(),self.remote_keyboard);
@@ -1137,6 +1162,10 @@ impl eframe::App for App {
         if let Some(tray) = &self.tray {
             let stop = self.command.clone().map(|tx| Box::new(move || { let _ = tx.try_send(Command::Stop); }) as Box<dyn Fn() + Send>);
             tray.set_connected(self.command.is_some(), stop);
+            // Who is connected to this computer, kept current while the window is hidden.
+            self.hosting.tick(ctx);
+            tray.set_viewers(self.hosting.viewers(self.account.user.as_ref().map(|u| u.handle.as_str())));
+            for id in tray.take_kicks() { self.hosting.disconnect(id); }
             if tray.take_disconnect() && self.command.is_some() {
                 self.capture(ctx, false);
                 self.send(Command::Stop);
@@ -1637,7 +1666,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
     }
-    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+    fn exit_inner(&mut self) {
         #[cfg(windows)]
         {
             self.hook = None;

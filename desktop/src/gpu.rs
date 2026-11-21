@@ -51,9 +51,12 @@ pub fn callback(handle: Handle, rect: egui::Rect) -> egui::PaintCallback {
             if shared.failed {
                 return;
             }
-            if draw(&mut shared, painter.gl()).is_err() {
+            if let Err(error) = draw(&mut shared, painter.gl()) {
+                // Logged once: the picture is then converted on the CPU, which costs far more.
+                eprintln!("secpar: video shader failed, using the CPU instead: {error}");
                 shared.failed = true;
             }
+
         })),
     }
 }
@@ -74,7 +77,7 @@ precision mediump float;
 #endif
 uniform sampler2D luma;
 uniform sampler2D chroma;
-uniform int packed;
+uniform int full_colour;
 uniform ivec2 shown;
 in vec2 coordinate;
 out vec4 colour;
@@ -86,7 +89,7 @@ vec3 full(ivec2 p) {
 }
 void main() {
     vec3 s;
-    if (packed == 1) {
+    if (full_colour == 1) {
         // Bilinear by hand: the planes cannot be filtered as textures.
         vec2 f = coordinate * vec2(shown) - 0.5;
         ivec2 i = ivec2(floor(f));
@@ -179,7 +182,7 @@ unsafe fn create(gl: &glow::Context, version: ShaderVersion) -> Result<Resources
         Ok(texture)
     };
     Ok(Resources {
-        packed: gl.get_uniform_location(program, "packed"),
+        packed: gl.get_uniform_location(program, "full_colour"),
         shown: gl.get_uniform_location(program, "shown"),
         full_colour: false,
         program,

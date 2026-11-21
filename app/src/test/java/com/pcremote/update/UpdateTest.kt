@@ -9,6 +9,8 @@ class UpdateTest {
         assertEquals("3.0.3-secpar-preview.16",Updater.select(list)?.version)
         assertNull(Updater.select(list,false))
         assertFalse(Updater.isNewer("3.0.3-secpar-preview.15","3.0.3-secpar.16"))
+        assertTrue(Updater.isNewer("4.2.0-r1", "4.2.0")); assertTrue(Updater.isNewer("4.2.0-r2", "4.2.0-r1"))
+        assertTrue(Updater.isNewer("4.2.1", "4.2.0-r9")); assertFalse(Updater.isNewer("4.2.0", "4.2.0-r1"))
         assertTrue(Updater.isNewer("3.0.3","3.0.3-secpar.16"))
     }
     @Test fun invalidAssetsAreRejected() {

@@ -36,6 +36,7 @@ data class AccountUi(
 /** Wording shared with the desktop client. */
 object AccountText {
     const val SIGNED_OUT_OFFLINE = "Signed out here. Could not revoke the remote session while offline."
+    const val UNREACHABLE = "Secpar can't reach its account service right now. Your computers on this network still connect."
     const val REQUEST_SENT = "Friend request sent"
     const val NO_BROWSER = "No browser is available. Open accounts.secpar.win/activate and enter the code."
     val UUID_ID = Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")
@@ -83,7 +84,12 @@ class AccountController(
             val saved = withContext(io) { store.session() }
             session = saved
             api = saved?.let { apiFactory(it.token) }
-            mutable.value = AccountUi(ready = true, user = saved?.user)
+            // The computers this phone already has keys for show at once, and still connect on this
+            // network when the account service cannot be reached; the service's list replaces them.
+            val known = saved?.let { s -> withContext(io) { store.owned(s) }.map {
+                OwnedComputer(it.computerId, it.pc.name, "", it.pc.fingerprint, linked = true, online = true)
+            } } ?: emptyList()
+            mutable.value = AccountUi(ready = true, user = saved?.user, computers = known)
             changes.value++
             saved?.let { scheduleExpiry(it) }
             refresh()
@@ -224,7 +230,8 @@ class AccountController(
             catch (e: Exception) {
                 if (epoch == generation) {
                     if (e is AccountException && e.kind == AccountError.SIGN_IN_REQUIRED) signOut()
-                    else mutable.value = state.value.copy(error = message(e))
+                    // Known computers stay listed and connect with their saved keys.
+                    else mutable.value = state.value.copy(error = if (state.value.computers.isNotEmpty()) AccountText.UNREACHABLE else message(e))
                 }
             }
         }
