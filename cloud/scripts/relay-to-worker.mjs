@@ -20,7 +20,8 @@ const zone = (await api("/zones?name=secpar.win"))[0].id;
 const tunnel = (await api(`/accounts/${account}/cfd_tunnel?name=secpar-home&is_deleted=false`))[0];
 if (tunnel) {
   await api(`/accounts/${account}/cfd_tunnel/${tunnel.id}/configurations`, "PUT", {
-    config: { ingress: [{ hostname: "accounts.secpar.win", service: "http://127.0.0.1:8787", originRequest: {} }, { service: "http_status:404" }] },
+    // The hourly job's trigger stays on the box: never reachable from outside.
+    config: { ingress: [{ hostname: "accounts.secpar.win", path: "^/__scheduled", service: "http_status:404" }, { hostname: "accounts.secpar.win", service: "http://127.0.0.1:8787", originRequest: {} }, { service: "http_status:404" }] },
   }, "route only the account service through the tunnel");
 }
 for (const r of await api(`/zones/${zone}/dns_records?name=${HOST}`)) await api(`/zones/${zone}/dns_records/${r.id}`, "DELETE", undefined, "remove the tunnel record");
