@@ -46,7 +46,7 @@ fun AnchoredMenu(label: String, items: List<MenuItem>, modifier: Modifier = Modi
     val c = LocalMidnight.current
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
-        IconButton({ open = true }, Modifier.size(48.dp)) {
+        IconButton({ open = true }, Modifier.size(48.dp).focusRing(androidx.compose.foundation.shape.CircleShape)) {
             Icon(painterResource(R.drawable.lucide_ellipsis), label, tint = c.textDim, modifier = Modifier.size(20.dp))
         }
         if (open) Popup(BelowEnd(), { open = false }, PopupProperties(focusable = true)) {

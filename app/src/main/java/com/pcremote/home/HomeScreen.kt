@@ -1,5 +1,6 @@
 package com.pcremote.home
 
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -234,7 +235,10 @@ private fun CardTitle(name: String, platform: String, status: ComputerStatus, en
 @Composable
 private fun CardFrame(content: @Composable ColumnScope.() -> Unit) {
     val c = LocalMidnight.current
-    Column(Modifier.fillMaxWidth().clip(MidnightShapes.card).background(c.surface).border(1.dp, c.border, MidnightShapes.card).padding(12.dp),
+    var selected by remember { mutableStateOf(false) }
+    // A TV remote or keyboard on anything in the card: the whole card gets the accent border.
+    Column(Modifier.fillMaxWidth().onFocusChanged { selected = it.hasFocus }.clip(MidnightShapes.card).background(c.surface)
+        .border(if (selected) 2.dp else 1.dp, if (selected) c.accent else c.border, MidnightShapes.card).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }
 
@@ -379,7 +383,8 @@ private fun HeaderAction(@androidx.annotation.DrawableRes icon: Int, label: Stri
         positionProvider = androidx.compose.material3.TooltipDefaults.rememberPlainTooltipPositionProvider(),
         tooltip = { PlainTooltip { Text(label) } },
         state = androidx.compose.material3.rememberTooltipState()) {
-        androidx.compose.material3.IconButton(onClick = action, enabled = enabled, modifier = Modifier.size(44.dp)) {
+        androidx.compose.material3.IconButton(onClick = action, enabled = enabled, modifier = Modifier.size(44.dp)
+            .focusRing(androidx.compose.foundation.shape.CircleShape)) {
             Icon(painterResource(icon), label, modifier = Modifier.size(20.dp),
                 tint = if (!enabled) c.textDim else if (accent) c.accent else c.text)
         }

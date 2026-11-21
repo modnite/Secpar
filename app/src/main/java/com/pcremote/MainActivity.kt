@@ -29,11 +29,9 @@ import com.pcremote.home.PrimaryAction
 import com.pcremote.nav.Mode
 import com.pcremote.nav.Routes
 import com.pcremote.nav.exitScreen
-import com.pcremote.onboarding.OnboardingScreen
 import com.pcremote.onboarding.PairingDeps
 import com.pcremote.onboarding.PairingModel
 import com.pcremote.onboarding.PairingOverlay
-import com.pcremote.onboarding.scanQr
 import com.pcremote.ui.theme.MidnightTheme
 import kotlinx.coroutines.launch
 import kotlin.concurrent.thread
@@ -228,10 +226,6 @@ class MainActivity : ComponentActivity() {
                 LifecycleResumeEffect(Unit) {
                     onPauseOrDispose {}
                 }
-                fun finishOnboarding() {
-                    prefs.edit().putBoolean(PREF_ONBOARDED, true).apply()
-                    nav.navigate(Routes.HOME) { popUpTo(Routes.ONBOARDING) { inclusive = true } }
-                }
                 if (manualOpen) com.pcremote.onboarding.ManualPairDialog(
                     onPair = { link -> manualOpen = false; scope.launch { pairing.onScanned(link) } },
                     onDismiss = { manualOpen = false })
@@ -241,13 +235,6 @@ class MainActivity : ComponentActivity() {
                     popEnterTransition = { fadeIn() },
                     popExitTransition = { slideOutHorizontally { it / 6 } + fadeOut() },
                 ) {
-                    composable(Routes.ONBOARDING) {
-                        OnboardingScreen(pairing,
-                            onDone = { pairing.reset(); finishOnboarding() },
-                            onManual = ::manualPairing,
-                            onSkip = ::finishOnboarding,
-                            onAccount = { finishOnboarding() })
-                    }
                     composable(Routes.modePattern(Mode.SCREEN)) { e ->
                         com.pcremote.stream2.StreamScreen(modeId(e), onBack = { nav.exitScreen(e) })
                     }

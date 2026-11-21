@@ -7,6 +7,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
@@ -96,7 +107,7 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
         // Scrim + side panel
         AnimatedVisibility(panel, enter = fadeIn(), exit = fadeOut()) {
             Box(Modifier.fillMaxSize().background(Color.Transparent)
-                .clickable(remember { MutableInteractionSource() }, null) { panel = false })
+                .pointerInput(Unit) { detectTapGestures { panel = false } })
         }
         val wide = maxWidth >= 320.dp
         val top = if (wide) StreamMenuModel.panelTop(strip).dp else 64.dp
@@ -126,9 +137,14 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
     var page by remember { mutableStateOf(MenuPage.MAIN) }
     var audioDetails by remember { mutableStateOf("") }
     val context = LocalContext.current
+    // With a remote or keyboard, focus starts on the page's first row, so the D-pad moves through it.
+    val first = remember(page) { FirstRow(FocusRequester()) }
+    val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    LaunchedEffect(page, keys) { if (keys) { withFrameNanos { }; runCatching { first.requester.requestFocus() } } }
     if (page == MenuPage.AUDIO) LaunchedEffect(Unit) {
         while (true) { audioDetails = a.audioDetails(); delay(1000) }
     }
+    CompositionLocalProvider(LocalFirstRow provides first) {
     Column(modifier.widthIn(max = MenuTokens.PANEL_WIDTH.dp).fillMaxWidth()
         .clip(RoundedCornerShape(MenuTokens.PANEL_RADIUS.dp))
         .background(MenuColors.fill)
@@ -213,7 +229,12 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
             }
         }
     }
+    }
 }
+
+/** The first row composed on a menu page takes this page's requester. */
+private class FirstRow(val requester: FocusRequester) { var claimed = false }
+private val LocalFirstRow = compositionLocalOf<FirstRow?> { null }
 
 @Composable
 internal fun StreamMenuRow(icon: Int, label: String, value: String? = null, arrow: Boolean = false,
@@ -222,9 +243,15 @@ internal fun StreamMenuRow(icon: Int, label: String, value: String? = null, arro
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val hovered by source.collectIsHoveredAsState()
+    val focused by source.collectIsFocusedAsState()
+    val first = LocalFirstRow.current
+    val claim = remember(first) { first != null && !first.claimed.also { first.claimed = true } }
     val trailing = checked || arrow
+    val shape = RoundedCornerShape(MenuTokens.ROW_RADIUS.dp)
     Row(Modifier.fillMaxWidth().height(MenuTokens.ROW_HEIGHT.dp).semantics { contentDescription = label }
-        .clip(RoundedCornerShape(MenuTokens.ROW_RADIUS.dp)).background(if (pressed || hovered) MenuColors.rowPressed else Color.Transparent)
+        .then(if (claim) Modifier.focusRequester(first!!.requester) else Modifier)
+        .clip(shape).background(if (pressed || hovered || focused) MenuColors.rowPressed else Color.Transparent)
+        .then(if (focused) Modifier.border(2.dp, LocalMidnight.current.accent, shape) else Modifier)
         .hoverable(source).clickable(source, null, onClick = onClick).padding(start = MenuTokens.ICON_X.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Icon(painterResource(icon), null, tint = color, modifier = Modifier.size(MenuTokens.ICON.dp))
