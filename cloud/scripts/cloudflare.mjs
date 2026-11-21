@@ -79,7 +79,7 @@ async function prepare() {
     const site = await config(siteProject, {
       account_id: id,
       d1_databases: [{ binding: "DB", database_name: "secpar-blog", database_id: db.uuid, migrations_dir: "migrations" }],
-      vars: { TURNSTILE_SITEKEY: widget.sitekey },
+      ...(widget ? { vars: { TURNSTILE_SITEKEY: widget.sitekey } } : {}),
     });
     if (process.env.GITHUB_OUTPUT)
       await writeFile(process.env.GITHUB_OUTPUT, `site=${site}\n`, { flag: "a" });
@@ -134,6 +134,13 @@ async function prepare() {
   );
 }
 async function blogWidget(id) {
+  // Without Turnstile access the site still deploys, with comments closed.
+  try { return await findOrCreateWidget(id); } catch (error) {
+    console.log(`::warning::Blog comments stay closed: ${error.message} The token needs Account > Turnstile > Edit.`);
+    return null;
+  }
+}
+async function findOrCreateWidget(id) {
   const widgets = await api(`/accounts/${id}/challenges/widgets?per_page=50`);
   const found = widgets.find((w) => w.name === "Secpar blog comments");
   if (found) return found;
@@ -147,9 +154,11 @@ async function siteSecrets() {
   const id = await account();
   const key = process.env.BLOG_ADMIN_KEY;
   if (!key || key.length < 32) throw new Error("Set the repository secret BLOG_ADMIN_KEY (at least 32 characters).");
-  const widgets = await api(`/accounts/${id}/challenges/widgets?per_page=50`);
-  const found = widgets.find((w) => w.name === "Secpar blog comments");
-  if (!found) throw new Error("The blog Turnstile widget is missing; run prepare first.");
+  let found;
+  try {
+    found = (await api(`/accounts/${id}/challenges/widgets?per_page=50`)).find((w) => w.name === "Secpar blog comments");
+  } catch { /* reported by prepare */ }
+  if (!found) { console.log("::warning::No blog Turnstile widget yet; comments stay closed."); return; }
   const widget = await api(`/accounts/${id}/challenges/widgets/${found.sitekey}`);
   const path = `/accounts/${id}/workers/scripts/secpar-site/secrets`;
   // Secrets go straight to Cloudflare's secret store: never to disk, logs or arguments.
