@@ -94,7 +94,7 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
         if (!state.buttonHidden) Box(Modifier.align(Alignment.TopStart).zIndex(2f).padding(MenuTokens.BUTTON_MARGIN.dp).size(MenuTokens.BUTTON.dp)
             .clip(RoundedCornerShape(MenuTokens.BUTTON_RADIUS.dp)).background(MenuColors.buttonFill)
             .semantics { contentDescription = "Stream menu" }
-            .clickable { panel = !panel }, contentAlignment = Alignment.Center) {
+            .clickable(remember { MutableInteractionSource() }, null) { panel = !panel }, contentAlignment = Alignment.Center) {
             Image(painterResource(R.drawable.secpar_mark), null, Modifier.size(MenuTokens.LOGO.dp))
         }
         val strip = state.showPerf || state.resizeNotice
