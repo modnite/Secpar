@@ -12,7 +12,7 @@ Remote desktop for Windows, Linux and Android. Sign in with the same account on 
 |---|---|---|
 | Windows 10 and 11 | `Secpar-Windows-x64-setup.exe` | Host and client |
 | Linux x86-64 | `Secpar-Linux-x64.AppImage` | Host and client |
-| Android | `Secpar.apk` | Client |
+| Android and Android TV | `Secpar.apk` | Client |
 
 Each package is one app. On Windows and Linux the same app hosts this computer and connects to others. The apps check for updates and install them when you choose to.
 
@@ -37,7 +37,7 @@ The [help page](https://secpar.win/help/) covers setup, the stream menu, setting
 - Linux hosting needs a signed-in desktop session. It is tested on KDE Plasma (Wayland). The desktop asks once for permission to share the screen. Typing at the Linux lock screen needs write access to `/dev/uinput`.
 - The virtual display is available on Windows only.
 - Router ports (UPnP) are available on Windows only.
-- Android connects to computers; it does not host.
+- Android connects to computers; it does not host. The same APK runs on phones, tablets, Android TV and Chromecast with Google TV.
 - macOS and iOS are not supported.
 
 ## Build
