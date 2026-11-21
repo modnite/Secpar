@@ -6,7 +6,7 @@ on:
         description: Service to deploy
         type: choice
         options: [accounts, relay, both]
-        default: accounts
+        default: relay
 permissions:
   contents: read
 concurrency:
@@ -21,6 +21,13 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       SECPAR_SERVICE: ${{ inputs.service }}
     steps:
+      # The account service runs on the self-hosted box behind a tunnel since 2026-11-21.
+      # Deploying the Worker would take accounts.secpar.win back with an out-of-date database.
+      - name: Refuse to deploy the self-hosted account service
+        if: inputs.service == 'accounts' || inputs.service == 'both'
+        run: |
+          echo "The account service is self-hosted; deploy it on the box instead." >&2
+          exit 1
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
