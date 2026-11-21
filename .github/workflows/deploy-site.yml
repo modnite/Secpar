@@ -18,7 +18,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, Linux, X64, secpar]
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       SECPAR_SERVICE: site
@@ -37,15 +37,21 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node cloud/site/generate-downloads.mjs
       - name: Build the blog with Hugo
+        timeout-minutes: 25
         env:
           HUGO_VERSION: '0.170.1'
           HUGO_SHA256: '841a5462853aefc9942e4de1e8a5d75584b6a5181941e6ad3f1d745190e03cd8'
         run: |
-          tmp="$(mktemp -d)"
-          curl --fail --location --max-time 120 -o "$tmp/hugo.tar.gz" "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_${HUGO_VERSION}_linux-amd64.tar.gz"
-          echo "${HUGO_SHA256}  $tmp/hugo.tar.gz" | sha256sum --check --strict
-          tar -xzf "$tmp/hugo.tar.gz" -C "$tmp" hugo
-          "$tmp/hugo" --source cloud/blog --destination "$GITHUB_WORKSPACE/cloud/site/public/blog" --cleanDestinationDir --panicOnWarning
+          # Kept in the runner's tool cache: the runner downloads slowly, so Hugo is fetched once per version.
+          dir="${RUNNER_TOOL_CACHE:-$HOME/.cache}/hugo/${HUGO_VERSION}"
+          if [ ! -x "$dir/hugo" ]; then
+            tmp="$(mktemp -d)"
+            curl --fail --location --retry 3 --max-time 1200 -o "$tmp/hugo.tar.gz" "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_${HUGO_VERSION}_linux-amd64.tar.gz"
+            echo "${HUGO_SHA256}  $tmp/hugo.tar.gz" | sha256sum --check --strict
+            mkdir -p "$dir" && tar -xzf "$tmp/hugo.tar.gz" -C "$dir" hugo && rm -rf "$tmp"
+          fi
+          "$dir/hugo" version
+          "$dir/hugo" --source cloud/blog --destination "$GITHUB_WORKSPACE/cloud/site/public/blog" --cleanDestinationDir --panicOnWarning
           test -f cloud/site/public/blog/index.html
       - name: Check the website code
         run: |
