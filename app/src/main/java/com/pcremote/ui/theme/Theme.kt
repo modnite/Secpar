@@ -100,6 +100,10 @@ fun MidnightTheme(
         outline = c.textDim, outlineVariant = c.border, error = c.bad,
     )
     CompositionLocalProvider(LocalMidnight provides c) {
-        MaterialTheme(colorScheme = scheme, typography = type, content = content)
+        MaterialTheme(colorScheme = scheme, typography = type) {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.foundation.LocalIndication provides FocusIndication(c.accent, androidx.compose.material3.ripple()),
+                content = content)
+        }
     }
 }

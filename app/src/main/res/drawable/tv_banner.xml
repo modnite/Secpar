@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV home screen banner (320 x 180 dp): the approved wordmark on black. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#000000" />
+            <size android:width="320dp" android:height="180dp" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/secpar_wordmark_light"
+        android:width="232dp" android:height="55.5dp" android:gravity="center" />
+</layer-list>

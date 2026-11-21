@@ -44,6 +44,10 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   send grid dropped frames whose timing drifted from it. Fixed in the next
   release; unconfirmed.
 - Remote connections from work once needed a restart of Secpar on the hosts.
+- Android TV (Chromecast with Google TV, 32-bit ARM) runs the same APK: it lists on the
+  TV home screen, every focusable control shows a 2dp accent outline, computer cards
+  outline as a whole, and the stream menu moves with the remote's arrows. The APK
+  carries armeabi-v7a as well as arm64-v8a; the unused QR scanner was removed (2.0 MB).
 - 4.2.0, not yet tried by the owner: 4:4:4 on real devices, the relay over TLS on
   a network that blocks UDP, KDE screen choice, the virtual display size, Linux
   lock screen input through uinput (owner sessions only) and Windows lock screen

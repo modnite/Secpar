@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -50,6 +51,17 @@ import com.pcremote.ui.theme.rememberHaptics
 @Composable
 fun Aurora(modifier: Modifier = Modifier, intensity: Float = 1f, screen: ImageBitmap? = null) {
     Box(modifier.fillMaxSize().background(LocalMidnight.current.bg))
+}
+
+/**
+ * A 2dp accent border while this element has focus, or with [within] while anything inside it does.
+ * For controls that set their own indication (Material icon buttons) and for whole cards.
+ */
+fun Modifier.focusRing(shape: Shape = MidnightShapes.control, within: Boolean = false): Modifier = composed {
+    val c = LocalMidnight.current
+    var on by remember { mutableStateOf(false) }
+    onFocusChanged { on = if (within) it.hasFocus else it.isFocused }
+        .then(if (on) Modifier.border(2.dp, c.accent, shape) else Modifier)
 }
 
 fun Modifier.glass(shape: Shape = MidnightShapes.card, strong: Boolean = false): Modifier = composed {
@@ -112,7 +124,7 @@ fun GlassCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, padd
 fun GlassIconButton(@DrawableRes icon: Int, label: String, onClick: () -> Unit, modifier: Modifier = Modifier, tint: Color? = null) {
     val c = LocalMidnight.current
     val haptics = rememberHaptics()
-    IconButton(onClick = { haptics.tick(); onClick() }, modifier = modifier.size(48.dp),
+    IconButton(onClick = { haptics.tick(); onClick() }, modifier = modifier.size(48.dp).focusRing(CircleShape),
         colors = IconButtonDefaults.iconButtonColors(containerColor = c.surface, contentColor = tint ?: c.text)) {
         Icon(painterResource(icon), label, modifier = Modifier.size(20.dp))
     }
@@ -152,9 +164,10 @@ fun FlatField(value: String, onChange: (String) -> Unit, hint: String, modifier:
     keyboardType: androidx.compose.ui.text.input.KeyboardType = androidx.compose.ui.text.input.KeyboardType.Text) {
     val c = LocalMidnight.current
     val shape = MidnightShapes.control
+    var focused by remember { mutableStateOf(false) }
     androidx.compose.foundation.text.BasicTextField(
-        value, onChange, modifier.heightIn(min = 34.dp).clip(shape).background(c.bg)
-            .border(1.dp, if (isError) c.bad else c.controlBorder, shape),
+        value, onChange, modifier.heightIn(min = 34.dp).onFocusChanged { focused = it.isFocused }.clip(shape).background(c.bg)
+            .border(if (focused) 2.dp else 1.dp, if (isError) c.bad else if (focused) c.accent else c.controlBorder, shape),
         singleLine = true,
         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = keyboardType),
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.text,
