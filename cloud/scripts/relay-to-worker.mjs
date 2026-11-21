@@ -24,6 +24,6 @@ if (tunnel) {
     config: { ingress: [{ hostname: "accounts.secpar.win", path: "^/__scheduled", service: "http_status:404" }, { hostname: "accounts.secpar.win", service: "http://127.0.0.1:8787", originRequest: {} }, { service: "http_status:404" }] },
   }, "route only the account service through the tunnel");
 }
-for (const r of await api(`/zones/${zone}/dns_records?name=${HOST}`)) await api(`/zones/${zone}/dns_records/${r.id}`, "DELETE", undefined, "remove the tunnel record");
+for (const r of (await api(`/zones/${zone}/dns_records?name=${HOST}`)).filter((r) => !r.meta?.read_only && r.type === "CNAME")) await api(`/zones/${zone}/dns_records/${r.id}`, "DELETE", undefined, "remove the tunnel record");
 await api(`/accounts/${account}/workers/domains`, "PUT", { hostname: HOST, service: "secpar-rendezvous", environment: "production", zone_id: zone }, "give the name back to the Worker");
 console.log(`${HOST} is on its Worker again.`);
