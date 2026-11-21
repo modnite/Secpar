@@ -194,14 +194,18 @@ impl Backend {
                 timer.tick().await;
                 let Some(host) = weak.upgrade() else { break };
                 let Ok(account) = &host.account else { continue };
-                let owner = account.state().await.owner;
+                let account_state = account.state().await;
+                let owner = account_state.owner;
                 let presence = {
                     let (connected, guests) = host.agent.lock().unwrap().as_ref()
                         .map(|a| (a.connected(), a.guests())).unwrap_or_default();
                     let names = host.friends.lock().unwrap().clone();
                     let store = host.store.lock().unwrap();
-                    let viewers: Vec<String> = store.devices().into_iter().filter(|d| connected.contains(&d.id)).map(|d| d.name)
+                    // The owner's own devices go out under the owner's username, friends under theirs.
+                    let mine = account_state.owner_handle.clone();
+                    let mut viewers: Vec<String> = store.devices().into_iter().filter(|d| connected.contains(&d.id)).map(|d| mine.clone().unwrap_or(d.name))
                         .chain(guests.iter().map(|id| names.get(id).cloned().unwrap_or_else(|| "A friend".into()))).collect();
+                    viewers.dedup();
                     secpar_host_core::account::Presence::new(true, store.id(), Some(secpar_host_core::rendezvous::FRIENDS_URL))
                         .with_viewers(viewers)
                 };
@@ -450,6 +454,7 @@ impl Backend {
                 Arc::new(move || crate::rendezvous::turn_server(&store, base)) as stream::RelayProvider
             }),
             gate,
+            last_start: None,
         })
     }
 }
@@ -479,6 +484,18 @@ struct OwnerSession {
     relay: Option<stream::RelayProvider>,
     /// Set for a friend's session. The agent filters first; this is the second check.
     gate: Option<Gate>,
+    /// The last `stream.start`, so `stream.display` can restart the stream on another screen.
+    last_start: Option<ClientMsg>,
+}
+
+/// The screens a client may pick: the first one shared, those picked since, and a new one (the
+/// sharing dialog then opens on this computer).
+fn screen_list(store: &Store) -> Vec<secpar_host_core::Display> {
+    let screen = |id: &str, name: &str, primary| secpar_host_core::Display { id: id.into(), name: name.into(), primary, rect: [0; 4] };
+    let mut list = vec![screen("portal", "Screen 1", true)];
+    list.extend(store.screens().iter().map(|(id, name)| screen(id, name, false)));
+    list.push(screen("new", "Another screen (choose it on this computer)", false));
+    list
 }
 impl OwnerSession {
     fn stop(&self) {
@@ -520,15 +537,28 @@ impl OwnerSession {
         tokio::spawn(async move {
             // The preview holds its own screen-sharing session. Close it so the stream has the screen.
             thumbs.release().await;
-            let token = store.lock().unwrap().portal_token();
+            let display = if options.display.is_empty() { "portal".to_string() } else { options.display.clone() };
+            let token = match display.as_str() {
+                "portal" => store.lock().unwrap().portal_token(),
+                "new" => None,
+                id => store.lock().unwrap().screen_token(id),
+            };
             let portal =
                 tokio::select! {r=Portal::open(token.as_deref())=>r,_=cancel.changed()=>return};
             let result = match portal {
                 Ok(portal) => {
-                    let _ = store
-                        .lock()
-                        .unwrap()
-                        .set_portal_token(portal.restore_token.clone());
+                    let mut options = options;
+                    options.display = {
+                        let mut store = store.lock().unwrap();
+                        if display == "portal" {
+                            let _ = store.set_portal_token(portal.restore_token.clone());
+                            display
+                        } else {
+                            let id = (display != "new").then_some(display.as_str());
+                            store.save_screen(id, portal.restore_token.clone(), (portal.width, portal.height)).unwrap_or(display.clone())
+                        }
+                    };
+                    options.displays = screen_list(&store.lock().unwrap());
                     Stream::start(portal, options, out.clone(), guard).await
                 }
                 Err(e) => Err(e),
@@ -565,7 +595,18 @@ impl Session for OwnerSession {
         {
             return Some(ServerMsg::error("forbidden", "This is not allowed for a friend.", Some(msg.t())));
         }
+        if matches!(msg, ClientMsg::StreamStart { .. }) {
+            self.last_start = Some(msg.clone());
+        }
         match msg {
+            // Another screen: the same stream settings, started again on that screen.
+            ClientMsg::StreamDisplay { id } => {
+                let Some(ClientMsg::StreamStart { w, h, fps, codecs, max_kbps, audio, cands, chroma, .. }) = self.last_start.clone() else {
+                    return Some(ServerMsg::error("bad_request", "No stream to move", Some("stream.display")));
+                };
+                self.stop();
+                self.on_msg(ClientMsg::StreamStart { w, h, fps, codecs, max_kbps, audio, cands, chroma, display: id })
+            }
             ClientMsg::MediaSub { on } => {
                 if let Some(task) = self.media_task.take() {
                     task.abort();
@@ -690,7 +731,8 @@ impl Session for OwnerSession {
                 max_kbps,
                 audio,
                 cands,
-                ..
+                chroma,
+                display,
             } => {
                 // Settings › Picture on this computer: a quality limit caps what the device asks
                 // for, and the encoder choice is tried first.
@@ -718,6 +760,9 @@ impl Session for OwnerSession {
                     relay: self.relay.clone(),
                     pads: self.pads.clone(),
                     gate: self.gate.clone(),
+                    chroma444: chroma == "444",
+                    display,
+                    displays: Vec::new(),
                 });
                 None
             }

@@ -1,5 +1,8 @@
-//! Input is confined to the exact consented portal session used for capture.
+//! Input is confined to the exact consented portal session used for capture. The one exception is
+//! the owner's own session while the desktop is locked: the lock screen ignores portal input, so
+//! the owner's keys and pointer then go through a virtual keyboard and pointer (uinput) instead.
 use crate::portal::Portal;
+use crate::uinput::{Desk, DESK_RANGE};
 use ashpd::desktop::remote_desktop::{Axis, KeyState};
 use crate::pointer::{absolute, to_stream, CursorMode, Space, Tracker};
 use secpar_host_core::proto::ClientMsg;
@@ -22,13 +25,22 @@ pub struct Input {
     /// The newest pointer position for the sender task. Only the latest is delivered, so a burst
     /// of moves never queues up behind the desktop's answers.
     moves: Option<tokio::sync::watch::Sender<(f64, f64)>>,
+    /// The owner's session (not a friend's): only it may type into the lock screen.
+    owner: bool,
+    /// Whether the last input went to the lock screen.
+    was_locked: bool,
+    /// The virtual keyboard and pointer, made the first time the owner meets the lock screen.
+    desk: Option<(Desk, Desk)>,
+    desk_failed: bool,
+    desk_keys: BTreeSet<u16>,
+    desk_buttons: BTreeSet<u16>,
 }
 /// A picture size shared between the video thread and the input task.
 pub fn pack_size(w: u32, h: u32) -> u64 {
     (w as u64) << 32 | h as u64
 }
 impl Input {
-    pub fn new(portal: Arc<Portal>, stream: Arc<AtomicU64>) -> Self {
+    pub fn new(portal: Arc<Portal>, stream: Arc<AtomicU64>, owner: bool) -> Self {
         Self {
             tracker: Tracker::new((portal.width, portal.height)),
             portal,
@@ -36,6 +48,101 @@ impl Input {
             buttons: BTreeSet::new(),
             stream,
             moves: None,
+            owner,
+            was_locked: false,
+            desk: None,
+            desk_failed: false,
+            desk_keys: BTreeSet::new(),
+            desk_buttons: BTreeSet::new(),
+        }
+    }
+    /// The virtual devices, made on first use. None when /dev/uinput cannot be used: input then
+    /// goes to the portal as before.
+    fn desk(&mut self) -> Option<&(Desk, Desk)> {
+        if self.desk.is_none() && !self.desk_failed {
+            match Desk::keyboard().and_then(|k| Ok((k, Desk::pointer()?))) {
+                Ok(devices) => self.desk = Some(devices),
+                Err(_) => self.desk_failed = true,
+            }
+        }
+        self.desk.as_ref()
+    }
+    /// Releases what is held on the virtual devices.
+    fn release_desk(&mut self) {
+        if let Some((keyboard, pointer)) = &self.desk {
+            for code in std::mem::take(&mut self.desk_keys) {
+                let _ = keyboard.key(code, false);
+            }
+            for button in std::mem::take(&mut self.desk_buttons) {
+                let _ = pointer.key(button, false);
+            }
+        }
+    }
+    /// The owner's input while the desktop is locked, through the virtual devices.
+    fn apply_locked(&mut self, message: ClientMsg) {
+        let (w, h) = (self.portal.width, self.portal.height);
+        match message.sanitize() {
+            ClientMsg::MouseMove { dx, dy } => {
+                if !self.tracker.known() {
+                    self.tracker.set(self.tracker.center());
+                }
+                self.tracker.relative(dx, dy);
+                let (x, y) = desk_pos(self.tracker.pos(), (w, h));
+                if let Some((_, pointer)) = self.desk() {
+                    let _ = pointer.to(x, y);
+                }
+            }
+            ClientMsg::MousePos { x, y } => {
+                let pos = absolute(x, y, (w, h));
+                self.tracker.set(pos);
+                let (x, y) = desk_pos(pos, (w, h));
+                if let Some((_, pointer)) = self.desk() {
+                    let _ = pointer.to(x, y);
+                }
+            }
+            ClientMsg::MouseButton { b, down } => {
+                let Some(button) = button_code(&b) else { return };
+                let button = button as u16;
+                if down {
+                    self.desk_buttons.insert(button);
+                } else {
+                    self.desk_buttons.remove(&button);
+                }
+                if let Some((_, pointer)) = self.desk() {
+                    let _ = pointer.key(button, down);
+                }
+            }
+            ClientMsg::MouseScroll { dx, dy } => {
+                if let Some((_, pointer)) = self.desk() {
+                    let _ = pointer.wheel(dx, dy);
+                }
+            }
+            ClientMsg::Key { vk, down } => {
+                let Some(code) = evdev_key(vk) else { return };
+                let code = code as u16;
+                if down {
+                    self.desk_keys.insert(code);
+                } else {
+                    self.desk_keys.remove(&code);
+                }
+                if let Some((keyboard, _)) = self.desk() {
+                    let _ = keyboard.key(code, down);
+                }
+            }
+            ClientMsg::Text { s: text } => {
+                let Some((keyboard, _)) = self.desk() else { return };
+                for (code, shift) in text.chars().take(1000).filter_map(char_key) {
+                    if shift {
+                        let _ = keyboard.key(SHIFT, true);
+                    }
+                    let _ = keyboard.key(code, true);
+                    let _ = keyboard.key(code, false);
+                    if shift {
+                        let _ = keyboard.key(SHIFT, false);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     /// Moves the pointer to `pos` without waiting for the desktop.
@@ -76,6 +183,20 @@ impl Input {
     pub async fn apply(&mut self, message: ClientMsg) -> Result<(), String> {
         if self.portal.is_closed() {
             return Err("Desktop sharing was closed.".into());
+        }
+        let locked = self.owner && crate::lock::locked() && self.desk().is_some();
+        if locked != self.was_locked {
+            // Nothing stays held on the side the input is leaving.
+            if locked {
+                self.release_portal().await
+            } else {
+                self.release_desk()
+            }
+            self.was_locked = locked;
+        }
+        if locked {
+            self.apply_locked(message);
+            return Ok(());
         }
         let p = &self.portal;
         let s = &p.session;
@@ -173,6 +294,10 @@ impl Input {
     }
     /// Release only this session's held input before disconnect/revocation.
     pub async fn release_all(&mut self) {
+        self.release_desk();
+        self.release_portal().await;
+    }
+    async fn release_portal(&mut self) {
         for code in std::mem::take(&mut self.keys) {
             let _ = self
                 .portal
@@ -198,6 +323,38 @@ impl Input {
                 .await;
         }
     }
+}
+/// A compositor position on the virtual pointer's range.
+fn desk_pos(pos: (f64, f64), logical: (u32, u32)) -> (i32, i32) {
+    let axis = |v: f64, n: u32| ((v / (n.max(2) - 1) as f64).clamp(0.0, 1.0) * DESK_RANGE as f64).round() as i32;
+    (axis(pos.0, logical.0), axis(pos.1, logical.1))
+}
+const SHIFT: u16 = 42;
+/// A typed character as a key on a US keyboard, and whether it needs Shift. The lock screen gets
+/// keys, not characters; characters with no key are left out.
+fn char_key(c: char) -> Option<(u16, bool)> {
+    const ROWS: [(&str, &str, u16); 4] = [
+        ("1234567890-=", "!@#$%^&*()_+", 2),
+        ("qwertyuiop[]", "QWERTYUIOP{}", 16),
+        ("asdfghjkl;'`", "ASDFGHJKL:\"~", 30),
+        ("\\zxcvbnm,./", "|ZXCVBNM<>?", 43),
+    ];
+    match c {
+        ' ' => return Some((57, false)),
+        '\n' | '\r' => return Some((28, false)),
+        '\t' => return Some((15, false)),
+        '\u{8}' => return Some((14, false)),
+        _ => {}
+    }
+    for (plain, shifted, first) in ROWS {
+        if let Some(i) = plain.chars().position(|p| p == c) {
+            return Some((first + i as u16, false));
+        }
+        if let Some(i) = shifted.chars().position(|p| p == c) {
+            return Some((first + i as u16, true));
+        }
+    }
+    None
 }
 fn button_code(name: &str) -> Option<i32> {
     Some(match name {
@@ -320,6 +477,40 @@ pub fn virtual_key(code:u32)->Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_characters_become_us_keys_for_the_lock_screen() {
+        assert_eq!(char_key('a'), Some((30, false)));
+        assert_eq!(char_key('Q'), Some((16, true)));
+        assert_eq!(char_key('1'), Some((2, false)));
+        assert_eq!(char_key('!'), Some((2, true)));
+        assert_eq!(char_key('0'), Some((11, false)));
+        assert_eq!(char_key('`'), Some((41, false)));
+        assert_eq!(char_key('~'), Some((41, true)));
+        assert_eq!(char_key('\\'), Some((43, false)));
+        assert_eq!(char_key('|'), Some((43, true)));
+        assert_eq!(char_key('z'), Some((44, false)));
+        assert_eq!(char_key('/'), Some((53, false)));
+        assert_eq!(char_key('?'), Some((53, true)));
+        assert_eq!(char_key('"'), Some((40, true)));
+        assert_eq!(char_key('\n'), Some((28, false)));
+        assert_eq!(char_key('é'), None);
+        // Every mapped character is the key the physical-key mapping gives for the same Windows key.
+        let windows = "1234567890qwertyuiopasdfghjklzxcvbnm";
+        for c in windows.chars() {
+            let vk = c.to_ascii_uppercase() as u32;
+            assert_eq!(char_key(c).unwrap().0 as i32, evdev_key(vk).unwrap(), "{c}");
+        }
+        for (c, vk) in [(';', 0xBA), ('=', 0xBB), (',', 0xBC), ('-', 0xBD), ('.', 0xBE), ('/', 0xBF), ('`', 0xC0), ('[', 0xDB), ('\\', 0xDC), (']', 0xDD), ('\'', 0xDE)] {
+            assert_eq!(char_key(c).unwrap().0 as i32, evdev_key(vk).unwrap(), "{c}");
+        }
+    }
+    #[test]
+    fn lock_screen_pointer_spans_the_virtual_range() {
+        assert_eq!(desk_pos((0.0, 0.0), (1920, 1080)), (0, 0));
+        assert_eq!(desk_pos((1919.0, 1079.0), (1920, 1080)), (DESK_RANGE, DESK_RANGE));
+        assert_eq!(desk_pos((959.5, 539.5), (1920, 1080)), (32768, 32768));
+        assert_eq!(desk_pos((5000.0, -3.0), (1920, 1080)), (DESK_RANGE, 0));
+    }
     #[test]
     fn inverse_key_mapping_preserves_physical_keys_and_modifier_sides() {
         for (code,vk) in [(125,0x5B),(126,0x5C),(29,0xA2),(97,0xA3),(56,0xA4),(100,0xA5),(42,0xA0),(54,0xA1),(18,0x45),(15,0x09)] {

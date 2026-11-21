@@ -445,7 +445,7 @@ mod tests {
     fn a_gamepad_only_grant_gets_no_desktop_view_or_keyboard() {
         let g = gate(&["gamepad"], "view");
         assert!(allowed(ClientMsg::Pad { id: 0, btn: 0, lt: 0, rt: 0, lx: 0, ly: 0, rx: 0, ry: 0 }, &g));
-        assert!(matches!(verdict(&ClientMsg::StreamStart { w: 0, h: 0, fps: 0, codecs: vec![], max_kbps: 0, audio: false, cands: vec![], display: String::new() }, &g), Verdict::Deny));
+        assert!(matches!(verdict(&ClientMsg::StreamStart { w: 0, h: 0, fps: 0, codecs: vec![], max_kbps: 0, audio: false, cands: vec![], display: String::new(), chroma: String::new() }, &g), Verdict::Deny));
         assert!(matches!(verdict(&key(), &g), Verdict::Drop));
         assert!(!out_allowed(&ServerMsg::StreamError { code: "x".into(), msg: "x".into() }, &g));
     }

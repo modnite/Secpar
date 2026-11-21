@@ -11,7 +11,11 @@ pub enum Matrix {
 
 #[derive(Clone)]
 pub struct Picture {
+    /// The decoded frame's size. A packed frame is twice the shown picture's height.
     pub size: [usize; 2],
+    /// 4:4:4 packed into a 4:2:0 frame (host convert_ps): luma rows [0,h) are Y, rows [h,2h)
+    /// are Cb at full resolution, and the chroma plane holds Cr for pixels 2x and 2x+1.
+    pub packed: bool,
     /// `size[0] * size[1]` bytes.
     pub y: Vec<u8>,
     /// `ceil(w/2) * 2 * ceil(h/2)` bytes, U then V per chroma sample.
@@ -54,7 +58,7 @@ impl Picture {
                 uv.push(vr[x]);
             }
         }
-        Some(Self { size, y: luma, uv })
+        Some(Self { size, y: luma, uv, packed: false })
     }
 
     pub fn from_nv12(size: [usize; 2], y: (&[u8], usize), uv: (&[u8], usize)) -> Option<Self> {
@@ -74,7 +78,7 @@ impl Picture {
         for row in 0..ch {
             chroma_plane.extend_from_slice(&uv.0[row * uv.1..row * uv.1 + cw * 2]);
         }
-        Some(Self { size, y: luma, uv: chroma_plane })
+        Some(Self { size, y: luma, uv: chroma_plane, packed: false })
     }
 
     /// Review-only: eight limited-range BT.709 colour bars for checking the shader.
@@ -101,19 +105,30 @@ impl Picture {
                 uv.push(v.round() as u8);
             }
         }
-        Self { size: [w, h], y, uv }
+        Self { size: [w, h], y, uv, packed: false }
     }
 
     pub fn chroma_size(&self) -> [usize; 2] {
         chroma(self.size)
     }
 
+    /// The picture to show: a packed frame's top half.
+    pub fn shown_size(&self) -> [usize; 2] {
+        if self.packed { [self.size[0], self.size[1] / 2] } else { self.size }
+    }
+
     /// Limited-range YCbCr to 8-bit RGB. Used by tests and the no-GPU fallback.
     pub fn rgb_at(&self, x: usize, y: usize, matrix: Matrix) -> [u8; 3] {
         let [cw, _] = self.chroma_size();
-        let luma = self.y[y * self.size[0] + x] as f32;
-        let at = ((y / 2) * cw + x / 2) * 2;
-        let (u, v) = (self.uv[at] as f32 - 128.0, self.uv[at + 1] as f32 - 128.0);
+        let w = self.size[0];
+        let luma = self.y[y * w + x] as f32;
+        let (u, v) = if self.packed {
+            let h = self.size[1] / 2;
+            (self.y[(y + h) * w + x] as f32 - 128.0, self.uv[(y * cw + x / 2) * 2 + (x & 1)] as f32 - 128.0)
+        } else {
+            let at = ((y / 2) * cw + x / 2) * 2;
+            (self.uv[at] as f32 - 128.0, self.uv[at + 1] as f32 - 128.0)
+        };
         let l = 1.164_383 * (luma - 16.0);
         let (r, g, b) = match matrix {
             Matrix::Bt709 => (l + 1.792_741 * v, l - 0.213_249 * u - 0.532_909 * v, l + 2.112_402 * u),
@@ -123,20 +138,50 @@ impl Picture {
     }
 
     pub fn to_color_image(&self, matrix: Matrix) -> ColorImage {
-        let [w, h] = self.size;
+        let [w, h] = self.shown_size();
         let mut rgb = Vec::with_capacity(w * h * 3);
         for y in 0..h {
             for x in 0..w {
                 rgb.extend_from_slice(&self.rgb_at(x, y, matrix));
             }
         }
-        ColorImage::from_rgb(self.size, &rgb)
+        ColorImage::from_rgb([w, h], &rgb)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The layout the Windows host packs (convert_ps, tested there on the GPU): neighbouring
+    /// pixels of different colours come back as themselves, not as their average.
+    #[test]
+    fn packed_frames_unpack_to_each_pixels_own_colour() {
+        let (w, h) = (8usize, 4usize);
+        let colour = |x: usize| if x % 2 == 0 { [255.0, 0.0, 0.0] } else { [0.0, 0.0, 255.0] };
+        let ycc = |[r, g, b]: [f32; 3]| {
+            let (r, g, b) = (r / 255.0, g / 255.0, b / 255.0);
+            let l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            [16.0 + 219.0 * l, 128.0 + 224.0 * (b - l) / 1.8556, 128.0 + 224.0 * (r - l) / 1.5748].map(|v: f32| v.round() as u8)
+        };
+        let mut y = vec![0u8; w * h * 2];
+        let mut uv = vec![0u8; w * h];
+        for r in 0..h {
+            for x in 0..w {
+                let [l, cb, cr] = ycc(colour(x));
+                y[r * w + x] = l;
+                y[(r + h) * w + x] = cb;
+                uv[(r * (w / 2) + x / 2) * 2 + (x & 1)] = cr;
+            }
+        }
+        let p = Picture { size: [w, h * 2], y, uv, packed: true };
+        assert_eq!(p.shown_size(), [w, h]);
+        let red = p.rgb_at(2, 1, Matrix::Bt709);
+        let blue = p.rgb_at(3, 1, Matrix::Bt709);
+        assert!(red[0] > 245 && red[2] < 10, "{red:?}");
+        assert!(blue[2] > 245 && blue[0] < 10, "{blue:?}");
+        assert_eq!(p.to_color_image(Matrix::Bt709).size, [w, h]);
+    }
 
     #[test]
     fn padded_i420_rows_are_packed_and_chroma_is_interleaved() {

@@ -36,6 +36,10 @@ pub struct Config {
     pub files_dir: String,
     /// Other devices and friends see a still of this screen. Off keeps the screen private.
     pub previews: bool,
+    /// A screen that exists only for streaming (win::vdd).
+    pub virtual_display: bool,
+    /// Its size, `WIDTHxHEIGHT`, one of win::vdd::SIZES.
+    pub virtual_size: String,
 }
 
 impl Default for Config {
@@ -52,6 +56,8 @@ impl Default for Config {
             // empty: the signed-in user's Downloads\Secpar (see Store::files_dir)
             files_dir: String::new(),
             previews: true,
+            virtual_display: false,
+            virtual_size: "1920x1080".into(),
         }
     }
 }

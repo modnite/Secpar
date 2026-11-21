@@ -12,6 +12,8 @@ pub struct Settings {
     pub width:u32, pub height:u32, pub fps:u32, pub kbps:u32,
     pub audio:bool, pub clipboard:bool, pub shortcut:CaptureShortcut,
     pub decoder:video::Preference,
+    /// Ask for 4:4:4 colour: sharper coloured text, about twice the video to send.
+    pub full_colour:bool,
     /// Where Files downloads go. Empty means Downloads/Secpar.
     pub files_dir:String,
     /// While streaming, Win, Alt+Tab, Alt+F4 and the like go to the host (Windows keyboard hook).
@@ -22,7 +24,7 @@ pub struct Settings {
     #[serde(skip)] note:String,
 }
 impl Default for Settings {
-    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),files_dir:String::new(),system_keys:true,escape:keys::EscapeKeys::default(),active_decoder:None,note:String::new()}}
+    fn default()->Self {Self{width:1280,height:720,fps:60,kbps:30000,audio:true,clipboard:true,shortcut:CaptureShortcut::default(),decoder:video::Preference::default(),full_colour:false,files_dir:String::new(),system_keys:true,escape:keys::EscapeKeys::default(),active_decoder:None,note:String::new()}}
 }
 /// Host native first, then largest to smallest. The stream menu uses the same list.
 pub(crate) const RESOLUTIONS:[(u32,u32);6]=[(0,0),(3840,2160),(2560,1440),(1920,1080),(1280,720),(854,480)];
@@ -87,6 +89,7 @@ impl Settings {
                     None=>"Checking hardware decoding",
                 });
             });
+            design::switch_row(ui,&mut self.full_colour,"Full colour (4:4:4)");
             if let Some(active)=&self.active_decoder {ui.label(egui::RichText::new(active).size(12.).color(design::MUTED));ui.add_space(4.);}
         });
         design::group(ui,"Sound and clipboard",|ui| {

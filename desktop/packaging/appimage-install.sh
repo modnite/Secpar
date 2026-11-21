@@ -22,4 +22,4 @@ quoted=$(printf '%s' "$app_home/Secpar.AppImage" | sed 's/\\/\\\\/g; s/"/\\"/g; 
 printf '%s\n' '[Desktop Entry]' 'Type=Application' 'Name=Secpar' "Exec=\"$quoted\"" 'Icon=com.secpar.desktop' 'StartupWMClass=secpar-desktop' 'Terminal=false' 'Categories=Network;RemoteAccess;' > "$data_home/applications/com.secpar.desktop.desktop"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$data_home/applications" >/dev/null 2>&1 || true
 command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
-exec "$app_home/Secpar.AppImage"
+exec "$app_home/Secpar.AppImage" --restarted

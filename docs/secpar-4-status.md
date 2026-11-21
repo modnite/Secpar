@@ -1,6 +1,6 @@
 ﻿# Secpar 4: where it stands
 
-Last updated 2026-11-20. Branch `secpar-4`, merged into `main` for each release.
+Last updated 2026-11-21. Branch `secpar-4`, merged into `main` for each release.
 Read this first, then `docs/user-requirements.md` for what the owner wants.
 Update this file after each result the owner confirms.
 
@@ -28,6 +28,10 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
 - Linux pointer lines up with the device's cursor (4.0.10); Show pointer in
   picture off removes the remaining lag.
 - Smaller packages without the embedded engines (4.0.9).
+- 4.2.0: one Secpar per Linux machine, usernames for who is connected, list padding,
+  and the virtual display without a trailing pointer. The driver runs as LOCAL
+  SERVICE and reads its settings from `%ProgramData%\Secpar Virtual Display`;
+  Secpar's own data folder is closed to it.
 
 ## Open
 
@@ -40,3 +44,7 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   send grid dropped frames whose timing drifted from it. Fixed in the next
   release; unconfirmed.
 - Remote connections from work once needed a restart of Secpar on the hosts.
+- 4.2.0, not yet tried by the owner: 4:4:4 on real devices, the relay over TLS on
+  a network that blocks UDP, KDE screen choice, the virtual display size, Linux
+  lock screen input through uinput (owner sessions only) and Windows lock screen
+  input after the per-session pointer change.

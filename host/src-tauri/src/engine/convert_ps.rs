@@ -31,6 +31,20 @@ float3 px(float2 o) {
     return s / (n * n);
 }
 float luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+float cb(float3 c) { return (128.0 + 224.0 * (c.b - luma(c)) / 1.8556) / 255.0; }
+float cr(float3 c) { return (128.0 + 224.0 * (c.r - luma(c)) / 1.5748) / 255.0; }
+// 4:4:4 packed into a 4:2:0 frame twice the height (outsz is the picture, not the frame):
+// luma rows [0,h) hold Y, rows [h,2h) hold Cb at full resolution, and the chroma plane
+// (w/2 by h) holds Cr: pixel 2x in its first channel, pixel 2x+1 in its second.
+float packed_y(V v) : SV_Target {
+    float2 p = v.p.xy;
+    if (p.y < outsz.y) return (16.0 + 219.0 * luma(px(p))) / 255.0;
+    return cb(px(p - float2(0, outsz.y)));
+}
+float2 packed_uv(V v) : SV_Target {
+    float2 p = float2(v.p.x * 2.0 - 0.5, v.p.y);
+    return float2(cr(px(p)), cr(px(p + float2(1, 0))));
+}
 float main_y(V v) : SV_Target { return (16.0 + 219.0 * luma(px(v.p.xy))) / 255.0; }
 float2 main_uv(V v) : SV_Target {
     float2 base = v.p.xy * 2.0;
@@ -47,6 +61,8 @@ float2 main_uv(V v) : SV_Target {
 
 pub struct Passes {
     ctx: ID3D11DeviceContext,
+    /// 4:4:4 packed into a double-height frame.
+    packed: bool,
     vs: ID3D11VertexShader,
     ps_y: ID3D11PixelShader,
     ps_uv: ID3D11PixelShader,
@@ -70,12 +86,12 @@ fn compile(entry: windows::core::PCSTR, target: windows::core::PCSTR) -> windows
 
 impl Passes {
     /// Fails (and the caller keeps the video processor) when the GPU can't render into NV12 planes.
-    pub fn new(dev: &ID3D11Device, ctx: &ID3D11DeviceContext, (iw, ih): (u32, u32), size: (u32, u32), outputs: &[ID3D11Texture2D]) -> windows::core::Result<Passes> {
+    pub fn new(dev: &ID3D11Device, ctx: &ID3D11DeviceContext, (iw, ih): (u32, u32), size: (u32, u32), outputs: &[ID3D11Texture2D], packed: bool) -> windows::core::Result<Passes> {
         // SAFETY: D3D11 creation calls with initialised descriptors; blobs are copied out first.
         unsafe {
             let vs_code = compile(s!("vs"), s!("vs_5_0"))?;
-            let y_code = compile(s!("main_y"), s!("ps_5_0"))?;
-            let uv_code = compile(s!("main_uv"), s!("ps_5_0"))?;
+            let y_code = compile(if packed { s!("packed_y") } else { s!("main_y") }, s!("ps_5_0"))?;
+            let uv_code = compile(if packed { s!("packed_uv") } else { s!("main_uv") }, s!("ps_5_0"))?;
             let (mut vs, mut ps_y, mut ps_uv) = (None, None, None);
             dev.CreateVertexShader(&vs_code, None, Some(&mut vs))?;
             dev.CreatePixelShader(&y_code, None, Some(&mut ps_y))?;
@@ -113,6 +129,7 @@ impl Passes {
             }
             Ok(Passes {
                 ctx: ctx.clone(),
+                packed,
                 vs: vs.expect("vs"),
                 ps_y: ps_y.expect("ps"),
                 ps_uv: ps_uv.expect("ps"),
@@ -123,6 +140,10 @@ impl Passes {
                 input: None,
             })
         }
+    }
+
+    pub fn packed(&self) -> bool {
+        self.packed
     }
 
     /// Renders `src` into output texture `idx`: luma pass, then chroma pass.
@@ -149,7 +170,9 @@ impl Passes {
             c.PSSetConstantBuffers(0, Some(&[Some(self.params.clone())]));
             let (w, h) = self.size;
             let (y, uv) = &self.views[idx];
-            for (view, ps, vw, vh) in [(y, &self.ps_y, w, h), (uv, &self.ps_uv, w / 2, h / 2)] {
+            // A packed frame is twice the picture's height: the chroma plane is w/2 by h.
+            let (fh, ch) = if self.packed { (h * 2, h) } else { (h, h / 2) };
+            for (view, ps, vw, vh) in [(y, &self.ps_y, w, fh), (uv, &self.ps_uv, w / 2, ch)] {
                 c.OMSetRenderTargets(Some(&[Some(view.clone())]), None);
                 c.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: vw as f32, Height: vh as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
                 c.PSSetShader(ps, None);

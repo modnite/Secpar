@@ -29,6 +29,8 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
     @Volatile private var lastFrom: InetSocketAddress? = null
     @Volatile var turn: TurnClient? = null; private set
     @Volatile private var closed = false
+    /** TURN over TLS, when UDP to the relay is blocked. Its address stands for the relay in [rawSend]. */
+    @Volatile private var tls: TlsLink? = null
 
     private val _route = kotlinx.coroutines.flow.MutableStateFlow("Connecting")
     val route: kotlinx.coroutines.flow.StateFlow<String> = _route
@@ -42,8 +44,12 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
         val p = DatagramPacket(buf, buf.size)
         while (!closed) {
             try { p.setData(buf); sock.receive(p) } catch (_: Exception) { if (closed) return else continue }
-            val from = p.socketAddress as InetSocketAddress
-            val n = p.length
+            dispatch(buf, p.length, p.socketAddress as InetSocketAddress)
+        }
+    }
+
+    /** One datagram, or one framed message from the TLS relay link. */
+    private fun dispatch(buf: ByteArray, n: Int, from: InetSocketAddress) {
             val first = buf[0].toInt() and 0xFF
             when {
                 first in 0x40..0x7F && from == turn?.server -> turn?.unwrap(buf, n)?.let { (data, peerAddr) -> offer(data, peerAddr) }
@@ -53,7 +59,6 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
                 }
                 else -> offer(buf.copyOf(n), from)
             }
-        }
     }
 
     private fun offer(b: ByteArray, from: InetSocketAddress) {
@@ -99,6 +104,13 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
 
     fun confirmed() = peer != null
 
+    /** Opens TURN over TLS (RFC 8656 over TCP framing) and returns the address that stands for it. */
+    fun openTls(host: String, port: Int): InetSocketAddress? {
+        val link = runCatching { TlsLink(host, port) { b, n, from -> dispatch(b, n, from) } }.onFailure { Log.w(TAG, "TURN over TLS: ${it.message}") }.getOrNull() ?: return null
+        tls = link
+        return link.addr
+    }
+
     /** Starts relaying through TURN: allocate, permit the host candidates, return the relayed address. */
     fun useTurn(server: InetSocketAddress, user: String, pass: String): InetSocketAddress? {
         val t = TurnClient(this, server, user, pass)
@@ -108,7 +120,10 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
         return relayed
     }
 
-    private fun rawSend(b: ByteArray, to: InetSocketAddress) { runCatching { sock.send(DatagramPacket(b, b.size, to)) } }
+    private fun rawSend(b: ByteArray, to: InetSocketAddress) {
+        val link = tls
+        if (link != null && to == link.addr) link.write(b) else runCatching { sock.send(DatagramPacket(b, b.size, to)) }
+    }
 
     internal fun sendRaw(b: ByteArray, to: InetSocketAddress) = rawSend(b, to)
 
@@ -142,6 +157,7 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
     override fun close() {
         closed = true
         turn?.close()
+        tls?.close()
         sock.close()
     }
 

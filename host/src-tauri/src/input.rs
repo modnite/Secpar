@@ -29,8 +29,8 @@ impl Btn {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Ev {
     Move { dx: i32, dy: i32 },
-    /// Absolute position on the streamed display ([STREAM_RECT]; the primary one when none), 0..=65535 on each axis.
-    Abs { x: i32, y: i32 },
+    /// Absolute position on `rect` (the session's streamed display; the primary one when none), 0..=65535 on each axis.
+    Abs { x: i32, y: i32, rect: Option<[i32; 4]> },
     Button { b: Btn, down: bool },
     Wheel(i32),
     HWheel(i32),
@@ -70,17 +70,26 @@ impl HeldSet {
 pub struct Input<E: Emitter> {
     e: E,
     held: HeldSet,
+    rect: Rect,
 }
 
 impl<E: Emitter> Input<E> {
     pub fn new(e: E) -> Self {
-        Input { e, held: HeldSet::default() }
+        Self::with_rect(e, Rect::default())
+    }
+
+    /// Input for one session: absolute positions land on the display that session streams.
+    pub fn with_rect(e: E, rect: Rect) -> Self {
+        Input { e, held: HeldSet::default(), rect }
     }
 
     pub fn handle(&mut self, m: &ClientMsg) -> Result<(), &'static str> {
         match m {
             ClientMsg::MouseMove { dx, dy } => self.e.emit(&[Ev::Move { dx: *dx, dy: *dy }]),
-            ClientMsg::MousePos { x, y } => self.e.emit(&[Ev::Abs { x: (x * 65535.0).round() as i32, y: (y * 65535.0).round() as i32 }]),
+            ClientMsg::MousePos { x, y } => {
+                let rect = *self.rect.lock().unwrap();
+                self.e.emit(&[Ev::Abs { x: (x * 65535.0).round() as i32, y: (y * 65535.0).round() as i32, rect }])
+            }
             ClientMsg::MouseScroll { dy, dx } => {
                 let evs: Vec<Ev> = [(*dy != 0).then_some(Ev::Wheel(*dy)), (*dx != 0).then_some(Ev::HWheel(*dx))]
                     .into_iter()
@@ -141,13 +150,13 @@ pub fn is_extended(vk: u16) -> bool {
     matches!(vk, 0x03 | 0x21..=0x28 | 0x2C..=0x2E | 0x5B..=0x5D | 0x6F | 0x90 | 0xA3 | 0xA5 | 0xA6..=0xB7)
 }
 
-/// The display being streamed, in desktop coordinates (left, top, right, bottom): `Ev::Abs` lands on it.
-/// ponytail: process-wide, fine while only one stream runs at a time (the engine enforces that).
-pub static STREAM_RECT: std::sync::Mutex<Option<[i32; 4]>> = std::sync::Mutex::new(None);
+/// The display one session streams, in desktop coordinates (left, top, right, bottom), while it
+/// streams. Each session has its own, so two windows on two displays each point at their own.
+pub type Rect = std::sync::Arc<std::sync::Mutex<Option<[i32; 4]>>>;
 
-fn abs(x: i32, y: i32) -> INPUT {
+fn abs(x: i32, y: i32, rect: Option<[i32; 4]>) -> INPUT {
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN};
-    let Some([l, t, r, b]) = *STREAM_RECT.lock().unwrap() else { return mouse(x, y, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE) };
+    let Some([l, t, r, b]) = rect else { return mouse(x, y, 0, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE) };
     // SAFETY: plain metric queries.
     let (vx, vy, vw, vh) = unsafe {
         (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN))
@@ -200,7 +209,7 @@ fn key(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
 fn to_input(ev: &Ev) -> INPUT {
     match *ev {
         Ev::Move { dx, dy } => mouse(dx, dy, 0, MOUSEEVENTF_MOVE),
-        Ev::Abs { x, y } => abs(x, y),
+        Ev::Abs { x, y, rect } => abs(x, y, rect),
         Ev::Wheel(v) => mouse(0, 0, v, MOUSEEVENTF_WHEEL),
         Ev::HWheel(v) => mouse(0, 0, v, MOUSEEVENTF_HWHEEL),
         Ev::Button { b, down } => {
@@ -298,7 +307,7 @@ mod tests {
             *rec.0.lock().unwrap(),
             vec![
                 Ev::Move { dx: -3, dy: 12 },
-                Ev::Abs { x: 32768, y: 65535 },
+                Ev::Abs { x: 32768, y: 65535, rect: None },
                 Ev::Wheel(120),
                 Ev::HWheel(-120),
                 Ev::Button { b: Btn::X2, down: true },

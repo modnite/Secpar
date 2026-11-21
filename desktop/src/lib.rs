@@ -42,6 +42,9 @@ mod tray;
 #[path = "tray_linux.rs"]
 mod tray;
 mod updates;
+mod viewer;
+#[cfg(target_os = "linux")]
+pub mod instance_linux;
 mod vault;
 use eframe::egui::{
     self, Color32, CursorGrab, Event as UiEvent, Key, TextureHandle, TextureOptions,
@@ -123,6 +126,11 @@ pub fn offer_file(path: String) -> Result<(), String> {
         .map_err(|_| "Could not start the file request")?
         .block_on(local_host::call("offer", serde_json::json!({"path":path})))?;
     Ok(())
+}
+
+/// A second display in its own window (`--view`, started by the main window).
+pub fn run_viewer() -> eframe::Result {
+    viewer::run()
 }
 
 pub fn run() -> eframe::Result {
@@ -227,6 +235,8 @@ struct App {
     page: Page,
     status: String,
     command: Option<mpsc::Sender<Command>>,
+    /// The stream's frames carry 4:4:4 packed.
+    full_colour: bool,
     events: Option<mpsc::Receiver<Event>>,
     computer: Option<Computer>,
     computer_account: Option<String>,
@@ -300,6 +310,8 @@ struct App {
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         design::configure(&cc.egui_ctx);
+        #[cfg(target_os = "linux")]
+        instance_linux::serve(cc.egui_ctx.clone());
         let _ = video::hardware_available(&cc.egui_ctx);
         let brand_scale = cc.egui_ctx.pixels_per_point();
         let image = image::load_from_memory(include_bytes!(
@@ -384,6 +396,7 @@ impl App {
             stream_stats: None,
             options,
             displays: vec![],
+            full_colour: false,
             display: String::new(),
             cursor: (0, 0, false),
             cursor_shape: None,
@@ -413,6 +426,7 @@ impl App {
             app.texture=Some(cc.egui_ctx.load_texture("Stream sample",image,TextureOptions::LINEAR));
             app.dimensions=[1280,720];app.stream_fps=60;app.status="Direct".into();
             app.client.active_decoder=Some("H.264 · software".into());app.stream_stats=Some((Some(2),18.4,60.));
+            app.displays=vec![("1".into(),"Display 1".into()),("2".into(),"Display 2".into())];app.display="1".into();
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("bars")) {
                 if let Some(handle)=&app.gpu {gpu::submit(handle,picture::Picture::bars(1280,720));app.gpu_live=true;}
             }
@@ -528,6 +542,7 @@ impl App {
         self.stream_stats=None;
         let options = Options {
             audio: self.client.audio && guest.as_ref().is_none_or(|g|g.allows("audio")),
+            chroma444: self.client.full_colour,
             audio_sink:Some(self.audio_route.sink()),
             video_sink:Some(self.video_route.sink()),
             clipboard,
@@ -819,6 +834,7 @@ impl App {
                 Event::AudioUnavailable(error)=>self.notice=Some(format!("Host audio: {error}")),
                 Event::ClipboardUnavailable(error)=>{self.clipboard=None;self.notice=Some(error);},
                 Event::Clipboard(text)=>{if let Some(bridge)=&self.clipboard {bridge.set(text);}},
+                Event::FullColour(on)=>self.full_colour=on,
                 Event::StreamInfo{width,height,fps}=>{
                     let first = self.before_stream.is_none();
                     self.dimensions=[width as usize,height as usize];self.stream_fps=fps;self.resize_wait=None;
@@ -935,8 +951,9 @@ impl App {
                 self.send(Command::Stop);
             }
             if output.request_key { self.send(Command::Keyframe); }
-            if let Some(picture) = output.image {
-                self.dimensions = picture.size;
+            if let Some(mut picture) = output.image {
+                picture.packed = self.full_colour && picture.size[1] % 2 == 0;
+                self.dimensions = picture.shown_size();
                 let gpu = self.gpu.clone().filter(|handle| !gpu::failed(handle));
                 self.gpu_live = gpu.is_some();
                 let image = match gpu {
@@ -1118,7 +1135,8 @@ impl eframe::App for App {
         self.manage_key_hook(ctx);
         #[cfg(any(windows, target_os = "linux"))]
         if let Some(tray) = &self.tray {
-            tray.set_connected(self.command.is_some());
+            let stop = self.command.clone().map(|tx| Box::new(move || { let _ = tx.try_send(Command::Stop); }) as Box<dyn Fn() + Send>);
+            tray.set_connected(self.command.is_some(), stop);
             if tray.take_disconnect() && self.command.is_some() {
                 self.capture(ctx, false);
                 self.send(Command::Stop);
@@ -1361,7 +1379,7 @@ impl eframe::App for App {
                             });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
                                 if design::icon_button(ui,icons::Icon::Close,"Dismiss").clicked(){self.connection_error=None;}
-                                if design::icon_button(ui,icons::Icon::Copy,"Copy the error").clicked(){ui.ctx().copy_text(error.clone());}
+                                if design::icon_button(ui,icons::Icon::Clipboard,"Copy the error").clicked(){ui.ctx().copy_text(error.clone());}
                                 if retry && ui.add(egui::Button::new("Retry").min_size(egui::vec2(80.,design::CONTROL))).clicked() {
                                     self.connection_error=None;
                                     if self.computer.is_some() {self.start(ctx);}
@@ -1524,7 +1542,7 @@ impl eframe::App for App {
                             }
                             // Who may use this computer, and who is on it now.
                             ui.add_space(12.);
-                            self.hosting.paired_devices_ui(ui, self.account.user.is_none());
+                            self.hosting.paired_devices_ui(ui, self.account.user.is_none(), self.account.user.as_ref().map(|u| u.handle.as_str()));
                             // Without an account a computer is still paired by its link, kept out of the way.
                             if self.account.user.is_none() {
                                 ui.add_space(8.);

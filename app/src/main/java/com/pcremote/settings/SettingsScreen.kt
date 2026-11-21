@@ -57,6 +57,7 @@ fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Mod
     var resolution by remember { mutableStateOf(model.resolution) }
     var fps by remember { mutableIntStateOf(model.frameRate) }
     var bitrate by remember { mutableIntStateOf(model.bitrateMbps) }
+    var fullColour by remember { mutableStateOf(model.fullColour) }
     var audio by remember { mutableStateOf(model.playHostAudio) }
     var clipboard by remember { mutableStateOf(model.shareClipboard) }
     val ctx = LocalContext.current
@@ -79,6 +80,7 @@ fun SettingsPage(model: SettingsModel, onThemeChanged: () -> Unit, modifier: Mod
                         DropdownRow(stringResource(R.string.pcr_bitrate_limit), "$bitrate Mbps", SettingsOptions.bitrateLabels) { i ->
                             bitrate = SettingsModel.BITRATES_MBPS[i]; model.bitrateMbps = bitrate
                         }
+                        SwitchRow("Full colour (4:4:4)", fullColour) { fullColour = it; model.fullColour = it }
                     }
                     GroupText("Sound and clipboard") {
                         SwitchRow("Play sound here", audio) { audio = it; model.playHostAudio = it }

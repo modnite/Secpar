@@ -391,6 +391,111 @@ fn rumble_loop(fd: Arc<OwnedFd>, stop: Arc<AtomicBool>, rumble: Rumble) {
     }
 }
 
+const EV_REL: u16 = 2;
+const REL_HWHEEL: u16 = 0x06;
+const REL_WHEEL: u16 = 0x08;
+const UI_SET_RELBIT: u64 = ioc(W, 102, 4);
+/// The virtual pointer's absolute range on each axis; the compositor spreads it over its screens.
+pub const DESK_RANGE: i32 = 65535;
+
+/// A plain virtual keyboard or pointer. The owner's input goes through these while the session
+/// is locked: the lock screen takes input from devices like these but not from the desktop portal.
+pub struct Desk {
+    fd: OwnedFd,
+}
+
+impl Desk {
+    fn open(name: &[u8], setup_bits: impl FnOnce(&OwnedFd) -> io::Result<()>) -> io::Result<Self> {
+        let node = std::ffi::CString::new(NODE).unwrap();
+        // SAFETY: valid C string; the returned descriptor is owned by the OwnedFd below.
+        let raw = unsafe { libc::open(node.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+        if raw < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `raw` is a freshly opened descriptor nobody else owns.
+        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        setup_bits(&fd)?;
+        // SAFETY: uinput_setup is plain data.
+        let mut setup: libc::uinput_setup = unsafe { std::mem::zeroed() };
+        setup.id = libc::input_id { bustype: 0x06, vendor: 0, product: 0, version: 1 }; // BUS_VIRTUAL
+        for (slot, byte) in setup.name.iter_mut().zip(name) {
+            *slot = *byte as libc::c_char;
+        }
+        ioctl(&fd, UI_DEV_SETUP, &setup)?;
+        ioctl(&fd, UI_DEV_CREATE, std::ptr::null::<u8>())?;
+        Ok(Desk { fd })
+    }
+    /// A keyboard with every standard key.
+    pub fn keyboard() -> io::Result<Self> {
+        Self::open(b"Secpar keyboard", |fd| {
+            ioctl_int(fd, UI_SET_EVBIT, EV_KEY)?;
+            ioctl_int(fd, UI_SET_EVBIT, EV_SYN)?;
+            for key in 1..=248 {
+                ioctl_int(fd, UI_SET_KEYBIT, key)?;
+            }
+            Ok(())
+        })
+    }
+    /// An absolute pointer with five buttons and both wheels, like a virtual machine's tablet.
+    pub fn pointer() -> io::Result<Self> {
+        Self::open(b"Secpar pointer", |fd| {
+            for kind in [EV_KEY, EV_REL, EV_ABS, EV_SYN] {
+                ioctl_int(fd, UI_SET_EVBIT, kind)?;
+            }
+            for button in 0x110..=0x114 {
+                ioctl_int(fd, UI_SET_KEYBIT, button)?;
+            }
+            for rel in [REL_WHEEL, REL_HWHEEL] {
+                ioctl_int(fd, UI_SET_RELBIT, rel)?;
+            }
+            for code in [ABS_X, ABS_Y] {
+                ioctl_int(fd, UI_SET_ABSBIT, code)?;
+                let setup = libc::uinput_abs_setup {
+                    code,
+                    absinfo: libc::input_absinfo { value: 0, minimum: 0, maximum: DESK_RANGE, fuzz: 0, flat: 0, resolution: 0 },
+                };
+                ioctl(fd, UI_ABS_SETUP, &setup)?;
+            }
+            Ok(())
+        })
+    }
+    /// Writes the events followed by a sync report.
+    pub fn send(&self, events: &[(u16, u16, i32)]) -> io::Result<()> {
+        let raw: Vec<libc::input_event> =
+            events.iter().chain([&(EV_SYN, SYN_REPORT, 0)]).map(|&(kind, code, value)| event(kind, code, value)).collect();
+        let bytes = raw.len() * size_of::<libc::input_event>();
+        // SAFETY: `raw` is a contiguous array of `bytes` readable bytes.
+        let n = unsafe { libc::write(self.fd.as_raw_fd(), raw.as_ptr().cast(), bytes) };
+        if n < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+    pub fn key(&self, code: u16, down: bool) -> io::Result<()> {
+        self.send(&[(EV_KEY, code, down as i32)])
+    }
+    pub fn to(&self, x: i32, y: i32) -> io::Result<()> {
+        self.send(&[(EV_ABS, ABS_X, x), (EV_ABS, ABS_Y, y)])
+    }
+    pub fn wheel(&self, dx: i32, dy: i32) -> io::Result<()> {
+        let mut events = Vec::new();
+        if dy != 0 {
+            events.push((EV_REL, REL_WHEEL, dy));
+        }
+        if dx != 0 {
+            events.push((EV_REL, REL_HWHEEL, dx));
+        }
+        if events.is_empty() { Ok(()) } else { self.send(&events) }
+    }
+}
+
+impl Drop for Desk {
+    fn drop(&mut self) {
+        let _ = ioctl(&self.fd, UI_DEV_DESTROY, std::ptr::null::<u8>());
+    }
+}
+
 /// The real bus. Stateless: each `plug` opens its own uinput device.
 pub struct UinputBus;
 
@@ -423,6 +528,7 @@ mod tests {
             assert_eq!(UI_SET_KEYBIT, 0x40045565);
             assert_eq!(UI_SET_ABSBIT, 0x40045567);
             assert_eq!(UI_SET_FFBIT, 0x4004556b);
+            assert_eq!(UI_SET_RELBIT, 0x40045566);
             assert_eq!(UI_BEGIN_FF_UPLOAD, 0xc06855c8);
             assert_eq!(UI_END_FF_UPLOAD, 0x406855c9);
             assert_eq!(UI_BEGIN_FF_ERASE, 0xc00c55ca);

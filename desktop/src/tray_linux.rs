@@ -9,8 +9,12 @@ use std::sync::{
     Arc,
 };
 
+/// Ends the running stream from the tray's own thread. The window may be hidden or behind
+/// others and draw its next frame late, so the tray must not wait for it.
+pub type Stop = Arc<std::sync::Mutex<Option<Box<dyn Fn() + Send>>>>;
 pub struct Tray {
     handle: Handle<Item>,
+    stop: Stop,
     quitting: Arc<AtomicBool>,
     disconnect_asked: Arc<AtomicBool>,
     ctx: Context,
@@ -23,6 +27,7 @@ struct Item {
     connected: bool,
     quitting: Arc<AtomicBool>,
     disconnect_asked: Arc<AtomicBool>,
+    stop: Stop,
 }
 
 /// Ends Secpar even when the window gets no frames. KDE Wayland stops drawing a minimised
@@ -75,6 +80,7 @@ impl ksni::Tray for Item {
                 label: "Disconnect".into(),
                 enabled: self.connected,
                 activate: Box::new(|item: &mut Self| {
+                    if let Some(stop) = item.stop.lock().unwrap().as_ref() { stop(); }
                     item.disconnect_asked.store(true, Ordering::Relaxed);
                     item.ctx.request_repaint();
                 }),
@@ -89,7 +95,7 @@ impl ksni::Tray for Item {
                     if let Some(program) = program {
                         let _ = std::process::Command::new("sh")
                             .arg("-c")
-                            .arg("sleep 3; exec \"$0\"")
+                            .arg("sleep 3; exec \"$0\" --restarted")
                             .arg(program)
                             .stdin(std::process::Stdio::null())
                             .spawn();
@@ -140,16 +146,18 @@ impl Tray {
         let quitting = Arc::new(AtomicBool::new(false));
         let disconnect_asked = Arc::new(AtomicBool::new(false));
         let ctx = cc.egui_ctx.clone();
-        let item = Item { ctx: ctx.clone(), icon, connected: false, quitting: quitting.clone(), disconnect_asked: disconnect_asked.clone() };
+        let stop: Stop = Default::default();
+        let item = Item { ctx: ctx.clone(), icon, connected: false, quitting: quitting.clone(), disconnect_asked: disconnect_asked.clone(), stop: stop.clone() };
         let handle = item.spawn().map_err(|e| eprintln!("secpar: no tray icon: {e}")).ok()?;
         // Started at sign-in: stay out of the way until the tray icon is clicked.
         if std::env::args().any(|a| a == "--hidden") {
             hide(&ctx);
         }
-        Some(Self { handle, quitting, disconnect_asked, ctx, enabled: std::cell::Cell::new(false) })
+        Some(Self { handle, stop, quitting, disconnect_asked, ctx, enabled: std::cell::Cell::new(false) })
     }
-    /// Greys out Disconnect while no stream is connected.
-    pub fn set_connected(&self, connected: bool) {
+    /// Greys out Disconnect while no stream is connected; `stop` ends the stream at once.
+    pub fn set_connected(&self, connected: bool, stop: Option<Box<dyn Fn() + Send>>) {
+        *self.stop.lock().unwrap() = stop;
         if self.enabled.replace(connected) != connected {
             self.handle.update(|item| item.connected = connected);
         }

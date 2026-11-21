@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(env(&mut w).await["m"]["t"], "pong");
         w.send(bin_env(7, &[1, 2, 3])).await.unwrap();
         assert_eq!(env(&mut w).await, json!({"c":7,"m":{"t":"ok","of":"bin:3"}}));
-        assert_eq!(agent.connected(), vec![dev.clone()]);
+        assert_eq!(agent.registered(), vec![dev.clone()]);
 
         // Removing the phone: the Worker hears it, the relayed session ends.
         agent.revoke(&dev);

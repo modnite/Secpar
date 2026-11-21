@@ -41,6 +41,8 @@ pub enum Event {
     ClipboardUnavailable(String),
     AudioUnavailable(String),
     StreamInfo {width:u32,height:u32,fps:u32},
+    /// The frames carry 4:4:4 packed into twice the stream's height (sent before StreamInfo).
+    FullColour(bool),
     Stats {rtt_ms:Option<u16>,mbps:f32,received_fps:f32},
     /// Latest rumble (large, small motor) the host asked for, per controller id 0..=3.
     Rumble([(u8,u8);4]),
@@ -76,6 +78,10 @@ pub struct Options {
     /// Optional nonblocking decoder delivery independent of UI event consumption.
     pub video_sink: Option<Arc<dyn Fn(VideoFrame)+Send+Sync>>,
     pub clipboard: bool,
+    /// The display to stream (an id from `stream.displays`); empty for the one set on the computer.
+    pub display: String,
+    /// Ask for full colour (4:4:4 packed into a double-height frame).
+    pub chroma444: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -89,6 +95,8 @@ impl Default for Options {
             audio_sink: None,
             video_sink: None,
             clipboard: true,
+            display: String::new(),
+            chroma444: false,
         }
     }
 }
@@ -105,6 +113,8 @@ struct Peer {
     confirmed: Option<(SocketAddr, bool)>,
     live: Arc<AtomicBool>,
     reader: Option<std::thread::JoinHandle<()>>,
+    /// Where relayed packets that arrive over TLS join the UDP ones.
+    packets: mpsc::Sender<Packet>,
 }
 impl Peer {
     fn new(socket: UdpSocket) -> (Self, mpsc::Receiver<Packet>) {
@@ -113,6 +123,7 @@ impl Peer {
         let live = Arc::new(AtomicBool::new(true));
         let (s, t, l) = (socket.clone(), turn.clone(), live.clone());
         let (tx, rx) = mpsc::channel(1024);
+        let packets = tx.clone();
         let reader = std::thread::spawn(move || {
             let _ = s.set_read_timeout(Some(Duration::from_millis(30)));
             let mut b = [0; 2048];
@@ -149,6 +160,7 @@ impl Peer {
                 confirmed: None,
                 live,
                 reader: Some(reader),
+                packets,
             },
             rx,
         )
@@ -165,7 +177,7 @@ impl Peer {
             }
             if via || self.confirmed.is_none() {
                 if let (Some(t), SocketAddr::V4(to)) = (&turn, addr) {
-                    let _ = self.socket.send_to(&t.wrap(to, b), t.server);
+                    t.send_raw(&self.socket, &t.wrap(to, b));
                 }
             }
         }
@@ -207,7 +219,15 @@ fn now_s() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
-async fn turn_credentials(computer: &Computer) -> Option<(SocketAddr, String, String)> {
+/// The relay's address over UDP, and over TLS for networks that block UDP.
+struct TurnCreds {
+    udp: Option<SocketAddr>,
+    tls: Option<(String, u16)>,
+    user: String,
+    pass: String,
+}
+
+async fn turn_credentials(computer: &Computer) -> Option<TurnCreds> {
     let r = computer.relay.as_ref()?;
     let url = r
         .signed_url(&computer.id, now_s(), "turn")
@@ -241,24 +261,47 @@ async fn turn_credentials(computer: &Computer) -> Option<(SocketAddr, String, St
             .as_array()
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_else(|| server["urls"].as_str().into_iter().collect());
-        for u in urls {
-            if !u.starts_with("turn:") || u.contains("transport=tcp") {
+        let mut creds = TurnCreds { udp: None, tls: None, user: user.into(), pass: pass.into() };
+        for u in &urls {
+            if let Some(rest) = u.strip_prefix("turns:") {
+                let hp = rest.split('?').next().unwrap_or("");
+                let (host, port) = hp.rsplit_once(':').map(|(h, p)| (h, p.parse().unwrap_or(5349))).unwrap_or((hp, 5349));
+                // Port 443 gets through the most firewalls.
+                if creds.tls.as_ref().is_none_or(|(_, p)| *p != 443) {
+                    creds.tls = Some((host.to_string(), port));
+                }
                 continue;
             }
-            let hp = u.trim_start_matches("turn:").split('?').next()?;
-            let hp = if hp.contains(':') {
-                hp.to_string()
-            } else {
-                format!("{hp}:3478")
-            };
-            if let Ok(mut addrs) = tokio::net::lookup_host(hp).await {
-                if let Some(addr) = addrs.find(SocketAddr::is_ipv4) {
-                    return Some((addr, user.into(), pass.into()));
-                }
+            if creds.udp.is_some() || !u.starts_with("turn:") || u.contains("transport=tcp") {
+                continue;
             }
+            let Some(hp) = u.trim_start_matches("turn:").split('?').next() else { continue };
+            let hp = if hp.contains(':') { hp.to_string() } else { format!("{hp}:3478") };
+            if let Ok(mut addrs) = tokio::net::lookup_host(hp).await {
+                creds.udp = addrs.find(SocketAddr::is_ipv4);
+            }
+        }
+        if creds.udp.is_some() || creds.tls.is_some() {
+            return Some(creds);
         }
     }
     None
+}
+
+/// Allocates on `t`, permits the computer's addresses and keeps the allocation fresh.
+async fn start_relay(t: Arc<Turn>, socket: Arc<UdpSocket>, peers: Vec<SocketAddrV4>, live: Arc<AtomicBool>) -> Option<SocketAddrV4> {
+    let result = tokio::task::spawn_blocking({ let t = t.clone(); let socket = socket.clone(); let peers = peers.clone(); move || { let a = t.allocate(&socket); if a.is_some() { t.permit(&socket, &peers); } a } }).await.ok().flatten();
+    if result.is_some() {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(200)).await;
+                if !live.load(Ordering::Relaxed) { break; }
+                let (t, s, peers) = (t.clone(), socket.clone(), peers.clone());
+                let _ = tokio::task::spawn_blocking(move || { t.refresh(&s, 600); t.permit(&s, &peers); }).await;
+            }
+        });
+    }
+    result
 }
 fn emit(receiver: &mut Receiver, peer: &Peer, typ: Type, body: &[u8]) -> Result<(), String> {
     let packet = receiver
@@ -306,7 +349,7 @@ pub async fn run(
     .map_err(|_| "Stream socket setup failed")??;
     let (peer, mut packets) = Peer::new(socket);
     let mut peer = peer;
-    control::send(&mut conn.socket,json!({"t":"stream.start","w":options.width,"h":options.height,"fps":options.fps,"maxKbps":options.max_kbps,"codecs":["h264"],"audio":options.audio,"cands":cands,"display":""})).await?;
+    control::send(&mut conn.socket,json!({"t":"stream.start","w":options.width,"h":options.height,"fps":options.fps,"maxKbps":options.max_kbps,"codecs":["h264"],"audio":options.audio,"cands":cands,"display":options.display,"chroma":if options.chroma444 {"444"} else {""}})).await?;
     let mut clipboard_enabled=options.clipboard;
     if clipboard_enabled {control::send(&mut conn.socket,json!({"t":"clip.sub","on":true})).await?;}
     let mut receiver = None::<Receiver>;
@@ -361,6 +404,7 @@ pub async fn run(
                 match v["t"].as_str().unwrap_or(""){
                     "stream.ready"=>{
                         if v["codec"]!="h264"{return Err("Host did not negotiate H.264".into());}
+                        events.emit(Event::FullColour(v["chroma"]=="444"))?;
                         events.emit(Event::StreamInfo {
                             width:v["w"].as_u64().unwrap_or(options.width as u64).clamp(1,8192) as u32,
                             height:v["h"].as_u64().unwrap_or(options.height as u64).clamp(1,8192) as u32,
@@ -444,11 +488,26 @@ pub async fn run(
                 if ping_at.elapsed()>Duration::from_secs(10){ping_at=Instant::now();control::send(&mut conn.socket,json!({"t":"ping"})).await?;}
                 if !turn_started && peer.confirmed.is_none() && start.elapsed()>Duration::from_secs(3) && conn.computer.relay.is_some(){
                     turn_started=true;let computer=conn.computer.clone();let socket=peer.socket.clone();let slot=peer.turn.clone();let peers:Vec<_>=peer.targets.iter().filter_map(|a|if let SocketAddr::V4(a)=a{Some(*a)}else{None}).collect();let tx=turn_tx.clone();let live=peer.live.clone();
-                    tokio::spawn(async move{let allocated=if let Some((server,user,pass))=turn_credentials(&computer).await{let t=Arc::new(Turn::new(server,user,pass));*slot.lock().unwrap()=Some(t.clone());{
-                        let result=tokio::task::spawn_blocking({let t=t.clone();let socket=socket.clone();let peers=peers.clone();move||{let a=t.allocate(&socket);if a.is_some(){t.permit(&socket,&peers);}a}}).await.ok().flatten();
-                        if result.is_some(){tokio::spawn(async move{loop{tokio::time::sleep(Duration::from_secs(200)).await;if !live.load(Ordering::Relaxed){break;}let(t,s,peers)=(t.clone(),socket.clone(),peers.clone());let _=tokio::task::spawn_blocking(move||{t.refresh(&s,600);t.permit(&s,&peers);}).await;}});}
-                        result
-                    }}else{None};let _=tx.send(allocated).await;});
+                    let packets=peer.packets.clone();
+                    tokio::spawn(async move{
+                        let mut allocated=None;
+                        if let Some(c)=turn_credentials(&computer).await{
+                            if let Some(server)=c.udp{
+                                let t=Arc::new(Turn::new(server,c.user.clone(),c.pass.clone()));*slot.lock().unwrap()=Some(t.clone());
+                                allocated=start_relay(t,socket.clone(),peers.clone(),live.clone()).await;
+                            }
+                            // UDP to the relay blocked (many offices): the same relay over TLS on 443.
+                            if let (None,Some((host,port)))=(allocated,c.tls.clone()){
+                                let (frames,to)=(slot.clone(),packets);
+                                let delivered=move|b:&[u8]|{if let Some(t)=frames.lock().unwrap().clone(){if let Some((peer,data))=t.on_packet(b){let _=to.try_send(Packet{data,from:peer.into(),relayed:true});}}};
+                                if let Ok((link,addr))=crate::turn_tls::connect(&host,port,delivered).await{
+                                    let t=Arc::new(Turn::new(addr,c.user,c.pass).with_link(link));*slot.lock().unwrap()=Some(t.clone());
+                                    allocated=start_relay(t,socket,peers,live).await;
+                                }
+                            }
+                        }
+                        let _=tx.send(allocated).await;
+                    });
                 }
             }
         }

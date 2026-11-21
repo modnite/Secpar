@@ -63,7 +63,13 @@ pub struct Convert {
 }
 
 impl Convert {
-    pub fn new(dev: &ID3D11Device, ctx: &ID3D11DeviceContext, (iw, ih): (u32, u32), (ow, oh): (u32, u32)) -> windows::core::Result<Convert> {
+    pub fn new(dev: &ID3D11Device, ctx: &ID3D11DeviceContext, input: (u32, u32), output: (u32, u32)) -> windows::core::Result<Convert> {
+        Self::with_chroma(dev, ctx, input, output, false)
+    }
+
+    /// `packed`: 4:4:4 in a frame twice `output`'s height (convert_ps). It needs the shader
+    /// passes; the video processor cannot pack, so there is no fallback for it.
+    pub fn with_chroma(dev: &ID3D11Device, ctx: &ID3D11DeviceContext, (iw, ih): (u32, u32), (ow, oh): (u32, u32), packed: bool) -> windows::core::Result<Convert> {
         // SAFETY: D3D11 video calls on live objects with initialised descriptors.
         unsafe {
             let vdev: ID3D11VideoDevice = dev.cast()?;
@@ -87,7 +93,7 @@ impl Convert {
             vctx.VideoProcessorSetOutputColorSpace1(&vp, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: ow,
-                Height: oh,
+                Height: if packed { oh * 2 } else { oh },
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: DXGI_FORMAT_NV12,
@@ -107,11 +113,12 @@ impl Convert {
                 vdev.CreateVideoProcessorOutputView(&t, &en, &vd, Some(&mut v))?;
                 out.push((t, v.expect("view")));
             }
-            let ps = if std::env::var_os("SECPAR_CONVERT_VP").is_some() {
+            let ps = if std::env::var_os("SECPAR_CONVERT_VP").is_some() && !packed {
                 None
             } else {
                 let textures: Vec<_> = out.iter().map(|(t, _)| t.clone()).collect();
-                super::convert_ps::Passes::new(dev, ctx, (iw, ih), (ow, oh), &textures).ok()
+                let passes = super::convert_ps::Passes::new(dev, ctx, (iw, ih), (ow, oh), &textures, packed);
+                if packed { Some(passes?) } else { passes.ok() }
             };
             Ok(Convert { dev: dev.clone(), ps, vdev, vctx, en, vp, out, next: 0, input: None, imports: Vec::new() })
         }
@@ -146,6 +153,9 @@ impl Convert {
             if ps.run(&self.dev, src, idx).is_ok() {
                 self.next = (idx + 1) % RING;
                 return Ok(self.out[idx].0.clone());
+            }
+            if ps.packed() {
+                return Err(windows::core::Error::empty());
             }
             self.ps = None; // this GPU can't do it: fall back to the video processor for good
         }
@@ -300,6 +310,65 @@ mod tests {
             ctx.Unmap(&st, 0);
             assert!((y1 - y0).abs() > 100, "luma stays sharp: {y0} vs {y1}");
             assert!(worst <= 3, "chroma is neutral, worst deviation {worst}");
+        }
+    }
+
+    /// Packed 4:4:4 keeps every pixel's own colour: Y on top, Cb below it, Cr in the chroma
+    /// plane (pixel 2x first, 2x+1 second). The desktop client unpacks this layout (picture.rs).
+    #[test]
+    fn packed_frames_keep_each_pixels_colour() {
+        let Some((dev, ctx, _, _)) = crate::engine::capture::device("") else { return eprintln!("no D3D11 device") };
+        let (w, h) = (64u32, 64u32);
+        let rgb = |x: usize, r: usize| [(x * 4) as f32, (r * 4) as f32, (255 - x * 4) as f32];
+        let mut px = Vec::with_capacity((w * h * 4) as usize);
+        for r in 0..h as usize {
+            for x in 0..w as usize {
+                let [rr, g, b] = rgb(x, r);
+                px.extend_from_slice(&[b as u8, g as u8, rr as u8, 255]);
+            }
+        }
+        // SAFETY: test-only texture creation and readback on live objects.
+        unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: w,
+                Height: h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32 | D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                ..Default::default()
+            };
+            let init = D3D11_SUBRESOURCE_DATA { pSysMem: px.as_ptr().cast(), SysMemPitch: w * 4, SysMemSlicePitch: 0 };
+            let mut src = None;
+            dev.CreateTexture2D(&desc, Some(&init), Some(&mut src)).unwrap();
+            let src = src.unwrap();
+            let Ok(mut c) = Convert::with_chroma(&dev, &ctx, (w, h), (w, h), true) else { return eprintln!("GPU can't render NV12 planes") };
+            let out = c.convert(&src).unwrap();
+            let sd = D3D11_TEXTURE2D_DESC { Height: h * 2, Usage: D3D11_USAGE_STAGING, BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32, Format: DXGI_FORMAT_NV12, ..desc };
+            let mut st = None;
+            dev.CreateTexture2D(&sd, None, Some(&mut st)).unwrap();
+            let st = st.unwrap();
+            ctx.CopyResource(&st, &out);
+            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+            ctx.Map(&st, 0, D3D11_MAP_READ, 0, Some(&mut m)).unwrap();
+            let (base, pitch) = (m.pData.cast::<u8>(), m.RowPitch as usize);
+            let at = |x: usize, r: usize| *base.add(r * pitch + x) as f32;
+            let mut worst = 0f32;
+            for r in 0..h as usize {
+                for x in 0..w as usize {
+                    let [rr, g, b] = rgb(x, r).map(|v| v / 255.0);
+                    let l = 0.2126 * rr + 0.7152 * g + 0.0722 * b;
+                    let want = [16.0 + 219.0 * l, 128.0 + 224.0 * (b - l) / 1.8556, 128.0 + 224.0 * (rr - l) / 1.5748];
+                    let got = [at(x, r), at(x, r + h as usize), at((x / 2) * 2 + (x & 1), 2 * h as usize + r)];
+                    for (a, b) in want.iter().zip(got) {
+                        worst = worst.max((a - b).abs());
+                    }
+                }
+            }
+            ctx.Unmap(&st, 0);
+            assert!(worst <= 2.0, "every pixel keeps its own Y, Cb and Cr; worst error {worst}");
         }
     }
 

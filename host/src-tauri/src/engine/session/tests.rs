@@ -63,7 +63,7 @@ const KEY: [u8; 32] = [7; 32];
 #[ignore = "Requires an unlocked Windows desktop and hardware encoders; run explicitly"]
 fn concurrent_hardware_streams_deliver_independent_video() {
     fn start(codecs: Vec<String>) -> (StreamSession, Arc<AtomicBool>, std::thread::JoinHandle<u32>) {
-        let params=Params{w:640,h:360,fps:30,codecs,max_kbps:3000,audio:false,cands:vec![],public:None,display:String::new(),gate:None,encoder:Default::default()};
+        let params=Params{w:640,h:360,fps:30,codecs,max_kbps:3000,audio:false,cands:vec![],public:None,display:String::new(),gate:None,encoder:Default::default(),rect:Default::default(),chroma444:false};
         let (ready,session)=StreamSession::start(params,IpAddr::from([127,0,0,1]),Arc::new(|_|{}),Box::new(|_|{})).expect("Concurrent hardware stream must start");
         let ServerMsg::StreamReady{port,session:sid,key,codec,..}=ready else {panic!("Missing stream readiness")};
         eprintln!("Concurrent hardware stream opened: {codec}");
@@ -84,7 +84,7 @@ fn concurrent_hardware_streams_deliver_independent_video() {
     let (second,stop_second,read_second)=start(vec!["h264".into()]);
     let (third,stop_third,read_third)=start(vec!["h264".into()]);
     assert_eq!(SharedCapture::active_source_count(),1,"All viewers share one monitor capture");
-    let overflow=Params{w:640,h:360,fps:30,codecs:vec!["h264".into()],max_kbps:3000,audio:false,cands:vec![],public:None,display:String::new(),gate:None,encoder:Default::default()};
+    let overflow=Params{w:640,h:360,fps:30,codecs:vec!["h264".into()],max_kbps:3000,audio:false,cands:vec![],public:None,display:String::new(),gate:None,encoder:Default::default(),rect:Default::default(),chroma444:false};
     assert!(matches!(StreamSession::start(overflow,IpAddr::from([127,0,0,1]),Arc::new(|_|{}),Box::new(|_|{})),Err(ServerMsg::StreamError{code,..}) if code=="connection_limit"));
     std::thread::sleep(Duration::from_secs(1));
     stop_first.store(true,Ordering::Relaxed); let first_packets=read_first.join().unwrap(); drop(first);
@@ -290,14 +290,25 @@ struct Partial {
 /// drops 10% of media packets, rebuilds frames through FEC and asks for keyframes like the phone.
 #[test]
 fn loopback_streams_real_frames() {
-    let p = Params { w: 1280, h: 720, fps: 60, codecs: vec!["h264".into()], max_kbps: 10000, audio: true, cands: vec![], public: None, display: String::new(), gate: None, encoder: Default::default() };
+    loopback(false);
+}
+
+/// The same with 4:4:4 packed: the encoder takes the double-height frame and the stream runs.
+#[test]
+fn loopback_streams_full_colour_frames() {
+    loopback(true);
+}
+
+fn loopback(chroma444: bool) {
+    let p = Params { w: 1280, h: 720, fps: 60, codecs: vec!["h264".into()], max_kbps: 10000, audio: true, cands: vec![], public: None, display: String::new(), gate: None, encoder: Default::default(), rect: Default::default(), chroma444 };
     let notify: Notify = Arc::new(|_| {});
     let (ready, session) = match StreamSession::start(p, IpAddr::from([127, 0, 0, 1]), notify, Box::new(|_| {})) {
         Ok(r) => r,
         Err(e) => return eprintln!("no stream on this PC: {e:?}"),
     };
-    let ServerMsg::StreamReady { codec, w, h, port, session: sid, key, .. } = ready else { panic!("{ready:?}") };
+    let ServerMsg::StreamReady { codec, w, h, port, session: sid, key, chroma, .. } = ready else { panic!("{ready:?}") };
     assert_eq!((codec.as_str(), w % 2, h % 2), ("h264", 0, 0));
+    assert_eq!(chroma.as_deref(), chroma444.then_some("444"), "4:4:4 is what was asked for");
     let key: [u8; 32] = STANDARD.decode(key).unwrap().try_into().unwrap();
     let host_addr: SocketAddr = ([127, 0, 0, 1], port).into();
     let mut ph = Phone::new(&key, sid);
@@ -498,7 +509,7 @@ fn resize_mid_stream_announces_the_new_size() {
             log.lock().unwrap().push((w, h));
         }
     });
-    let p = Params { w: 1280, h: 720, fps: 60, codecs: vec!["h264".into()], max_kbps: 10000, audio: false, cands: vec![], public: None, display: String::new(), gate: None, encoder: Default::default() };
+    let p = Params { w: 1280, h: 720, fps: 60, codecs: vec!["h264".into()], max_kbps: 10000, audio: false, cands: vec![], public: None, display: String::new(), gate: None, encoder: Default::default(), rect: Default::default(), chroma444: false };
     let (ready, session) = match StreamSession::start(p, IpAddr::from([127, 0, 0, 1]), notify, Box::new(|_| {})) {
         Ok(r) => r,
         Err(e) => return eprintln!("no stream on this PC: {e:?}"),

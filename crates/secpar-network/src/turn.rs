@@ -224,6 +224,11 @@ struct Auth {
     key: Vec<u8>,
 }
 
+/// Another way to reach the TURN server than the stream's UDP socket (TURN over TLS).
+pub trait Link: Send + Sync {
+    fn send(&self, b: &[u8]);
+}
+
 /// One TURN allocation. Requests block the calling (non-receive) thread until the receive
 /// loop delivers the answer through [`Turn::on_packet`].
 pub struct Turn {
@@ -236,6 +241,8 @@ pub struct Turn {
     channels: Mutex<HashMap<SocketAddrV4, u16>>,
     next_channel: Mutex<u16>,
     pub relayed: Mutex<Option<SocketAddrV4>>,
+    /// When set, everything for the server goes through it instead of the UDP socket.
+    link: Option<std::sync::Arc<dyn Link>>,
 }
 
 impl Turn {
@@ -250,6 +257,23 @@ impl Turn {
             channels: Mutex::default(),
             next_channel: Mutex::new(0x4000),
             relayed: Mutex::default(),
+            link: None,
+        }
+    }
+
+    /// Talks to the server through `link` (TURN over TLS) instead of the UDP socket.
+    pub fn with_link(mut self, link: std::sync::Arc<dyn Link>) -> Self {
+        self.link = Some(link);
+        self
+    }
+
+    /// Sends `b` to the server: through the link when there is one, else on `sock`.
+    pub fn send_raw(&self, sock: &UdpSocket, b: &[u8]) {
+        match &self.link {
+            Some(link) => link.send(b),
+            None => {
+                let _ = sock.send_to(b, self.server);
+            }
         }
     }
 
@@ -273,7 +297,7 @@ impl Turn {
                     break;
                 }
             }
-            let _ = sock.send_to(&bytes, self.server);
+            self.send_raw(sock, &bytes);
         }
         if answer.is_none() {
             answer = rx
