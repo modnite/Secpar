@@ -1,0 +1,19 @@
+name: Point the account service and relay at the self-hosted box
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  tunnel:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, secpar]
+    timeout-minutes: 5
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: umask 077 && node cloud/scripts/selfhost-tunnel.mjs
