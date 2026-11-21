@@ -80,7 +80,7 @@ impl App {
                         let text=if waiting.is_some() {
                             "This computer's Secpar can't resize a live stream yet. Update it there, then pick the resolution again.".to_string()
                         } else {
-                            strip_text(self.dimensions,self.stream_fps,&self.status,self.stream_stats,self.client.active_decoder.as_deref())
+                            strip_text(self.dimensions,self.stream_fps,&self.status,self.stream_stats,self.client.active_decoder.as_ref().map(|d| if self.full_colour {format!("{d} · 4:4:4")} else {d.clone()}).as_deref())
                         };
                         ui.allocate_ui_with_layout(Vec2::new(inner,STRIP_HEIGHT),egui::Layout::centered_and_justified(egui::Direction::LeftToRight),|ui|{
                             ui.add(egui::Label::new(egui::RichText::new(text).size(13.).color(TEXT)).truncate());

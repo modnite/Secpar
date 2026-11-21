@@ -103,12 +103,19 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
 
     // one socket per stream.start: STUN runs on it before asking, so its candidates go in the request
     val nextSock = remember { java.util.concurrent.atomic.AtomicReference<com.pcremote.remote.PeerSocket?>() }
+    // A host that moves to another screen with a new stream (Linux) says goodbye on the old one first:
+    // that goodbye, and any from a stream already replaced, must not leave the computer.
+    val moving = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     val controller = remember(attempt) {
         StreamController(scope, session::send, session.conn.incoming, { ready, failed ->
             val sock = nextSock.getAndSet(null) ?: com.pcremote.remote.PeerSocket()
-            PrsPipeline(ready, session.conn.connectedHost ?: session.pc.allHosts.first(), sock, surface!!.surface, session.pc.relay,
-                { m -> session.send(m) }, failed, onEnded = { scope.launch { onBack() } },
-                appVsyncOffsetNs = (ctx as? Activity)?.window?.decorView?.display?.appVsyncOffsetNanos ?: 0L).also { pipe = it }
+            lateinit var created: PrsPipeline
+            created = PrsPipeline(ready, session.conn.connectedHost ?: session.pc.allHosts.first(), sock, surface!!.surface, session.pc.relay,
+                { m -> session.send(m) }, failed, onEnded = { if (pipe === created && !moving.get()) scope.launch { onBack() } },
+                appVsyncOffsetNs = (ctx as? Activity)?.window?.decorView?.display?.appVsyncOffsetNanos ?: 0L)
+            pipe = created
+            moving.set(false)
+            created
         }, CodecPicker.supported(), prepare = {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 val s = com.pcremote.remote.PeerSocket(com.pcremote.remote.PeerSocket.CLOUDFLARE_STUN)
@@ -240,6 +247,8 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
             }
             override fun reopenAudio() { pipe?.reopenAudio() }
             override fun selectDisplay(id: String) {
+                // The old stream says goodbye at once; Windows keeps its stream, so the guard lapses by itself.
+                moving.set(true); scope.launch { kotlinx.coroutines.delay(3_000); moving.set(false) }
                 currentController.selectDisplay(id); if (!com.pcremote.guest.GuestSessions.isGuest(pcId)) saveDisplay(ctx, pcId, id); zoom.reset()
             }
             override fun selectSize(w: Int, h: Int) {

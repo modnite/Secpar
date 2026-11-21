@@ -97,9 +97,11 @@ class PackedRendererInstrumentedTest {
         assertTrue(activity.surfaceReady.await(10, TimeUnit.SECONDS))
         var error: String? = null
         val renderer = PackedRenderer(activity.video.holder.surface, w, h) { error = it }
-        // The emulator's own decoder draws on the host GPU and never fills an image reader; phones' decoders do.
-        val dec = runCatching { MediaCodec.createByCodecName("c2.android.avc.decoder") }.getOrElse { MediaCodec.createDecoderByType("video/avc") }
-        dec.configure(MediaFormat.createVideoFormat("video/avc", w, h * 2), renderer.input, null, 0)
+        // As the app does: no surface, frames taken from the decoder's own buffers.
+        val dec = MediaCodec.createDecoderByType("video/avc")
+        dec.configure(MediaFormat.createVideoFormat("video/avc", w, h * 2).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+        }, null, null, 0)
         dec.start()
         val info = MediaCodec.BufferInfo()
         // The end of the stream makes a software decoder hand over what it holds.
@@ -113,7 +115,7 @@ class PackedRendererInstrumentedTest {
                 if (i >= 0) { val (b, flags) = inputs[next++]; dec.getInputBuffer(i)!!.put(b); dec.queueInputBuffer(i, 0, b.size, next * 33_333L, flags) }
             }
             val o = dec.dequeueOutputBuffer(info, 10_000)
-            if (o >= 0) dec.releaseOutputBuffer(o, true)
+            if (o >= 0) { dec.getOutputImage(o)?.let(renderer::frame); dec.releaseOutputBuffer(o, false) }
         }
         Thread.sleep(300)
         val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)

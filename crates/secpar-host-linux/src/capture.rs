@@ -193,10 +193,13 @@ fn description(
     let convert = if packed {
         // 4:4:4 packed: Y444 at width w (a multiple of 4) has its Y, Cb and Cr planes one after another,
         // which is byte for byte a w by 2h NV12 frame holding Y, then Cb, then Cr pairs in the chroma
-        // plane: the layout clients unpack. The caps are relabelled, the bytes are not touched. Dropping
-        // the allocation query keeps the frames in that plain layout, with no padding or plane metadata.
+        // plane: the layout clients unpack. rawvideoparse reads the same bytes as that NV12 frame, in
+        // new buffers. Relabelling the caps instead left Y444 video metadata on the buffers, which
+        // encoders on GStreamer 1.28 refuse (the stream never started). The VA encoders read
+        // rawvideoparse's buffers in the wrong layout (scrambled colours on an X250); passing them
+        // through videoconvert first gives them frames they read correctly, and costs others nothing.
         let (w, h) = packed_size(native, options);
-        format!("{convert} ! videoscale ! videorate drop-only=true ! capsfilter name=size caps=video/x-raw,format=Y444,colorimetry=bt709,framerate={fps}/1,width={w},height={h} ! identity drop-allocation=true ! capssetter caps=video/x-raw,format=NV12,height={} replace=false", h * 2)
+        format!("{convert} ! videoscale ! videorate drop-only=true ! capsfilter name=size caps=video/x-raw,format=Y444,colorimetry=bt709,framerate={fps}/1,width={w},height={h} ! rawvideoparse use-sink-caps=false format=nv12 width={w} height={} framerate={fps}/1 colorimetry=bt709 ! videoconvert ! video/x-raw,format=NV12", h * 2)
     } else {
         format!("{convert} ! videoscale ! videorate drop-only=true ! capsfilter name=size caps=video/x-raw,format={},framerate={fps}/1{resolution}",encoder.raw)
     };
@@ -292,7 +295,7 @@ impl Capture {
     ) -> Result<Self, String> {
         let mut failures = Vec::new();
         // 4:4:4 first when the client asked for it; normal colour when no encoder takes it.
-        let tries: &[bool] = if options.chroma444 && gst::ElementFactory::find("capssetter").is_some() { &[true, false] } else { &[false] };
+        let tries: &[bool] = if options.chroma444 && gst::ElementFactory::find("rawvideoparse").is_some() { &[true, false] } else { &[false] };
         for &packed in tries {
         for encoder in candidates(&options) {
             if only.is_some_and(|o| o != encoder.factory) || gst::ElementFactory::find(encoder.factory).is_none() {
@@ -823,7 +826,7 @@ mod tests {
     #[test]
     fn packed_frames_survive_encoding_with_their_layout() {
         gst::init().unwrap();
-        for needed in ["videotestsrc", "x264enc", "avdec_h264", "capssetter"] {
+        for needed in ["videotestsrc", "x264enc", "avdec_h264", "rawvideoparse"] {
             if gst::ElementFactory::find(needed).is_none() {
                 return eprintln!("{needed} is not installed");
             }

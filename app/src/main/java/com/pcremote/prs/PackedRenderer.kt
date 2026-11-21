@@ -1,8 +1,6 @@
 package com.pcremote.prs
 
-import android.graphics.ImageFormat
 import android.media.Image
-import android.media.ImageReader
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -20,15 +18,14 @@ import java.util.concurrent.TimeUnit
 /**
  * Full colour (4:4:4) for a stream whose frames carry it packed into twice the picture's height
  * (the hosts' convert_ps / Y444 layout): luma rows [0,h) are Y, rows [h,2h) are Cb at full
- * resolution, and the two chroma planes hold Cr for pixels 2x and 2x+1. The decoder writes into
- * [input]; each frame is unpacked by a shader and drawn onto [output], the stream's view.
+ * resolution, and the two chroma planes hold Cr for pixels 2x and 2x+1. The decoder hands each
+ * frame to [frame] from its own buffers; the frame is unpacked by a shader and drawn onto [output],
+ * the stream's view. Decoders writing into an ImageReader may use a tiled format the CPU cannot
+ * read (Qualcomm), and reading one aborts the app, so frames never go through an ImageReader.
  */
 class PackedRenderer(private val output: Surface, private val w: Int, private val h: Int, private val onError: (String) -> Unit) {
     private val thread = HandlerThread("pcr-full-colour", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
-    private val reader = ImageReader.newInstance(w, h * 2, ImageFormat.YUV_420_888, 3)
-    /** Where the decoder renders. */
-    val input: Surface get() = reader.surface
 
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var context: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -38,13 +35,67 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
     private val luma = ByteBuffer.allocateDirect(w * h * 2)
     private val cb = ByteBuffer.allocateDirect((w / 2) * h)
     private val cr = ByteBuffer.allocateDirect((w / 2) * h)
+    /** One row of an interleaved plane, before its samples are picked out. */
+    private var row = ByteArray(0)
+    private var picked = ByteArray(0)
+    /** Guards the three plane buffers between the decoder's thread and this one. */
+    private val planes = Any()
+    private val drawPosted = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var hasFrame = false
     @Volatile private var failed = false
     /** Frames drawn, for tests. */
     @Volatile var drawn = 0; private set
 
     init {
         handler.post { runCatching { setUp() }.onFailure { fail("Full colour could not start here: ${it.message}") } }
-        reader.setOnImageAvailableListener({ r -> r.acquireLatestImage()?.use { if (!failed) runCatching { draw(it) }.onFailure { e -> fail("Full colour stopped: ${e.message}") } } }, handler)
+    }
+
+    /**
+     * Takes one decoded frame (an image from MediaCodec.getOutputImage). The planes are copied before
+     * this returns, so the caller may release the decoder's buffer straight away.
+     */
+    fun frame(image: Image) {
+        if (failed || image.height < h * 2 || image.width < w) return
+        runCatching {
+            val p = image.planes
+            synchronized(planes) {
+                copy(p[0], w, h * 2, luma)
+                copy(p[1], w / 2, h, cb)
+                copy(p[2], w / 2, h, cr)
+                hasFrame = true
+            }
+        }.onFailure { fail("Full colour stopped: ${it.message}"); return }
+        if (drawPosted.compareAndSet(false, true)) handler.post {
+            drawPosted.set(false)
+            if (!failed) runCatching { draw() }.onFailure { fail("Full colour stopped: ${it.message}") }
+        }
+    }
+
+    /** Copies a plane into [out], packed tight. Interleaved planes are read a row at a time. */
+    private fun copy(plane: Image.Plane, width: Int, height: Int, out: ByteBuffer) {
+        val src = plane.buffer.duplicate()
+        val step = plane.pixelStride
+        val stride = plane.rowStride
+        out.clear()
+        if (step == 1) {
+            for (y in 0 until height) {
+                src.limit(y * stride + width).position(y * stride)
+                out.put(src)
+                src.limit(src.capacity())
+            }
+        } else {
+            val span = (width - 1) * step + 1
+            if (row.size < span) row = ByteArray(span)
+            if (picked.size < width) picked = ByteArray(width)
+            for (y in 0 until height) {
+                src.position(y * stride)
+                src.get(row, 0, span)
+                var i = 0
+                for (x in 0 until width) { picked[x] = row[i]; i += step }
+                out.put(picked, 0, width)
+            }
+        }
+        out.flip()
     }
 
     private fun fail(why: String) {
@@ -89,33 +140,21 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
     }
 
-    /** Uploads a plane. Rows with padding are packed tight first: some drivers mishandle GL_UNPACK_ROW_LENGTH. */
-    private fun upload(unit: Int, width: Int, height: Int, plane: Image.Plane, tight: ByteBuffer) {
-        val src = plane.buffer
-        val data = if (plane.pixelStride == 1 && plane.rowStride == width) src else {
-            tight.clear()
-            for (y in 0 until height) {
-                val row = y * plane.rowStride
-                if (plane.pixelStride == 1) {
-                    val view = src.duplicate()
-                    view.position(row).limit(row + width)
-                    tight.put(view)
-                } else for (x in 0 until width) tight.put(src.get(row + x * plane.pixelStride))
-            }
-            tight.flip()
-            tight
-        }
+    /** Uploads a tight plane. Rows are packed first: some drivers mishandle GL_UNPACK_ROW_LENGTH. */
+    private fun upload(unit: Int, width: Int, height: Int, data: ByteBuffer) {
+        data.position(0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textures[unit])
         GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, 0, width, height, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, data)
     }
 
-    private fun draw(image: Image) {
-        if (display == EGL14.EGL_NO_DISPLAY || image.height < h * 2) return
-        val planes = image.planes
-        upload(0, w, h * 2, planes[0], luma)
-        upload(1, w / 2, h, planes[1], cb)
-        upload(2, w / 2, h, planes[2], cr)
+    private fun draw() {
+        if (display == EGL14.EGL_NO_DISPLAY || !hasFrame) return
+        synchronized(planes) {
+            upload(0, w, h * 2, luma)
+            upload(1, w / 2, h, cb)
+            upload(2, w / 2, h, cr)
+        }
         val size = IntArray(2)
         EGL14.eglQuerySurface(display, surface, EGL14.EGL_WIDTH, size, 0)
         EGL14.eglQuerySurface(display, surface, EGL14.EGL_HEIGHT, size, 1)
@@ -128,8 +167,8 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
     /** Frees the view for the next renderer or decoder; waits briefly so the view is free on return. */
     fun release() {
         val done = CountDownLatch(1)
+        failed = true
         handler.post {
-            reader.setOnImageAvailableListener(null, null)
             if (display != EGL14.EGL_NO_DISPLAY) {
                 EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 if (surface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(display, surface)
@@ -137,7 +176,6 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
                 EGL14.eglTerminate(display)
                 display = EGL14.EGL_NO_DISPLAY
             }
-            reader.close()
             done.countDown()
         }
         done.await(500, TimeUnit.MILLISECONDS)

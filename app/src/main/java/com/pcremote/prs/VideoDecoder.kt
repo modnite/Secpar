@@ -15,9 +15,11 @@ import java.util.ArrayDeque
  * Hardware MediaCodec with bounded input and display-paced output. Configures itself on the first
  * keyframe (parameter sets become csd buffers). Obsolete decoded frames never queue on the surface.
  * [onError] fires once if the decoder can't handle the stream (caller falls back to another codec).
+ * With [images] set (full colour), frames are not rendered to [surface]: each is handed over from the
+ * decoder's own buffers at its display time and the buffer is released afterwards.
  */
 class VideoDecoder(
-    private val surface: Surface,
+    private val surface: Surface?,
     private val codec: String,
     private val width: Int,
     private val height: Int,
@@ -25,6 +27,7 @@ class VideoDecoder(
     private val onError: (String) -> Unit,
     private val onNeedKeyframe: () -> Unit,
     private val appVsyncOffsetNs: Long = 0,
+    private val images: ((android.media.Image) -> Unit)? = null,
 ) {
     private val thread = HandlerThread("pcr-video", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
@@ -92,6 +95,7 @@ class VideoDecoder(
             if (Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, 1)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(width * height, 1 shl 20))
             options.forEach { (k, v) -> setInteger(k, v) }
+            if (images != null) setInteger(MediaFormat.KEY_COLOR_FORMAT, android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             csd(first.data, codec).forEachIndexed { i, b -> setByteBuffer("csd-$i", ByteBuffer.wrap(b)) }
         }
         var configuring: MediaCodec? = null
@@ -102,7 +106,7 @@ class VideoDecoder(
             val attempts = CodecPicker.lowLatencyConfigurations(info.name, info.lowLatency)
             for ((attempt, options) in attempts.withIndex()) {
                 try {
-                    c.configure(format(options), surface, null, 0)
+                    c.configure(format(options), if (images != null) null else surface, null, 0)
                     Log.i(TAG, "configured ${info.name} latencyAttempt=$attempt options=$options")
                     break
                 } catch (error: Exception) {
@@ -122,7 +126,7 @@ class VideoDecoder(
                 }
             }
             if (Build.VERSION.SDK_INT >= 30) runCatching {
-                surface.setFrameRate(fps.toFloat(), Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
+                surface?.setFrameRate(fps.toFloat(), Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
             }
             Log.i(TAG, "decoder ${info.name} $codec ${width}x$height@$fps lowLatency=${info.lowLatency}")
         } catch (e: Exception) {
@@ -185,7 +189,10 @@ class VideoDecoder(
             val presentTimeNs = frameTimeNanos - appVsyncOffsetNs
             pictures.poll(presentTimeNs)?.let { picture ->
                 try {
-                    mc?.releaseOutputBuffer(picture.index, presentTimeNs)
+                    val sink = images
+                    if (sink != null) {
+                        mc?.let { c -> c.getOutputImage(picture.index)?.let(sink); c.releaseOutputBuffer(picture.index, false) }
+                    } else mc?.releaseOutputBuffer(picture.index, presentTimeNs)
                     presented++
                     if (picture.receivedUs > 0) {
                         val took = (System.nanoTime() / 1000 - picture.receivedUs).coerceIn(0, 1_000_000)
