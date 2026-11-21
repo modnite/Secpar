@@ -335,7 +335,8 @@ private fun Screen(thumb: ImageBitmap?, enabled: Boolean, label: String, onClick
     val haptics = com.pcremote.ui.theme.rememberHaptics()
     Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(MidnightShapes.control).background(c.bg)
         .border(1.dp, c.border, MidnightShapes.control)
-        .then(if (enabled) Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = label) { haptics.tick(); onClick() } else Modifier)
+        .then(if (enabled) Modifier.clickable(remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            androidx.compose.material3.ripple(), role = androidx.compose.ui.semantics.Role.Button, onClickLabel = label) { haptics.tick(); onClick() } else Modifier)
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         if (thumb != null) Image(thumb, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Icon(painterResource(R.drawable.lucide_monitor), null, tint = if (enabled) c.textDim else c.border, modifier = Modifier.size(32.dp))

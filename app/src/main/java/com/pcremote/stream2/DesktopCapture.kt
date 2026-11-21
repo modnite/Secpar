@@ -4,7 +4,8 @@ package com.pcremote.stream2
 class DesktopCapture(private val releaseInput: () -> Unit, private val nativeCapture: (Boolean) -> Unit, val freePointer: Boolean) {
     constructor(releaseInput: () -> Unit, nativeCapture: (Boolean) -> Unit) : this(releaseInput, nativeCapture, false)
     var requested = false; private set
-    private var uiOpen = false
+    /** The stream menu or the key bar is open: keys belong to the app, not the computer. */
+    var uiOpen = false; private set
     private var focused = true
     val forwarding get() = requested && !uiOpen && focused
 

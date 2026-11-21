@@ -356,7 +356,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
-        if (physicalPads?.let { com.pcremote.modes.PadInput.key(it, event) } == true) return true
+        // A TV remote reports itself as a controller too: while the stream menu is open its arrows move
+        // through the menu instead of reaching the computer as a controller's D-pad.
+        if (desktopCapture?.uiOpen != true && physicalPads?.let { com.pcremote.modes.PadInput.key(it, event) } == true) return true
         val chords = streamChords
         if (event.keyCode == chordKey) {
             if (event.action == android.view.KeyEvent.ACTION_UP) chordKey = null
