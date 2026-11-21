@@ -9,7 +9,7 @@
   let state = 'pending';
 
   const call = async (method, body) => {
-    const response = await fetch(`/admin/api/comments${method === 'GET' ? `?state=${state}` : ''}`, {
+    const response = await fetch(`/blog/admin/api/comments${method === 'GET' ? `?state=${state}` : ''}`, {
       method, headers: { authorization: `Bearer ${key}`, ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
@@ -50,7 +50,7 @@
       const when = document.createElement('time');
       when.textContent = new Date(c.created * 1000).toLocaleString();
       const post = document.createElement('a');
-      post.href = `/${c.post}/`;
+      post.href = `/blog/${c.post}/`;
       post.textContent = c.post;
       meta.append(name, when, post);
       const text = document.createElement('p');

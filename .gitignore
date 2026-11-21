@@ -79,3 +79,5 @@ host/src-tauri/tauri.encoder-build.conf.json
 cloud/site/public/blog/
 cloud/blog/.hugo_build.lock
 cloud/blog/resources/
+# Fetched by the deploy workflow (pinned and hash-checked).
+cloud/site/public/editor/decap-cms.js

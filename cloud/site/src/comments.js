@@ -3,7 +3,7 @@
 // field, a signed form time (too fast or too old is refused), link limits, a duplicate
 // check, Cloudflare Turnstile verified on the server, and per-sender rate limits.
 // Comments render as plain text, so links in them are never clickable.
-const HOST = 'blog.secpar.win';
+const HOST = 'secpar.win';
 const ORIGIN = `https://${HOST}`;
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const encoder = new TextEncoder();
@@ -55,7 +55,7 @@ export async function commentsSection(env, url, post) {
   const notice = NOTICES[url.searchParams.get('comment')];
   const t = now(), stamp = `${t}.${await hmac(env.BLOG_ADMIN_KEY, `form:${post}:${t}`)}`;
   return `<h2>Comments</h2>${list}
-<form class="comment-form" method="post" action="/comments">${notice ? `<p class="notice${url.searchParams.get('comment') === 'sent' ? '' : ' error'}" role="status">${escape(notice)}</p>` : ''}
+<form class="comment-form" method="post" action="/blog/comments">${notice ? `<p class="notice${url.searchParams.get('comment') === 'sent' ? '' : ' error'}" role="status">${escape(notice)}</p>` : ''}
 <input type="hidden" name="post" value="${escape(post)}"><input type="hidden" name="t" value="${stamp}">
 <label>Name (optional)<input name="name" maxlength="40" autocomplete="nickname" placeholder="Anonymous"></label>
 <label>Comment<textarea name="body" required minlength="2" maxlength="2000" rows="5"></textarea></label>
@@ -65,7 +65,7 @@ export async function commentsSection(env, url, post) {
 </form><script src="/assets/comments.js" defer></script>`;
 }
 
-const back = (post, code) => Response.redirect(`${ORIGIN}/${post}/?comment=${code}#comments`, 303);
+const back = (post, code) => Response.redirect(`${ORIGIN}/blog/${post}/?comment=${code}#comments`, 303);
 
 export async function postComment(request, env) {
   if (!commentsOpen(env)) return new Response('Comments are not open.', { status: 404 });
@@ -127,7 +127,7 @@ const json = (data, status = 200) => new Response(JSON.stringify(data), { status
 
 const ADMIN_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Comments | Secpar blog</title><link rel="icon" href="/assets/secpar-icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/assets/blog.css"></head>
-<body><header class="nav wrap"><a class="brand" href="/" aria-label="Secpar blog"><img src="/assets/secpar-wordmark.svg" width="151" height="36" alt="Secpar"></a><nav aria-label="Main navigation"><a href="/">Blog</a></nav></header>
+<body><header class="nav wrap"><a class="brand" href="/" aria-label="Secpar home"><img src="/assets/secpar-wordmark.svg" width="151" height="36" alt="Secpar"></a><nav aria-label="Main navigation"><a href="/blog/">Blog</a><a href="/blog/admin/">Editor</a></nav></header>
 <main class="wrap blog moderate"><h1>Comments</h1>
 <form id="key" class="comment-form"><label>Moderator key<input type="password" name="key" autocomplete="current-password" required></label><div class="row"><button class="button small outline" type="submit">Open</button></div></form>
 <div id="queue" hidden><nav class="tabs"><button type="button" data-state="pending" aria-pressed="true">Waiting</button><button type="button" data-state="approved" aria-pressed="false">Approved</button><button type="button" id="lock">Lock</button></nav><p id="status" class="empty" role="status"></p><ol class="comments" id="list"></ol></div>
@@ -135,20 +135,20 @@ const ADMIN_PAGE = `<!doctype html>
 
 /** The owner's moderation page and its API, behind the moderator key. */
 export async function admin(request, env, url) {
-  if (url.pathname === '/admin' || url.pathname === '/admin/') {
+  if (url.pathname === '/blog/admin/comments' || url.pathname === '/blog/admin/comments/') {
     return new Response(ADMIN_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' } });
   }
   if (!commentsOpen(env)) return json({ error: 'closed' }, 404);
   const key = (request.headers.get('authorization') || '').replace(/^Bearer /, '');
   if (!key || !same(await hmac('moderator', key), await hmac('moderator', env.BLOG_ADMIN_KEY))) return json({ error: 'key' }, 401);
-  if (url.pathname === '/admin/api/comments' && request.method === 'GET') {
+  if (url.pathname === '/blog/admin/api/comments' && request.method === 'GET') {
     const approved = url.searchParams.get('state') === 'approved' ? 1 : 0;
     const rows = (await env.DB.prepare(`SELECT c.id, c.post, c.name, c.body, c.created, c.sender,
         (SELECT COUNT(*) FROM comments s WHERE s.sender=c.sender) AS from_sender
       FROM comments c WHERE approved=? ORDER BY created ${approved ? 'DESC' : 'ASC'} LIMIT 200`).bind(approved).all()).results;
     return json({ comments: rows });
   }
-  if (url.pathname === '/admin/api/comments' && request.method === 'POST') {
+  if (url.pathname === '/blog/admin/api/comments' && request.method === 'POST') {
     if (request.headers.get('origin') !== ORIGIN) return json({ error: 'origin' }, 403);
     const { action, id, sender } = await request.json().catch(() => ({}));
     if (action === 'approve') await env.DB.prepare('UPDATE comments SET approved=1 WHERE id=?').bind(Number(id)).run();

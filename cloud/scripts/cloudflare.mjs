@@ -143,9 +143,16 @@ async function blogWidget(id) {
 async function findOrCreateWidget(id) {
   const widgets = await api(`/accounts/${id}/challenges/widgets?per_page=50`);
   const found = widgets.find((w) => w.name === "Secpar blog comments");
-  if (found) return found;
+  // The blog lives at secpar.win/blog; Turnstile matches the hostname.
+  if (found && found.domains?.includes("secpar.win")) return found;
+  if (found) {
+    console.log("Allowed secpar.win on the blog Turnstile widget.");
+    return api(`/accounts/${id}/challenges/widgets/${found.sitekey}`, "PUT", {
+      name: found.name, domains: ["secpar.win"], mode: found.mode, region: found.region ?? "world",
+    });
+  }
   const created = await api(`/accounts/${id}/challenges/widgets`, "POST", {
-    name: "Secpar blog comments", domains: ["blog.secpar.win"], mode: "managed", region: "world",
+    name: "Secpar blog comments", domains: ["secpar.win"], mode: "managed", region: "world",
   });
   console.log("Created the Turnstile widget for blog comments.");
   return created;
@@ -165,6 +172,12 @@ async function siteSecrets() {
   await api(path, "PUT", { name: "TURNSTILE_SECRET", type: "secret_text", text: widget.secret });
   await api(path, "PUT", { name: "BLOG_ADMIN_KEY", type: "secret_text", text: key });
   console.log("Configured the blog comment secrets.");
+  // The blog editor signs in through a GitHub OAuth app.
+  const clientId = process.env.BLOG_GITHUB_CLIENT_ID, clientSecret = process.env.BLOG_GITHUB_CLIENT_SECRET;
+  if (!clientId || !clientSecret) { console.log("::warning::Blog editor sign-in is off: set BLOG_GITHUB_CLIENT_ID and BLOG_GITHUB_CLIENT_SECRET."); return; }
+  await api(path, "PUT", { name: "BLOG_GITHUB_CLIENT_ID", type: "secret_text", text: clientId });
+  await api(path, "PUT", { name: "BLOG_GITHUB_CLIENT_SECRET", type: "secret_text", text: clientSecret });
+  console.log("Configured the blog editor sign-in.");
 }
 async function signingKey() {
   const id = await account();

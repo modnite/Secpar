@@ -53,6 +53,21 @@ jobs:
           "$dir/hugo" version
           "$dir/hugo" --source cloud/blog --destination "$GITHUB_WORKSPACE/cloud/site/public/blog" --cleanDestinationDir --panicOnWarning
           test -f cloud/site/public/blog/index.html
+      - name: Add the blog editor (Decap CMS)
+        timeout-minutes: 15
+        env:
+          DECAP_VERSION: '3.18.0'
+          DECAP_SHA256: 'ff32452465bb6d18557b53d3345da4c79d13e0e4fabc74971e72e1152bda384e'
+        run: |
+          # Kept in the runner's tool cache and checked against the pinned hash.
+          file="${RUNNER_TOOL_CACHE:-$HOME/.cache}/decap-cms/${DECAP_VERSION}/decap-cms.js"
+          if ! echo "${DECAP_SHA256}  $file" | sha256sum --check --strict --status 2>/dev/null; then
+            mkdir -p "$(dirname "$file")"
+            curl --fail --location --retry 3 --max-time 900 -o "$file.part" "https://unpkg.com/decap-cms@${DECAP_VERSION}/dist/decap-cms.js"
+            echo "${DECAP_SHA256}  $file.part" | sha256sum --check --strict
+            mv "$file.part" "$file"
+          fi
+          cp "$file" cloud/site/public/editor/decap-cms.js
       - name: Check the website code
         run: |
           node --check cloud/site/src/worker.js
@@ -71,6 +86,8 @@ jobs:
       - name: Configure blog comment secrets
         env:
           BLOG_ADMIN_KEY: ${{ secrets.BLOG_ADMIN_KEY }}
+          BLOG_GITHUB_CLIENT_ID: ${{ secrets.BLOG_GITHUB_CLIENT_ID }}
+          BLOG_GITHUB_CLIENT_SECRET: ${{ secrets.BLOG_GITHUB_CLIENT_SECRET }}
         run: node cloud/scripts/cloudflare.mjs site-secrets
       - name: Check the public domain
         run: |

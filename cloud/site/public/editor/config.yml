@@ -1,0 +1,37 @@
+# Decap CMS (https://decapcms.org, MIT) for secpar.win/blog/admin.
+# Publishing commits the post to main; the site deploy workflow then builds it with Hugo.
+backend:
+  name: github
+  repo: modnite/Secpar
+  branch: main
+  base_url: https://secpar.win
+  auth_endpoint: blog/oauth/auth
+  commit_messages:
+    create: 'Blog: add {{slug}}'
+    update: 'Blog: update {{slug}}'
+    delete: 'Blog: delete {{slug}}'
+    uploadMedia: 'Blog: upload {{path}}'
+    deleteMedia: 'Blog: delete {{path}}'
+site_url: https://secpar.win/blog/
+display_url: https://secpar.win/blog/
+logo_url: /assets/secpar-icon.svg
+locale: en
+media_folder: cloud/blog/static/images
+public_folder: /blog/images
+collections:
+  - name: posts
+    label: Posts
+    label_singular: Post
+    description: Published posts appear on secpar.win/blog about two minutes after you publish.
+    folder: cloud/blog/content/posts
+    create: true
+    slug: '{{slug}}'
+    summary: "{{title}} · {{date | date('D MMMM YYYY')}}{{draft | ternary(' · Draft', '')}}"
+    sortable_fields: ['date', 'title']
+    view_groups: [{ label: Year, field: date, pattern: '\d{4}' }]
+    fields:
+      - { label: Title, name: title, widget: string }
+      - { label: Date, name: date, widget: datetime, format: 'YYYY-MM-DD', date_format: 'D MMMM YYYY', time_format: false, picker_utc: true, default: '{{now}}' }
+      - { label: Draft, name: draft, widget: boolean, default: false, required: false, hint: 'Drafts are saved but not shown on the blog.' }
+      - { label: Summary, name: summary, widget: text, required: false, hint: 'Optional. Shown in the post list and feed; the first paragraph is used otherwise.' }
+      - { label: Text, name: body, widget: markdown }
