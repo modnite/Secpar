@@ -82,7 +82,7 @@ class PrsPipeline(
         // Full colour: the frames are twice the picture's height, decoded into the renderer.
         val renderer = if (r.chroma == "444") com.pcremote.prs.PackedRenderer(surface, r.w, r.h) { onDecoderFailed() } else null
         packed = renderer
-        return VideoDecoder(renderer?.input ?: surface, r.codec, r.w, if (renderer != null) r.h * 2 else r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr, appVsyncOffsetNs)
+        return VideoDecoder(surface, r.codec, r.w, if (renderer != null) r.h * 2 else r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr, appVsyncOffsetNs, renderer?.let { it::frame })
             .also { d -> d.onRendered = { receiver.decodeMs = d.decodeMs } }
     }
 
