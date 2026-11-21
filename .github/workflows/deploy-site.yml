@@ -57,11 +57,21 @@ jobs:
         run: |
           node --check cloud/site/src/worker.js
           node --check cloud/site/public/site.js
+          node --check cloud/site/src/comments.js
+          node --check cloud/site/public/assets/comments.js
+          node --check cloud/site/public/assets/comments-admin.js
       - id: config
         run: node cloud/scripts/cloudflare.mjs prepare
+      - name: Apply blog comment migrations
+        working-directory: cloud/accounts
+        run: npx wrangler d1 migrations apply secpar-blog --remote --config "${{ steps.config.outputs.site }}"
       - name: Deploy the public site
         working-directory: cloud/accounts
         run: npx wrangler deploy --config "${{ steps.config.outputs.site }}"
+      - name: Configure blog comment secrets
+        env:
+          BLOG_ADMIN_KEY: ${{ secrets.BLOG_ADMIN_KEY }}
+        run: node cloud/scripts/cloudflare.mjs site-secrets
       - name: Check the public domain
         run: |
           curl --fail --max-time 20 --retry 3 --retry-delay 5 https://secpar.win/health ||

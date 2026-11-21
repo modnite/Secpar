@@ -24,3 +24,26 @@
 @media(max-width:760px){.blog{padding-top:8px}.blog h1{font-size:32px}.nav nav{gap:16px}.nav .brand img{width:120px}}
 .pager{display:flex;justify-content:space-between;gap:20px;margin-top:28px;font-size:14px;color:var(--muted)}
 .updated{font-size:13px;color:var(--muted);margin-top:32px}
+#comments{margin-top:48px;padding-top:8px;border-top:1px solid var(--line)}
+#comments h2{font-size:22px;margin:24px 0 16px}
+.comments{list-style:none;margin:0 0 28px;padding:0}
+.comments li{padding:16px 0;border-bottom:1px solid var(--line)}
+.comments .meta{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;margin:0 0 6px;font-size:14px}
+.comments .meta strong{color:var(--text)}.comments .meta time{display:inline;margin:0;font-size:13px}
+.comments p{margin:0 0 8px;color:#c1cbc9;overflow-wrap:anywhere}.comments .text{white-space:pre-wrap}
+.comment-form{display:grid;gap:14px;max-width:620px}
+.comment-form label{display:grid;gap:6px;font-size:14px;color:var(--text)}
+.comment-form input,.comment-form textarea{font:inherit;font-size:15px;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:9px 12px;width:100%}
+.comment-form textarea{resize:vertical;min-height:110px}
+.comment-form input:focus,.comment-form textarea:focus{outline:2px solid var(--mint);outline-offset:1px;border-color:transparent}
+.comment-form .row,.moderate .row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px}.comment-form .row p{margin:0;font-size:13px;color:var(--muted)}
+.comment-form .button{min-height:40px;cursor:pointer;color:var(--text);background:none;font-family:inherit}
+.trap{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.turnstile:empty{display:none}.turnstile[data-waiting]:empty{display:block}.turnstile[data-waiting]:empty::before{content:"Checking you are not a bot. Post again in a moment.";font-size:13px;color:var(--muted)}
+.notice{margin:0;padding:10px 12px;border:1px solid var(--mint);border-radius:6px;font-size:14px;color:var(--text)}.notice.error{border-color:var(--orange)}
+.moderate .tabs{display:flex;gap:8px;margin-bottom:16px}.moderate .tabs button{font:inherit;font-size:14px;color:var(--muted);background:none;border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+.moderate .tabs button[aria-pressed=true]{color:var(--text);border-color:var(--mint)}.moderate #lock{margin-left:auto}
+.moderate .button{min-height:34px;padding:6px 12px;font-size:13px;cursor:pointer;color:var(--text);background:none;font-family:inherit}
+.moderate .meta a{color:var(--mint)}
+label[data-error]::after{content:attr(data-error);color:var(--orange);font-size:13px}
+[hidden]{display:none!important}

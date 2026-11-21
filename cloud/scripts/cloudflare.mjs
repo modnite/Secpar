@@ -70,10 +70,20 @@ async function prepare() {
   const id = await account();
   const service = process.env.SECPAR_SERVICE ?? "accounts";
   if (service === "site") {
-    const site = await config(siteProject, { account_id: id });
+    // Blog comments: a D1 database and a Turnstile widget, created once and reused.
+    const named = (await api(`/accounts/${id}/d1/database?name=secpar-blog`)).filter((d) => d.name === "secpar-blog");
+    if (named.length > 1) throw new Error("More than one database matches secpar-blog.");
+    const db = named[0] ?? (await api(`/accounts/${id}/d1/database`, "POST", { name: "secpar-blog" }));
+    if (!db.uuid) throw new Error("Cloudflare did not return a D1 database id.");
+    const widget = await blogWidget(id);
+    const site = await config(siteProject, {
+      account_id: id,
+      d1_databases: [{ binding: "DB", database_name: "secpar-blog", database_id: db.uuid, migrations_dir: "migrations" }],
+      vars: { TURNSTILE_SITEKEY: widget.sitekey },
+    });
     if (process.env.GITHUB_OUTPUT)
       await writeFile(process.env.GITHUB_OUTPUT, `site=${site}\n`, { flag: "a" });
-    console.log("Prepared the Secpar public website for secpar.win.");
+    console.log("Prepared the Secpar public website for secpar.win and blog.secpar.win.");
     return;
   }
   if (!["accounts", "relay", "both"].includes(service))
@@ -122,6 +132,30 @@ async function prepare() {
   console.log(
     "Prepared Secpar account and relay configurations for secpar.win.",
   );
+}
+async function blogWidget(id) {
+  const widgets = await api(`/accounts/${id}/challenges/widgets?per_page=50`);
+  const found = widgets.find((w) => w.name === "Secpar blog comments");
+  if (found) return found;
+  const created = await api(`/accounts/${id}/challenges/widgets`, "POST", {
+    name: "Secpar blog comments", domains: ["blog.secpar.win"], mode: "managed", region: "world",
+  });
+  console.log("Created the Turnstile widget for blog comments.");
+  return created;
+}
+async function siteSecrets() {
+  const id = await account();
+  const key = process.env.BLOG_ADMIN_KEY;
+  if (!key || key.length < 32) throw new Error("Set the repository secret BLOG_ADMIN_KEY (at least 32 characters).");
+  const widgets = await api(`/accounts/${id}/challenges/widgets?per_page=50`);
+  const found = widgets.find((w) => w.name === "Secpar blog comments");
+  if (!found) throw new Error("The blog Turnstile widget is missing; run prepare first.");
+  const widget = await api(`/accounts/${id}/challenges/widgets/${found.sitekey}`);
+  const path = `/accounts/${id}/workers/scripts/secpar-site/secrets`;
+  // Secrets go straight to Cloudflare's secret store: never to disk, logs or arguments.
+  await api(path, "PUT", { name: "TURNSTILE_SECRET", type: "secret_text", text: widget.secret });
+  await api(path, "PUT", { name: "BLOG_ADMIN_KEY", type: "secret_text", text: key });
+  console.log("Configured the blog comment secrets.");
 }
 async function signingKey() {
   const id = await account();
@@ -192,6 +226,7 @@ try {
   else if (process.argv[2] === "signing-key") await signingKey();
   else if (process.argv[2] === "email-key") await emailKey();
   else if (process.argv[2] === "email-check") await emailCheck();
+  else if (process.argv[2] === "site-secrets") await siteSecrets();
   else throw new Error("Expected prepare, signing-key, email-check or email-key.");
 } catch (error) {
   console.error(error.message);
