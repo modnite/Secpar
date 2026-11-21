@@ -99,6 +99,9 @@ pub enum ClientMsg {
         /// Windows device name of the display to stream; empty = the one set on the PC.
         #[serde(default, deserialize_with = "null_as_default")]
         display: String,
+        /// "444": the client can show 4:4:4 packed into a double-height 4:2:0 frame.
+        #[serde(default, deserialize_with = "null_as_default")]
+        chroma: String,
     },
     /// Switch the running stream to another display (an id from `stream.displays`).
     #[serde(rename = "stream.display")]
@@ -260,6 +263,9 @@ pub enum ServerMsg {
     Status { streaming: bool, to: String },
     #[serde(rename = "stream.ready")]
     StreamReady {
+        /// "444" when frames carry 4:4:4 packed (twice `h` tall); absent for plain 4:2:0.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chroma: Option<String>,
         codec: String,
         w: u32,
         h: u32,
@@ -666,7 +672,8 @@ mod tests {
                 max_kbps: 40000,
                 audio: true,
                 cands: vec![],
-                display: String::new()
+                display: String::new(),
+                chroma: String::new()
             }
         );
         assert_eq!(
@@ -681,7 +688,8 @@ mod tests {
                 max_kbps: 0,
                 audio: false,
                 cands: vec!["192.168.0.5:40000".into(), "198.51.100.2:6000".into()],
-                display: String::new()
+                display: String::new(),
+                chroma: String::new()
             }
         );
         assert_eq!(
@@ -728,6 +736,7 @@ mod tests {
         );
         assert_eq!(
             s(&ServerMsg::StreamReady {
+                chroma: None,
                 codec: "hevc".into(),
                 w: 1920,
                 h: 1080,

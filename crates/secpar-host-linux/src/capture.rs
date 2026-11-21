@@ -15,6 +15,8 @@ pub struct VideoOptions {
     /// Settings › Picture: `auto`, `vaapi`, `nvenc` or `software`, and `fast`, `balanced` or `quality`.
     pub encoder: String,
     pub preset: String,
+    /// The client can show 4:4:4 packed into a double-height 4:2:0 frame.
+    pub chroma444: bool,
 }
 pub struct EncodedFrame {
     pub data: Vec<u8>,
@@ -158,11 +160,19 @@ fn fit(native: (u32, u32), wanted: (u32, u32)) -> (u32, u32) {
         ((native.1 as f64 * scale) as u32 & !1).max(2),
     )
 }
+/// The picture size of a packed (4:4:4) stream: explicit, with a width that is a multiple of 4 so
+/// that a Y444 frame's planes lie exactly like the packed frame's (see `description`).
+fn packed_size(native: (u32, u32), options: &VideoOptions) -> (u32, u32) {
+    let (w, h) = fit(native, (options.width, options.height));
+    ((w & !3).max(4), h)
+}
+
 fn description(
     source: &str,
     encoder: &Encoder,
     options: &VideoOptions,
     native: (u32, u32),
+    packed: bool,
 ) -> String {
     let fps = options.fps.clamp(1, 240);
     let resolution = if options.width == 0 || options.height == 0 {
@@ -180,7 +190,16 @@ fn description(
     // the encoder's format, for any encoder. System-memory frames convert on the CPU. The last caps filter
     // is named "size": changing its caps resizes the running stream (see `Capture::set_size`).
     let convert = if source.contains("memory:DMABuf") { "glupload ! glcolorconvert ! gldownload" } else { "videoconvert" };
-    let convert = format!("{convert} ! videoscale ! videorate drop-only=true ! capsfilter name=size caps=video/x-raw,format={},framerate={fps}/1{resolution}",encoder.raw);
+    let convert = if packed {
+        // 4:4:4 packed: Y444 at width w (a multiple of 4) has its Y, Cb and Cr planes one after another,
+        // which is byte for byte a w by 2h NV12 frame holding Y, then Cb, then Cr pairs in the chroma
+        // plane: the layout clients unpack. The caps are relabelled, the bytes are not touched. Dropping
+        // the allocation query keeps the frames in that plain layout, with no padding or plane metadata.
+        let (w, h) = packed_size(native, options);
+        format!("{convert} ! videoscale ! videorate drop-only=true ! capsfilter name=size caps=video/x-raw,format=Y444,colorimetry=bt709,framerate={fps}/1,width={w},height={h} ! identity drop-allocation=true ! capssetter caps=video/x-raw,format=NV12,height={} replace=false", h * 2)
+    } else {
+        format!("{convert} ! videoscale ! videorate drop-only=true ! capsfilter name=size caps=video/x-raw,format={},framerate={fps}/1{resolution}",encoder.raw)
+    };
     format!("{source} ! queue name=isolate leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ! {convert} ! {} name=encoder {} ! {parser} config-interval=-1 ! {caps},stream-format=byte-stream,alignment=au ! appsink name=output sync=false max-buffers=2 drop=false enable-last-sample=false",encoder.factory,encoder.properties)
 }
 /// The portal's stream as plain system-memory frames. KDE offers GPU buffers with tiling modifiers that
@@ -226,6 +245,7 @@ pub struct Capture {
     encoder_name: &'static str,
     codec: &'static str,
     raw: &'static str,
+    packed: bool,
     native: (u32, u32),
     size: (u32, u32),
     fps: u32,
@@ -271,11 +291,14 @@ impl Capture {
         only: Option<&str>,
     ) -> Result<Self, String> {
         let mut failures = Vec::new();
+        // 4:4:4 first when the client asked for it; normal colour when no encoder takes it.
+        let tries: &[bool] = if options.chroma444 && gst::ElementFactory::find("capssetter").is_some() { &[true, false] } else { &[false] };
+        for &packed in tries {
         for encoder in candidates(&options) {
             if only.is_some_and(|o| o != encoder.factory) || gst::ElementFactory::find(encoder.factory).is_none() {
                 continue;
             }
-            let pipeline = match gst::parse::launch(&description(source, &encoder, &options, native)) {
+            let pipeline = match gst::parse::launch(&description(source, &encoder, &options, native, packed)) {
                 Ok(p) => match p.downcast::<gst::Pipeline>() {
                     Ok(p) => p,
                     Err(_) => {failures.push(format!("{}: invalid capture pipeline",encoder.factory));continue;}
@@ -303,8 +326,9 @@ impl Capture {
                 encoder_name: encoder.factory,
                 codec: encoder.codec,
                 raw: encoder.raw,
+                packed,
                 native,
-                size: fit(native, (options.width, options.height)),
+                size: if packed { packed_size(native, &options) } else { fit(native, (options.width, options.height)) },
                 fps: options.fps.clamp(1, 240),
                 first: None,
                 source: source.to_string(),
@@ -328,6 +352,7 @@ impl Capture {
                 Err(error) => failures.push(format!("{}: {error}",encoder.factory)),
             }
         }
+        }
         Err(if failures.is_empty() {"No compatible GStreamer encoder is installed. Install gst-plugins-ugly (x264) or the VA/NVENC plugins.".into()}else{format!("Could not start desktop capture: {}",failures.join("; "))})
     }
     pub fn size(&self) -> (u32, u32) {
@@ -349,8 +374,13 @@ impl Capture {
     /// destroy and recreate its VA context, and destroying that context aborts the whole process on Intel's
     /// iHD driver (the same crash `discard` works around). It gets a new chain beside the old one instead, and
     /// the old one is parked like on a disconnect.
+    /// Frames carry 4:4:4 packed into twice the picture's height.
+    pub fn packed(&self) -> bool {
+        self.packed
+    }
     pub fn set_size(&mut self, wanted: (u32, u32)) -> Option<(u32, u32)> {
-        if replaces_chain_on_resize(self.encoder_name, parked_chains()) {
+        // A packed stream's two caps (Y444 and the relabelled frame) change together with a new chain.
+        if self.packed || replaces_chain_on_resize(self.encoder_name, parked_chains()) {
             return self.set_size_by_new_chain(wanted);
         }
         self.set_size_in_place(wanted)
@@ -436,7 +466,8 @@ impl Capture {
             data: map.as_slice().to_vec(),
             key: !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT),
             width,
-            height,
+            // the picture, not the packed frame
+            height: if self.packed { height / 2 } else { height },
             capture_us: crate::now_us().saturating_sub(age),
         }))
     }
@@ -481,15 +512,15 @@ impl Drop for Capture {
 mod tests {
     use super::*;
     fn sample_options() -> VideoOptions {
-        VideoOptions { width: 0, height: 0, fps: 60, kbps: 8000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() }
+        VideoOptions { width: 0, height: 0, fps: 60, kbps: 8000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false }
     }
     #[test]
     fn dmabuf_frames_convert_on_the_gpu_and_system_frames_on_the_cpu() {
         let enc = &candidates(&sample_options())[1]; // vah264enc
-        let gpu = description("pipewiresrc ! video/x-raw(memory:DMABuf),format=DMA_DRM", enc, &sample_options(), (1366, 768));
+        let gpu = description("pipewiresrc ! video/x-raw(memory:DMABuf),format=DMA_DRM", enc, &sample_options(), (1366, 768), false);
         assert!(gpu.contains("glupload ! glcolorconvert ! gldownload"), "{gpu}");
         assert!(!gpu.contains("videoconvert"), "{gpu}");
-        let cpu = description("pipewiresrc ! video/x-raw", enc, &sample_options(), (1366, 768));
+        let cpu = description("pipewiresrc ! video/x-raw", enc, &sample_options(), (1366, 768), false);
         assert!(cpu.contains("videoconvert ! videoscale"), "{cpu}");
         assert!(!cpu.contains("glupload"), "{cpu}");
     }
@@ -497,7 +528,7 @@ mod tests {
     fn every_chain_ends_in_a_named_size_filter_and_variants_try_the_gpu_first() {
         let enc = &candidates(&sample_options())[1];
         for source in ["pipewiresrc ! video/x-raw(memory:DMABuf),format=DMA_DRM", "pipewiresrc ! video/x-raw"] {
-            let d = description(source, enc, &sample_options(), (1366, 768));
+            let d = description(source, enc, &sample_options(), (1366, 768), false);
             assert!(d.contains("capsfilter name=size caps=video/x-raw,format=NV12,framerate=60/1"), "{d}");
         }
         let v = source_variants("pipewiresrc fd=3 path=7", 60, (1366, 768));
@@ -511,7 +542,7 @@ mod tests {
         options.width = 1280;
         options.height = 720;
         let enc = &candidates(&options)[1];
-        let d = description("pipewiresrc ! video/x-raw", enc, &options, (1366, 768));
+        let d = description("pipewiresrc ! video/x-raw", enc, &options, (1366, 768), false);
         let (w, h) = fit((1366, 768), (1280, 720));
         assert!(w <= 1280 && h <= 720 && w % 2 == 0 && h % 2 == 0, "{w}x{h}");
         assert!(d.contains(&format!("width={w},height={h}")), "{d}");
@@ -535,7 +566,7 @@ mod tests {
     fn portal_resize_live() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let portal = test_portal(&rt);
-        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
+        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false };
         let mut capture = Capture::start(portal.clone(), options).expect("capture");
         let native = capture.size();
         let wait = |capture: &mut Capture, ok: &dyn Fn(u32, u32) -> bool| {
@@ -607,7 +638,7 @@ mod tests {
         }
         let rt = tokio::runtime::Runtime::new().unwrap();
         let portal = test_portal(&rt);
-        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
+        let options = VideoOptions { width: 0, height: 0, fps: 60, kbps: 12000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false };
         let mut capture = Capture::start(portal.clone(), options).expect("capture");
         let (name, size) = (capture.encoder_name(), capture.size());
         let (mut frames, mut bytes, mut worst) = (0u32, 0usize, Duration::ZERO);
@@ -633,7 +664,7 @@ mod tests {
         let portal = test_portal(&rt);
         gst::init().unwrap();
         let base = format!("pipewiresrc fd={} path={} do-timestamp=true", portal.fd(), portal.node_id);
-        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 6000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
+        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 6000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false };
         let mut worked = 0;
         for variant in source_variants(&base, options.fps, (portal.width, portal.height)) {
             let label = variant.split(" ! ").skip(1).collect::<Vec<_>>().join(" ! ");
@@ -687,7 +718,7 @@ mod tests {
     }
     #[test]
     fn the_running_stream_changes_size_and_comes_back_to_the_display_size() {
-        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() });
+        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false });
         assert_eq!(capture.size(), (320, 180));
         assert_eq!(capture.set_size_in_place((160, 90)), Some((160, 90)));
         assert!(wait_for_size(&mut capture, 160, 90), "frames at the smaller size");
@@ -696,7 +727,7 @@ mod tests {
     }
     #[test]
     fn a_new_chain_takes_over_without_touching_the_display_size() {
-        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() });
+        let mut capture = synthetic(VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false });
         let native = capture.native;
         assert_eq!(capture.set_size_by_new_chain((160, 90)), Some((160, 90)));
         assert_eq!(capture.native, native, "a small picture does not redefine the display");
@@ -708,9 +739,9 @@ mod tests {
     #[test]
     fn a_size_change_never_reaches_the_pipewire_source() {
         gst::init().unwrap();
-        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
+        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false };
         let encoder = candidates(&options).pop().unwrap();
-        let pipeline = gst::parse::launch(&description("videotestsrc name=fake_source is-live=true pattern=ball ! video/x-raw,width=320,height=180", &encoder, &options, (320, 180)))
+        let pipeline = gst::parse::launch(&description("videotestsrc name=fake_source is-live=true pattern=ball ! video/x-raw,width=320,height=180", &encoder, &options, (320, 180), false))
             .unwrap()
             .downcast::<gst::Pipeline>()
             .unwrap();
@@ -750,10 +781,10 @@ mod tests {
     #[test]
     fn the_encoder_is_told_the_source_is_live() {
         gst::init().unwrap();
-        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into() };
+        let options = VideoOptions { width: 0, height: 0, fps: 30, kbps: 2000, codecs: vec!["h264".into()], encoder: "auto".into(), preset: "fast".into(), chroma444: false };
         let encoder = candidates(&options).pop().unwrap();
         // not a live source: the answer upstream is "not live", as pipewiresrc gives while it negotiates
-        let pipeline = gst::parse::launch(&description("videotestsrc", &encoder, &options, (320, 180))).unwrap().downcast::<gst::Pipeline>().unwrap();
+        let pipeline = gst::parse::launch(&description("videotestsrc", &encoder, &options, (320, 180), false)).unwrap().downcast::<gst::Pipeline>().unwrap();
         let pad = pipeline.by_name("size").unwrap().static_pad("src").unwrap();
         let ask = |pad: &gst::Pad| {
             let mut query = gst::query::Latency::new();
@@ -779,12 +810,45 @@ mod tests {
             codecs: vec!["h264".into()],
             encoder: "auto".into(),
             preset: "fast".into(),
+            chroma444: false,
         };
         let candidate = candidates(&options).pop().unwrap();
-        let text = description("videotestsrc", &candidate, &options, (320, 180));
+        let text = description("videotestsrc", &candidate, &options, (320, 180), false);
         assert!(text.find("leaky=downstream").unwrap() < text.find("name=encoder").unwrap());
         assert!(text.contains("alignment=au"));
         assert!(text.contains("max-buffers=2 drop=false"));
+    }
+    /// Packed 4:4:4 through a real encoder and decoder: a red picture comes back with Y on top,
+    /// red's Cb in the bottom half and red's Cr in the chroma plane, as clients unpack it.
+    #[test]
+    fn packed_frames_survive_encoding_with_their_layout() {
+        gst::init().unwrap();
+        for needed in ["videotestsrc", "x264enc", "avdec_h264", "capssetter"] {
+            if gst::ElementFactory::find(needed).is_none() {
+                return eprintln!("{needed} is not installed");
+            }
+        }
+        let options = VideoOptions { width: 320, height: 180, fps: 30, kbps: 4000, codecs: vec!["h264".into()], encoder: "software".into(), preset: "fast".into(), chroma444: true };
+        let encoder = candidates(&options).into_iter().find(|e| e.factory == "x264enc").unwrap();
+        let text = description("videotestsrc num-buffers=10 pattern=solid-color foreground-color=0xffff0000 ! video/x-raw,width=320,height=180", &encoder, &options, (320, 180), true);
+        assert!(text.contains("format=Y444") && text.contains("height=360"), "{text}");
+        let text = text.replace("appsink name=output", "avdec_h264 ! video/x-raw,format=I420 ! appsink name=output");
+        let pipeline = gst::parse::launch(&text).unwrap().downcast::<gst::Pipeline>().unwrap();
+        let sink = pipeline.by_name("output").unwrap().downcast::<AppSink>().unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        let sample = sink.try_pull_sample(gst::ClockTime::from_seconds(10)).expect("a decoded frame");
+        let _ = pipeline.set_state(gst::State::Null);
+        let caps = sample.caps().unwrap().structure(0).unwrap().to_owned();
+        assert_eq!((caps.get::<i32>("width").unwrap(), caps.get::<i32>("height").unwrap()), (320, 360));
+        let buffer = sample.buffer().unwrap().map_readable().unwrap();
+        let (w, h) = (320usize, 180usize);
+        let near = |got: u8, want: i32| (got as i32 - want).abs() <= 4;
+        // BT.709 limited range for pure red: Y 63, Cb 102, Cr 240.
+        assert!(near(buffer[(h / 2) * w + w / 2], 63), "Y {}", buffer[(h / 2) * w + w / 2]);
+        assert!(near(buffer[(h + h / 2) * w + w / 2], 102), "Cb {}", buffer[(h + h / 2) * w + w / 2]);
+        // In I420 the decoder's two chroma planes hold, between them, the Cr samples.
+        let chroma = &buffer[w * 2 * h..];
+        assert!(chroma.iter().take(w * h / 2).all(|c| near(*c, 240)), "Cr");
     }
     #[test]
     fn synthetic_video_encodes_complete_annexb_frames_and_forces_idr() {
@@ -797,6 +861,7 @@ mod tests {
             codecs: vec!["h264".into()],
             encoder: "auto".into(),
             preset: "fast".into(),
+            chroma444: false,
         };
         let mut capture = Capture::from_source(
             "videotestsrc is-live=true pattern=ball",
@@ -822,7 +887,7 @@ mod tests {
     #[test]
     fn startup_preserves_the_actual_capture_failure() {
         gst::init().unwrap();
-        let options=VideoOptions {width:320,height:180,fps:30,kbps:2000,codecs:vec!["h264".into()],encoder:"auto".into(),preset:"fast".into()};
+        let options=VideoOptions {width:320,height:180,fps:30,kbps:2000,codecs:vec!["h264".into()],encoder:"auto".into(),preset:"fast".into(),chroma444:false};
         let result=Capture::from_source("secpar_missing_capture_source",(320,180),options,None);
         let error=result.err().expect("Missing synthetic source must fail");
         assert!(error.contains("secpar_missing_capture_source"),"{error}");

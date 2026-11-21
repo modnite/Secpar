@@ -62,7 +62,9 @@ export async function hostRoutes(request: Request, env: Environment, me: Owner|n
       const before=await q(env,"SELECT last_seen,sharing,COALESCE(pc,'') AS pc,COALESCE(relay,'') AS relay,COALESCE(viewers,'[]') AS viewers FROM host_keys WHERE computer=?",machine.computer).first<{last_seen:number|null;sharing:number;pc:string;relay:string;viewers:string}>();
       if(!before||(before.last_seen??0)<=now()-90||before.sharing!==(sharing?1:0)||before.pc!==(pc??"")||before.relay!==(relay??"")||before.viewers!==JSON.stringify(viewers)) api.changed?.(machine.owner);
       await q(env,"UPDATE host_keys SET last_seen=?,sharing=?,pc=NULLIF(?,''),relay=NULLIF(?,''),viewers=? WHERE computer=?",now(),sharing?1:0,pc??"",relay??"",JSON.stringify(viewers),machine.computer).run();
-      return json({...publicMachine,sharing});
+      // The owner's username, so the host can list the owner's own devices under it.
+      const owner=await q(env,"SELECT handle FROM accounts WHERE id=?",machine.owner).first<{handle:string|null}>();
+      return json({...publicMachine,sharing,owner_handle:owner?.handle??null});
     }
     if(path==="/v1/host/link" && method==="DELETE") {
       await unlink(env,machine.computer);

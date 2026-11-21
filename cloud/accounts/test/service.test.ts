@@ -377,7 +377,10 @@ describe("host enrollment and machine scope",()=>{
   it("shows the owner who is using a computer, as its host reported",async()=>{
     const host=await enrolledHost();
     const names=["Galaxy S23","@bob","x".repeat(65),"badname",7,"a","b","c","d","e","f","g"];
-    expect((await machine("/v1/host/heartbeat",host.credential,"POST",{sharing:true,pc:"00000000-0000-4000-8000-0000000000c1",relay:"https://relay.example",viewers:names})).status).toBe(200);
+    const beat=await machine("/v1/host/heartbeat",host.credential,"POST",{sharing:true,pc:"00000000-0000-4000-8000-0000000000c1",relay:"https://relay.example",viewers:names});
+    expect(beat.status).toBe(200);
+    // The host learns its owner's username, to list the owner's own devices under it.
+    expect((await beat.json() as {owner_handle:string}).owner_handle).toBe("alice");
     const list=await (await call("/v1/computers","alice")).json();
     const mine=list.find((c:{id:string})=>c.id===host.computer);
     expect(mine.viewers).toEqual(["Galaxy S23","@bob","a","b","c","d","e","f"]);

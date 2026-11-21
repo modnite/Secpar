@@ -18,17 +18,24 @@ All integers are big-endian.
   - `codecs` lists what the phone can decode, best first, from `"av1"`, `"hevc"` and `"h264"`. The host picks the first one it can encode.
   - `w`/`h` is the size the phone wants. The host scales on the GPU, keeps the aspect ratio of the captured display, and reports the final size.
   - Requesting `w`/`h` as 0 means "the display's native size".
+  - `"chroma":"444"` asks for full colour (see below). Absent or empty means normal 4:2:0 colour.
 - `stream.ready` field rules:
   - `session` is a random u32.
   - `key` is a fresh random AES-256 key for this session only. It travels over TLS and nowhere else.
   - `port` is the host's UDP port for this session: 47998 when free (the port UPnP maps for access from anywhere), otherwise any. The agent advertises `stream` in `caps`.
+  - `"chroma":"444"` is present when the frames carry full colour; `w`/`h` stay the picture's size.
+- Full colour (4:4:4) travels as an ordinary 4:2:0 frame twice the picture's height, so any H.264 encoder and decoder carries it:
+  - luma rows 0 to h−1 hold Y, and rows h to 2h−1 hold Cb at full resolution;
+  - the chroma plane (w/2 by h) holds Cr: its first channel is pixel 2x, its second pixel 2x+1.
+  - All three use limited-range BT.709 values. A host packs only when its encoder accepts the taller frame (at most 4096 pixels tall); otherwise it sends normal colour and leaves `chroma` out. A Linux host packs by relabelling a Y444 frame, whose planes lie exactly this way when the width is a multiple of 4.
 - `cursor.shape` is sent whenever the pointer shape changes: a PNG with a premultiplied-alpha source. `hx`/`hy` is the hotspot in pixels.
 - Displays:
   ```json
   ← {"t":"stream.displays","list":[{"id":"\\\\.\\DISPLAY1","name":"Display 1 (1920×1080)","primary":true}],"current":"\\\\.\\DISPLAY1"}
   → {"t":"stream.display","id":"\\\\.\\DISPLAY2"}
   ```
-  - `stream.start` may carry `display` (an `id`; absent or empty = the display set on the PC).
+  - `stream.start` may carry `display` (an `id`; absent or empty = the display set on the PC). A client can show several displays at once by opening one connection and stream per display; each stream's `mouse.pos` lands on its own display.
+  - A Linux host lists `portal` (the first screen shared), each screen picked since (`screen-2`, …), and `new`. `new` opens the sharing dialog on that computer; the screen picked there is kept under a new id. Switching restarts the stream there, with a new `stream.ready`.
   - The host sends `stream.displays` once streaming starts and after every switch.
   - `stream.display` switches the running stream: same `session`, `port`, `key` and codec, a new `stream.ready` with the new size, then a keyframe. The PC's pointer moves to the centre of the new display. `mouse.pos` maps onto the streamed display.
   - `stream.size` (`{"t":"stream.size","w":1280,"h":720}`) resizes the running stream the same way: a new `stream.ready`, then a keyframe. `w`=`h`=0 is the display's native size. A host that predates it ignores it.

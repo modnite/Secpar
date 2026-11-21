@@ -54,8 +54,10 @@ impl Host {
                 if gate.is_some() { pad::MAX_PER_FRIEND } else { pad::MAX_CONTROLLERS },
             )
         });
+        let rect = input::Rect::default();
         Box::new(HostSession {
-            input: input::Input::new(input::SendInputEmitter),
+            input: input::Input::with_rect(input::SendInputEmitter, rect.clone()),
+            rect,
             out,
             media: None,
             store: self.store.clone(),
@@ -114,6 +116,8 @@ impl Handlers for Host {
 
 pub struct HostSession {
     input: input::Input<input::SendInputEmitter>,
+    /// The display this session streams, shared by its agent input, stream input and stream.
+    rect: input::Rect,
     out: Outbox,
     media: Option<tokio::task::JoinHandle<()>>,
     store: Arc<Mutex<Store>>,
@@ -153,7 +157,7 @@ impl HostSession {
     /// Input arriving over PRS: the same handling as the agent's, on the stream's thread.
     fn stream_input(&self) -> crate::engine::session::InputSink {
         let pads = self.pads.clone();
-        let mut inp = input::Input::new(input::SendInputEmitter);
+        let mut inp = input::Input::with_rect(input::SendInputEmitter, self.rect.clone());
         let gate = self.gate.clone();
         let mut checked = None;
         Box::new(move |m| {
@@ -270,7 +274,7 @@ impl Session for HostSession {
                 }
                 None
             }
-            ClientMsg::StreamStart { w, h, fps, codecs, max_kbps, audio, cands, display } => {
+            ClientMsg::StreamStart { w, h, fps, codecs, max_kbps, audio, cands, display, chroma } => {
                 self.stream = None; // a restart from this phone replaces its stream
                 let cands = cands.iter().filter_map(|c| c.parse().ok()).collect();
                 let st = self.net.lock().unwrap().clone();
@@ -279,7 +283,7 @@ impl Session for HostSession {
                 let (w,h,fps)=crate::engine::session::quality_limit(&self.store.lock().unwrap().config().max_quality,w,h,fps);
                 let display = if display.is_empty() { self.store.lock().unwrap().config().display.clone() } else { display };
                 let encoder=self.store.lock().unwrap().config().encoder.clone();
-                let p = Params { w, h, fps, codecs, max_kbps, encoder, audio, cands, public, display, gate: self.gate.clone() };
+                let p = Params { w, h, fps, codecs, max_kbps, encoder, audio, cands, public, display, gate: self.gate.clone(), rect: self.rect.clone(), chroma444: chroma == "444" };
                 let out = self.out.clone();
                 let notify: crate::engine::session::Notify = Arc::new(move |m| {
                     out.send(m);

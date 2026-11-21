@@ -225,7 +225,10 @@ pub(crate) async fn serve(mut inc: impl Rx, mut ws: impl Tx, ctx: Arc<Ctx>) {
                         Ok(m @ (ClientMsg::Pair { .. } | ClientMsg::Hello { .. })) => {
                             Some(ServerMsg::error("bad_request", "already authenticated", Some(m.t())))
                         }
-                        Ok(m) => session.on_msg(m.sanitize()),
+                        Ok(m) => {
+                            if let Some(Registration(ctx, sid)) = &registration { ctx.used(*sid, &m); }
+                            session.on_msg(m.sanitize())
+                        }
                         Err(_) => None,
                     },
                 };
@@ -408,6 +411,7 @@ mod guest_tests {
             handlers: host.clone(),
             idle: Duration::from_secs(5),
             sessions: Mutex::default(),
+            in_use: Mutex::default(),
             events: tokio::sync::broadcast::channel(32).0,
             next_id: AtomicU64::new(0),
             relay: Mutex::default(),
@@ -475,7 +479,7 @@ mod guest_tests {
         }
     }
     fn start() -> ClientMsg {
-        ClientMsg::StreamStart { w: 0, h: 0, fps: 0, codecs: vec![], max_kbps: 0, audio: false, cands: vec![], display: String::new() }
+        ClientMsg::StreamStart { w: 0, h: 0, fps: 0, codecs: vec![], max_kbps: 0, audio: false, cands: vec![], display: String::new(), chroma: String::new() }
     }
 
     #[tokio::test]

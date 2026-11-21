@@ -102,6 +102,12 @@ pub struct Options {
     pub pads: SharedPads,
     /// Set for a friend: frames and input stop when it closes, and input is filtered by it.
     pub gate: Option<secpar_host_core::guest_policy::Gate>,
+    /// The client can show 4:4:4 packed into a double-height frame.
+    pub chroma444: bool,
+    /// The screen to share: "portal" (the first one picked), a saved `screen-N`, or "new".
+    pub display: String,
+    /// The screens to offer in `stream.displays`, and which one this is.
+    pub displays: Vec<Display>,
 }
 /// Shared between the control connection and the media channel (both carry `pad`).
 pub type SharedPads = Arc<Mutex<Option<secpar_host_core::pad::Pads>>>;
@@ -214,6 +220,7 @@ impl Stream {
         out: Outbox,
         guard: secpar_host_core::limits::StreamPermit,
     ) -> Result<(Self, ServerMsg), String> {
+        let (displays, current_display) = (options.displays.clone(), options.display.clone());
         let p = portal.clone();
         let video_options = VideoOptions {
             width: options.width,
@@ -223,6 +230,7 @@ impl Stream {
             codecs: options.codecs,
             encoder: options.encoder,
             preset: options.preset,
+            chroma444: options.chroma444,
         };
         let mut capture = tokio::task::spawn_blocking(move || Capture::start(p, video_options))
             .await
@@ -276,7 +284,8 @@ impl Stream {
         let input_gate = options.gate.clone();
         tokio::spawn(async move {
             let mut input_rx = input_rx;
-            let mut target = Input::new(input_portal, input_picture);
+            // Only the owner's session may type into the lock screen; friends never get input there.
+            let mut target = Input::new(input_portal, input_picture, input_gate.is_none());
             loop {
                 if input_shared.stop.load(Ordering::Relaxed) {
                     break;
@@ -371,6 +380,7 @@ impl Stream {
         });
         // `stream.ready` as sent now and again whenever the size changes mid-stream
         let ready_template = ServerMsg::StreamReady {
+            chroma: capture.packed().then(|| "444".into()),
             codec: codec_name.clone(),
             w: width,
             h: height,
@@ -413,7 +423,7 @@ impl Stream {
                         if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
                             eprintln!("secpar: stream is now {w}x{h} (asked for {}x{})", wanted.0, wanted.1);
                             video_picture.store(pack_size(w, h), Ordering::Relaxed);
-                            video_out.send(ServerMsg::StreamReady { codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
+                            video_out.send(ServerMsg::StreamReady { chroma: capture.packed().then(|| "444".into()), codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
                             video_shared.idr.store(true, Ordering::Relaxed);
                         }
                     }
@@ -482,15 +492,7 @@ impl Stream {
         if portal.cursor == CursorMode::Hidden {
             out.send(ServerMsg::CursorShape { png: STANDARD.encode(include_bytes!("arrow.png")), hx: 1, hy: 1 });
         }
-        out.send(ServerMsg::StreamDisplays {
-            list: vec![Display {
-                id: "portal".into(),
-                name: "Shared display".into(),
-                primary: true,
-                rect: [0, 0, width as i32, height as i32],
-            }],
-            current: "portal".into(),
-        });
+        out.send(ServerMsg::StreamDisplays { list: displays, current: current_display });
         let ready = ready_template;
         Ok((
             Self {

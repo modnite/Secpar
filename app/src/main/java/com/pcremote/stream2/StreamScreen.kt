@@ -449,7 +449,7 @@ private fun request(ctx: Context, settings: SettingsModel): StreamRequest {
     val (rw, rh) = settings.resolution
     val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java)
     val cellular = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) == true
-    return StreamRequest(rw, rh, settings.frameRate, SettingsModel.requestKbps(settings.bitrateMbps, cellular), settings.playHostAudio)
+    return StreamRequest(rw, rh, settings.frameRate, SettingsModel.requestKbps(settings.bitrateMbps, cellular), settings.playHostAudio, fullColour = settings.fullColour)
 }
 
 @Composable

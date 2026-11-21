@@ -134,6 +134,8 @@ pub struct ConfigView {
     displays: Vec<crate::engine::capture::Display>,
     pad: PadView,
     encoders: Vec<crate::engine::encode::Choice>,
+    /// This installation carries the virtual display driver.
+    vdd: bool,
 }
 
 #[derive(Serialize)]
@@ -148,12 +150,20 @@ fn get_config(app: &App) -> ConfigView {
     config.files_dir = store.files_dir().to_string_lossy().into_owned();
     let (ok, text) = crate::pad::status();
     let encoders=crate::engine::encode::choices(&config.display);
-    ConfigView { config, encoders, displays: crate::engine::capture::displays(), pad: PadView { ok, text } }
+    ConfigView { config, encoders, displays: crate::engine::capture::displays(), pad: PadView { ok, text }, vdd: crate::win::vdd::available() }
 }
 
 async fn set_config(app: &App, config: Config) -> Result<(), String> {
     config.encoder.validate()?;
     let old = app.store.lock().unwrap().config().clone();
+    let size = crate::win::vdd::parse_size(&config.virtual_size);
+    if old.virtual_display != config.virtual_display {
+        let on = config.virtual_display;
+        tokio::task::spawn_blocking(move || crate::win::vdd::apply(on, size)).await.map_err(|e| e.to_string())??;
+    } else if config.virtual_display && old.virtual_size != config.virtual_size {
+        // A new size: the driver's settings change (it starts again with them) and the screen is set to it.
+        tokio::task::spawn_blocking(move || crate::win::vdd::apply(true, size)).await.map_err(|e| e.to_string())??;
+    }
     app.store.lock().unwrap().set_config(config.clone()).map_err(|e| e.to_string())?;
     if old.anywhere != config.anywhere {
         let st = crate::net::apply_now(config.anywhere).await;

@@ -134,11 +134,10 @@ impl Panel {
             events: rx,
             state: sample.then(|| State {
                 name: "Studio PC".into(),
-                devices: vec![Device {
-                    id: "sample".into(),
-                    name: "Pixel 8".into(),
-                    connected: false,
-                }],
+                devices: vec![
+                    Device { id: "sample".into(), name: "Pixel 8".into(), connected: true },
+                    Device { id: "laptop".into(), name: "Laptop".into(), connected: false },
+                ],
                 friends: Vec::new(),
                 locked: false,
             }),
@@ -150,7 +149,7 @@ impl Panel {
             } else {
                 Vec::new()
             },
-            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","encoder":{"backend":"auto","preset":"fast"},"allow_files":true,"allow_clip":true,"friends":true,"anywhere":false},"displays":[],"encoders":[{"id":"nvenc","name":"NVIDIA NVENC","available":true},{"id":"ffmpeg-nvenc","name":"NVIDIA NVENC (FFmpeg)","available":true},{"id":"ffmpeg-amf","name":"AMD AMF","available":false,"reason":"Not available on this GPU"},{"id":"ffmpeg-qsv","name":"Intel Quick Sync","available":false,"reason":"Not available on this GPU"}],"pad":{"ok":true,"text":"Gamepad ready"}}),
+            settings: json!({"config":{"autostart":true,"display":"","max_quality":"auto","encoder":{"backend":"auto","preset":"fast"},"allow_files":true,"allow_clip":true,"friends":true,"anywhere":false,"virtual_display":true,"virtual_size":"1920x1080"},"vdd":true,"displays":[],"encoders":[{"id":"nvenc","name":"NVIDIA NVENC","available":true},{"id":"ffmpeg-nvenc","name":"NVIDIA NVENC (FFmpeg)","available":true},{"id":"ffmpeg-amf","name":"AMD AMF","available":false,"reason":"Not available on this GPU"},{"id":"ffmpeg-qsv","name":"Intel Quick Sync","available":false,"reason":"Not available on this GPU"}],"pad":{"ok":true,"text":"Gamepad ready"}}),
             error: String::new(),
             busy: false,
             refreshing: false,
@@ -524,7 +523,8 @@ impl Panel {
     }
     /// Computers › Paired devices: who may use this computer and who is on it now. Each row is the
     /// name, its state, then its buttons on the same line.
-    pub fn paired_devices_ui(&mut self, ui: &mut egui::Ui, signed_out: bool) {
+    /// `owner` is the signed-in account's username: the person behind this account's own devices.
+    pub fn paired_devices_ui(&mut self, ui: &mut egui::Ui, signed_out: bool, owner: Option<&str>) {
         self.pump(&ui.ctx().clone());
         let row = |ui: &mut egui::Ui, name: &str, state: &str, on: bool, buttons: &mut dyn FnMut(&mut egui::Ui)| {
             ui.horizontal(|ui| {
@@ -552,7 +552,8 @@ impl Panel {
                     }
                     for device in state.devices.iter().filter(|d| d.connected) {
                         let mut disconnect = false;
-                        row(ui, &device.name, "Your device", true, &mut |ui| {
+                        // Who it is first; which of their devices second.
+                        row(ui, owner.unwrap_or(&device.name), if owner.is_some() { &device.name } else { "Your device" }, true, &mut |ui| {
                             disconnect = ui.add_enabled(!self.busy, egui::Button::new("Disconnect")).clicked();
                         });
                         if disconnect { self.send(Command::Disconnect(device.id.clone())); }
@@ -564,7 +565,7 @@ impl Panel {
         let open_id = egui::Id::new("paired-devices-open");
         let mut open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or(open_id, true));
         let count = self.state.as_ref().map_or(0, |s| s.devices.len());
-        design::surface().inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 6 }).show(ui, |ui| {
+        design::surface().inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 12 }).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.;
             let (rect, header) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.), egui::Sense::click());
@@ -682,6 +683,21 @@ impl Panel {
                     });
                 });
                 if display != old { self.send(Command::Patch(json!({"display":display}))); }
+                if self.settings["vdd"].as_bool() == Some(true) {
+                    self.setting_toggle(ui, &config, "virtual_display", "Virtual display", "");
+                    if config["virtual_display"].as_bool() == Some(true) {
+                        let mut size = config["virtual_size"].as_str().unwrap_or("1920x1080").to_string();
+                        let old = size.clone();
+                        design::row(ui, "Virtual display size", |ui| {
+                            egui::ComboBox::from_id_salt("virtual-size").width(width).selected_text(size.replace('x', " × ")).show_ui(ui, |ui| {
+                                for (w, h) in [(1280, 720), (1366, 768), (1600, 900), (1920, 1080), (1920, 1200), (2560, 1440), (2560, 1600), (3840, 2160)] {
+                                    ui.selectable_value(&mut size, format!("{w}x{h}"), format!("{w} × {h}"));
+                                }
+                            });
+                        });
+                        if size != old { self.send(Command::Patch(json!({"virtual_size": size}))); }
+                    }
+                }
                 self.quality_ui(ui, &config);
                 self.encoder_ui(ui, &config);
                 ui.label(egui::RichText::new("Changes apply to the next connection.").size(12.).color(design::MUTED));

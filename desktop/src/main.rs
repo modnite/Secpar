@@ -27,6 +27,15 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    // Another display of a connected computer: just that window, no hosting or tray.
+    if std::env::args().nth(1).as_deref() == Some("--view") {
+        return secpar_desktop::run_viewer();
+    }
+    // Layout review screenshots run beside an installed Secpar and leave its hosting alone.
+    #[cfg(feature = "ui-review")]
+    if std::env::var_os("SECPAR_REVIEW_SCREENSHOT_TO").is_some() {
+        return secpar_desktop::run();
+    }
     // Opening Secpar brings hosting back after Quit, even when its window is already open.
     #[cfg(windows)]
     let hosting = std::thread::spawn(pc_remote_host::service::ensure_running);
@@ -38,6 +47,11 @@ fn main() -> eframe::Result {
     #[cfg(windows)]
     {
         let _ = pc_remote_host::win::sys::register_send_verb();
+    }
+    // One Secpar per machine: a second launch shows the running window instead.
+    #[cfg(target_os = "linux")]
+    if !secpar_desktop::instance_linux::acquire() {
+        return Ok(());
     }
     // Connection timing log, so a slow connection can be read off a file.
     secpar_client::connlog::init_default();

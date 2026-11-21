@@ -56,6 +56,8 @@ pub struct Registration {
 pub struct State {
     pub computer: Option<String>,
     pub owner: Option<String>,
+    /// The owner's username, from the last heartbeat: who the owner's own devices are.
+    pub owner_handle: Option<String>,
     pub online: bool,
     pub note: String,
 }
@@ -263,14 +265,19 @@ impl Account {
     }
     async fn heartbeat(&self) {
         let mut inner = self.inner.lock().await;
-        if let Some(registration) = &inner.registration {
+        if let Some(registration) = inner.registration.clone() {
+            let registration = &registration;
             let presence = inner.presence.clone();
             let body = presence.sharing.then(|| serde_json::to_value(&presence).unwrap_or_default());
             match self
                 .request_json(registration, Method::POST, "/v1/host/heartbeat", body)
                 .await
             {
-                Ok(_) => inner.state = view(Some(registration), true, ""),
+                Ok(answer) => {
+                    let handle = answer.get("owner_handle").and_then(|h| h.as_str()).filter(|h| !h.is_empty() && h.len() <= 64).map(str::to_owned);
+                    inner.state = view(Some(registration), true, "");
+                    inner.state.owner_handle = handle;
+                }
                 Err((StatusCode::UNAUTHORIZED, _)) => {
                     let note = self.storage.remove()
                         .err()
@@ -281,7 +288,11 @@ impl Account {
                         ..State::default()
                     };
                 }
-                Err((_, note)) => inner.state = view(Some(registration), false, &note),
+                Err((_, note)) => {
+                    let handle = inner.state.owner_handle.take();
+                    inner.state = view(Some(registration), false, &note);
+                    inner.state.owner_handle = handle;
+                }
             }
         }
     }
@@ -409,6 +420,7 @@ fn view(registration: Option<&Registration>, online: bool, note: &str) -> State 
     State {
         computer: registration.map(|r| r.computer.clone()),
         owner: registration.map(|r| r.owner.clone()),
+        owner_handle: None,
         online,
         note: note.into(),
     }

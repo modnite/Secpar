@@ -90,6 +90,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     });
     tokio::spawn(watch_lock(agent.clone(), ui.clone()));
     tokio::spawn(start_tray(store.clone()));
+    // A reinstall or a driver update can leave the virtual display missing: bring it back.
+    if store.lock().unwrap().config().virtual_display {
+        let size = crate::win::vdd::parse_size(&store.lock().unwrap().config().virtual_size);
+        tokio::task::spawn_blocking(move || if let Err(e) = crate::win::vdd::apply(true, size) { crate::log::line(&format!("virtual display: {e}")) });
+    }
 
     if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
     let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends });
@@ -101,12 +106,16 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             timer.tick().await;
             let Some(app) = weak.upgrade() else { break };
             let Ok(account) = &app.account else { continue };
-            let owner = account.state().await.owner;
+            let account_state = account.state().await;
+            let owner = account_state.owner;
             let presence = {
                 let viewers = {
                     let state = crate::commands::state(&app);
-                    state.devices.into_iter().filter(|d| d.connected).map(|d| d.name)
-                        .chain(state.friends.into_iter().map(|f| f.name)).collect::<Vec<_>>()
+                    let mine = account_state.owner_handle.clone();
+                    let mut names: Vec<String> = state.devices.into_iter().filter(|d| d.connected).map(|d| mine.clone().unwrap_or(d.name))
+                        .chain(state.friends.into_iter().map(|f| f.name)).collect();
+                    names.dedup();
+                    names
                 };
                 let store = app.store.lock().unwrap();
                 secpar_host_core::account::Presence::new(true, store.pc_id(), Some(secpar_host_core::rendezvous::FRIENDS_URL))

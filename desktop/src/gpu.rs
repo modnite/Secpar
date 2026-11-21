@@ -19,6 +19,9 @@ pub struct Shared {
 
 struct Resources {
     program: glow::Program,
+    packed: Option<glow::UniformLocation>,
+    shown: Option<glow::UniformLocation>,
+    full_colour: bool,
     vao: glow::VertexArray,
     luma: glow::Texture,
     chroma: glow::Texture,
@@ -71,11 +74,29 @@ precision mediump float;
 #endif
 uniform sampler2D luma;
 uniform sampler2D chroma;
+uniform int packed;
+uniform ivec2 shown;
 in vec2 coordinate;
 out vec4 colour;
+// One pixel of a packed 4:4:4 frame (see picture.rs): Y, Cb, Cr.
+vec3 full(ivec2 p) {
+    p = clamp(p, ivec2(0), shown - ivec2(1));
+    vec2 cr = texelFetch(chroma, ivec2(p.x / 2, p.y), 0).rg;
+    return vec3(texelFetch(luma, p, 0).r, texelFetch(luma, ivec2(p.x, p.y + shown.y), 0).r, (p.x % 2 == 0) ? cr.r : cr.g);
+}
 void main() {
-    float y = 1.164383 * (texture(luma, coordinate).r - 0.0627451);
-    vec2 c = texture(chroma, coordinate).rg - vec2(0.5019608);
+    vec3 s;
+    if (packed == 1) {
+        // Bilinear by hand: the planes cannot be filtered as textures.
+        vec2 f = coordinate * vec2(shown) - 0.5;
+        ivec2 i = ivec2(floor(f));
+        vec2 t = f - floor(f);
+        s = mix(mix(full(i), full(i + ivec2(1, 0)), t.x), mix(full(i + ivec2(0, 1)), full(i + ivec2(1, 1)), t.x), t.y);
+    } else {
+        s = vec3(texture(luma, coordinate).r, texture(chroma, coordinate).rg);
+    }
+    float y = 1.164383 * (s.x - 0.0627451);
+    vec2 c = s.yz - vec2(0.5019608);
     colour = vec4(
         y + 1.792741 * c.y,
         y - 0.213249 * c.x - 0.532909 * c.y,
@@ -103,6 +124,9 @@ fn draw(shared: &mut Shared, gl: &Arc<glow::Context>) -> Result<(), String> {
         gl.disable(glow::BLEND);
         gl.disable(glow::DEPTH_TEST);
         gl.use_program(Some(resources.program));
+        gl.uniform_1_i32(resources.packed.as_ref(), resources.full_colour as i32);
+        let [w, h] = resources.size;
+        gl.uniform_2_i32(resources.shown.as_ref(), w as i32, if resources.full_colour { h as i32 / 2 } else { h as i32 });
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(resources.luma));
         gl.active_texture(glow::TEXTURE1);
@@ -155,6 +179,9 @@ unsafe fn create(gl: &glow::Context, version: ShaderVersion) -> Result<Resources
         Ok(texture)
     };
     Ok(Resources {
+        packed: gl.get_uniform_location(program, "packed"),
+        shown: gl.get_uniform_location(program, "shown"),
+        full_colour: false,
         program,
         vao: gl.create_vertex_array()?,
         luma: texture()?,
@@ -202,4 +229,5 @@ unsafe fn upload(gl: &glow::Context, resources: &mut Resources, picture: &Pictur
         }
     }
     resources.size = picture.size;
+    resources.full_colour = picture.packed;
 }

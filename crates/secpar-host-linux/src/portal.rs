@@ -69,10 +69,16 @@ impl Portal {
                     (!POINTER_IN_PICTURE.load(std::sync::atomic::Ordering::Relaxed)).then_some("hidden"),
                 ),
             );
+            // Where the desktop offers it (KDE Plasma 6), the owner may also pick a virtual screen:
+            // one that exists only for this stream, for a laptop with its lid shut or an extra screen.
+            let mut sources = ashpd::enumflags2::BitFlags::from(SourceType::Monitor);
+            if cast.available_source_types().await.is_ok_and(|t| t.contains(SourceType::Virtual)) {
+                sources |= SourceType::Virtual;
+            }
             cast.select_sources(
                 &session,
                 SelectSourcesOptions::default()
-                    .set_sources(ashpd::enumflags2::BitFlags::from(SourceType::Monitor))
+                    .set_sources(sources)
                     .set_multiple(false)
                     .set_cursor_mode(match mode {
                         CursorMode::Embedded => screencast::CursorMode::Embedded,

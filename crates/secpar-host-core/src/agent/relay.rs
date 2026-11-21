@@ -297,6 +297,7 @@ mod tests {
                 handlers: Arc::new(Sessions(dropped.clone())),
                 idle: Duration::from_secs(60),
                 sessions: Mutex::default(),
+                in_use: Mutex::default(),
                 events: broadcast::channel(32).0,
                 next_id: AtomicU64::new(0),
                 relay: Mutex::default(),
@@ -381,18 +382,18 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&text).unwrap()["code"],
             "unauthorized"
         );
-        until(|| f.agent.connected().is_empty()).await;
+        until(|| f.agent.registered().is_empty()).await;
         connect(&f, 2, "one").await;
         connect(&f, 3, "two").await;
-        until(|| f.agent.connected().len() == 2).await;
+        until(|| f.agent.registered().len() == 2).await;
         f.agent.revoke("dev1");
         until(|| {
-            f.agent.connected() == vec!["dev2".to_string()] && f.dropped.load(Ordering::SeqCst) == 1
+            f.agent.registered() == vec!["dev2".to_string()] && f.dropped.load(Ordering::SeqCst) == 1
         })
         .await;
         f.task.abort();
         let _ = f.task.await;
-        until(|| f.agent.connected().is_empty() && f.dropped.load(Ordering::SeqCst) == 2).await;
+        until(|| f.agent.registered().is_empty() && f.dropped.load(Ordering::SeqCst) == 2).await;
         assert!(f.agent.ctx.relay.lock().unwrap().is_none());
     }
     #[tokio::test]
@@ -400,12 +401,12 @@ mod tests {
         let f = fixture(1);
         connect(&f, 1, "one").await;
         connect(&f, 2, "two").await;
-        until(|| f.agent.connected().len() == 2).await;
+        until(|| f.agent.registered().len() == 2).await;
         // One welcome fills the socket, the other stalls its writer. Cancellation
         // must still drop both actual sessions and their connection registrations.
         f.task.abort();
         let _ = f.task.await;
-        until(|| f.agent.connected().is_empty() && f.dropped.load(Ordering::SeqCst) == 2).await;
+        until(|| f.agent.registered().is_empty() && f.dropped.load(Ordering::SeqCst) == 2).await;
     }
     #[tokio::test]
     async fn pending_auth_connections_have_a_hard_limit() {
@@ -419,7 +420,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(next(&mut f).await, close(MAX_PEERS as u32));
-        assert!(f.agent.connected().is_empty());
+        assert!(f.agent.registered().is_empty());
         f.task.abort();
         let _ = f.task.await;
     }
@@ -427,13 +428,13 @@ mod tests {
     async fn worker_disconnect_releases_sessions_and_relay_registration() {
         let f = fixture(32);
         connect(&f, 1, "one").await;
-        until(|| f.agent.connected().len() == 1).await;
+        until(|| f.agent.registered().len() == 1).await;
         drop(f.input);
         tokio::time::timeout(Duration::from_secs(2), f.task)
             .await
             .unwrap()
             .unwrap();
-        assert!(f.agent.connected().is_empty());
+        assert!(f.agent.registered().is_empty());
         assert_eq!(f.dropped.load(Ordering::SeqCst), 1);
         assert!(f.agent.ctx.relay.lock().unwrap().is_none());
     }

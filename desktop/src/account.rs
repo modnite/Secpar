@@ -359,7 +359,7 @@ impl Panel {
                             list[1].1="Brother's Gaming Laptop (Linux)";
                             list.extend([("00000000-0000-4000-8000-000000000013","Living room media center","windows",1),("00000000-0000-4000-8000-000000000014","Dad's old desktop","windows",0),("00000000-0000-4000-8000-000000000015","Office build server","linux",1),("00000000-0000-4000-8000-000000000016","Garage PC","windows",1)]);
                         }
-                        list.into_iter().map(|(id,name,platform,online)|OwnedComputer{id:id.into(),name:name.into(),platform:platform.into(),certificate_fp:Some("ab".repeat(32)),linked:1,online}).collect()
+                        list.into_iter().map(|(id,name,platform,online)|OwnedComputer{id:id.into(),name:name.into(),platform:platform.into(),certificate_fp:Some("ab".repeat(32)),linked:1,online,viewers:vec![]}).collect()
                     }else{vec![]},
                     owned_connection: None,
                     files_wanted: false,

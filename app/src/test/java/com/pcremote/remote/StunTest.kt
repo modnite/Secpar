@@ -63,9 +63,16 @@ class StunTest {
         assertNull(StunMsg.decode(byteArrayOf(0x11, 0, 0, 0)))
     }
 
+    @Test fun tlsFramesAreMeasuredFromTheirHeader() {
+        // STUN: 20-byte header plus its length. ChannelData: 4 bytes plus the data padded to four.
+        assertEquals(20 + 8, TlsLink.frameLength(byteArrayOf(0x01, 0x01, 0, 8)))
+        assertEquals(4 + 8, TlsLink.frameLength(byteArrayOf(0x40, 0x00, 0, 5)))
+        assertEquals(4 + 1200, TlsLink.frameLength(byteArrayOf(0x40, 0x01, 0x04, 0xB0.toByte())))
+    }
+
     @Test fun turnCredsFromCloudflareShapes() {
         val arr = """{"iceServers":[{"urls":["stun:stun.cloudflare.com:3478"]},{"urls":["turn:turn.cloudflare.com:3478?transport=udp","turns:turn.cloudflare.com:443?transport=tcp"],"username":"u","credential":"p"}]}"""
-        assertEquals(TurnServer("turn.cloudflare.com", 3478, "u", "p"), TurnCreds.parse(arr))
+        assertEquals(TurnServer("turn.cloudflare.com", 3478, "u", "p", "turn.cloudflare.com", 443), TurnCreds.parse(arr))
         val obj = """{"iceServers":{"urls":["turn:turn.cloudflare.com:3478?transport=tcp","turn:turn.cloudflare.com:53"],"username":"u","credential":"p"}}"""
         assertEquals(TurnServer("turn.cloudflare.com", 53, "u", "p"), TurnCreds.parse(obj))
         assertNull(TurnCreds.parse("""{"iceServers":[]}"""))

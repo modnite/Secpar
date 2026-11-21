@@ -13,8 +13,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
-/** A TURN server from the Worker's `/v1/turn` (Cloudflare Realtime ICE servers). */
-data class TurnServer(val host: String, val port: Int, val user: String, val pass: String)
+/** A TURN server from the Worker's `/v1/turn` (Cloudflare Realtime ICE servers). `tlsPort` is
+ * the same server over TLS, for networks that block UDP. */
+data class TurnServer(val host: String, val port: Int, val user: String, val pass: String, val tlsHost: String? = null, val tlsPort: Int = 0)
 
 object TurnCreds {
     private val http = OkHttpClient.Builder().callTimeout(5, TimeUnit.SECONDS).build()
@@ -28,7 +29,8 @@ object TurnCreds {
         }
     }.getOrNull()
 
-    /** The first `turn:` URL over UDP. Accepts `iceServers` as an array or a single object. */
+    /** The first `turn:` URL over UDP, plus a `turns:` one (port 443 preferred). Accepts
+     * `iceServers` as an array or a single object. */
     fun parse(json: String): TurnServer? {
         val ice: JsonElement = Json.parseToJsonElement(json).jsonObject["iceServers"] ?: return null
         val servers = (ice as? JsonArray)?.map { it.jsonObject } ?: listOf(ice as? JsonObject ?: return null)
@@ -36,11 +38,14 @@ object TurnCreds {
             val user = s["username"]?.jsonPrimitive?.content ?: continue
             val pass = s["credential"]?.jsonPrimitive?.content ?: continue
             val urls = when (val u = s["urls"]) { is JsonArray -> u.map { it.jsonPrimitive.content }; null -> emptyList(); else -> listOf(u.jsonPrimitive.content) }
+            val tls = urls.filter { it.startsWith("turns:") }.map { it.removePrefix("turns:").substringBefore('?') }
+                .map { it.substringBeforeLast(':') to (it.substringAfterLast(':', "5349").toIntOrNull() ?: 5349) }
+                .minByOrNull { if (it.second == 443) 0 else 1 }
             for (u in urls) {
                 if (!u.startsWith("turn:") || ("transport=" in u && "transport=udp" !in u)) continue
                 val hp = u.removePrefix("turn:").substringBefore('?')
                 val host = hp.substringBeforeLast(':'); val port = hp.substringAfterLast(':', "3478").toIntOrNull() ?: 3478
-                return TurnServer(host, port, user, pass)
+                return TurnServer(host, port, user, pass, tls?.first, tls?.second ?: 0)
             }
         }
         return null

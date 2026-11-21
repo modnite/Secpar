@@ -140,6 +140,17 @@ impl App {
                             let mut selected=None;
                             egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-90.).max(80.)).show(ui,|ui|{
                                 for (id,name) in &self.displays {if row(ui,Icon::Display,name,"",false,self.display==*id,false).clicked(){selected=Some(id.clone());}}
+                                // The others can also open beside this one, each in its own window.
+                                if let Some(computer)=self.computer.clone().filter(|_| !self.guest_session && self.displays.len()>1) {
+                                    ui.add_space(6.);
+                                    ui.label(egui::RichText::new("Open in a new window").size(12.).color(MUTED));
+                                    for (id,name) in self.displays.iter().filter(|(id,_)| *id!=self.display) {
+                                        if row(ui,Icon::Display,name,"",false,false,false).clicked(){
+                                            if let Err(e)=crate::viewer::open(&computer,id,name,&self.options){self.status=format!("Could not open another window: {e}");}
+                                            self.menu_page=0;
+                                        }
+                                    }
+                                }
                             });
                             if let Some(id)=selected {self.display=id.clone();self.send(Command::Display(id));self.menu_page=0;}
                         } else {

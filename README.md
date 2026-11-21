@@ -47,3 +47,5 @@ Protocol notes: [control](docs/protocol.md), [stream](docs/stream-protocol.md), 
 ## License
 
 GPL-3.0. Original project: [SadikTD/pc-remote](https://github.com/SadikTD/pc-remote). Secpar is an independent project.
+
+The Windows installer includes the [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) 25.7.23 (MIT licence, signed by the SignPath Foundation) for the virtual display setting. Its licence is installed beside it in `vdd\LICENSE.txt`.

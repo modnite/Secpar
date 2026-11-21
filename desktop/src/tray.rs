@@ -7,8 +7,12 @@ use std::sync::{
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+/// Ends the running stream from the tray's own thread. The window may be hidden or behind
+/// others and draw its next frame late, so the tray must not wait for it.
+pub type Stop = Arc<std::sync::Mutex<Option<Box<dyn Fn() + Send>>>>;
 pub struct Tray {
     _icon: TrayIcon,
+    stop: Stop,
     quitting: Arc<AtomicBool>,
     opener: Opener,
     disconnect: MenuItem,
@@ -53,6 +57,8 @@ impl Tray {
         let disconnect_asked = Arc::new(AtomicBool::new(false));
         let asked = disconnect_asked.clone();
         let ctx_disconnect = ctx.clone();
+        let stop: Stop = Default::default();
+        let stop_now = stop.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
             if event.id == quit_id || event.id == restart_id {
                 let restart = event.id == restart_id;
@@ -66,6 +72,7 @@ impl Tray {
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                 });
             } else if event.id == disconnect_id {
+                if let Some(stop) = stop_now.lock().unwrap().as_ref() { stop(); }
                 asked.store(true, Ordering::Relaxed);
                 ctx_disconnect.request_repaint();
             } else if event.id == open_id {
@@ -91,13 +98,15 @@ impl Tray {
             opener,
             disconnect,
             disconnect_asked,
+            stop,
             enabled: std::cell::Cell::new(false),
         })
     }
     #[cfg(feature="tray-review")]
     pub fn opener(&self) -> Opener {self.opener.clone()}
-    /// Greys out Disconnect while no stream is connected.
-    pub fn set_connected(&self, connected: bool) {
+    /// Greys out Disconnect while no stream is connected; `stop` ends the stream at once.
+    pub fn set_connected(&self, connected: bool, stop: Option<Box<dyn Fn() + Send>>) {
+        *self.stop.lock().unwrap() = stop;
         if self.enabled.replace(connected) != connected {
             self.disconnect.set_enabled(connected);
         }

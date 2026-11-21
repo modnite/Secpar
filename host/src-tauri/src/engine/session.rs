@@ -48,6 +48,15 @@ pub struct Params {
     pub display: String,
     /// Set for a friend's stream: frames stop when it closes, loses view, or the desktop locks.
     pub gate: Option<secpar_host_core::guest_policy::Gate>,
+    /// Where this session's absolute input lands: set to the captured display while streaming.
+    pub rect: crate::input::Rect,
+    /// The client can show 4:4:4 packed into a double-height 4:2:0 frame (convert_ps).
+    pub chroma444: bool,
+}
+
+/// Packed 4:4:4 doubles the frame height; encoders handle up to 4096 in each direction.
+fn can_pack((w, h): (u32, u32)) -> bool {
+    w <= 4096 && h * 2 <= 4096
 }
 
 /// The UDP port streams use when it's free (mapped on the router by `net`).
@@ -341,8 +350,9 @@ struct ReadyInfo {
 }
 
 impl ReadyInfo {
-    fn msg(&self, (w, h): (u32, u32)) -> ServerMsg {
+    fn msg(&self, (w, h): (u32, u32), packed: bool) -> ServerMsg {
         ServerMsg::StreamReady {
+            chroma: packed.then(|| "444".into()),
             codec: codec_name(self.codec).into(),
             w,
             h,
@@ -367,6 +377,9 @@ struct Video {
     fps: u32,
     /// The display being captured.
     shown: capture::Display,
+    rect: crate::input::Rect,
+    /// Frames carry 4:4:4 packed: the encoder's frame is twice the picture's height.
+    packed: bool,
 }
 
 impl Video {
@@ -388,18 +401,33 @@ impl Video {
         let fps=p.fps.clamp(1,240);
         let mut failure="No supported client codec".to_string();
         let mut encoder=None;
-        for codec in p.codecs.iter().filter_map(|c|parse_codec(c)) {
-            match Encoder::selected(&dev,luid,codec,base,fps,kbps,&p.encoder) {
-                Ok(found)=>{encoder=Some(found);break;}
-                Err(error)=>failure=error.message(),
+        // 4:4:4 first when asked for; an encoder that refuses the taller frame falls back to 4:2:0.
+        let tries: &[bool] = if p.chroma444 && can_pack(base) { &[true, false] } else { &[false] };
+        'tries: for &packed in tries {
+            let frame = if packed { (base.0, base.1 * 2) } else { base };
+            for codec in p.codecs.iter().filter_map(|c|parse_codec(c)) {
+                match Encoder::selected(&dev,luid,codec,frame,fps,kbps,&p.encoder) {
+                    Ok(found)=>{encoder=Some((found,packed));break 'tries;}
+                    Err(error)=>failure=error.message(),
+                }
             }
         }
-        let enc=encoder.ok_or_else(||err("no_encoder",&failure))?;
-        Ok(Video { dev, ctx, luid, cap, enc, base, fps, shown })
+        let (enc,packed)=encoder.ok_or_else(||err("no_encoder",&failure))?;
+        Ok(Video { dev, ctx, luid, cap, enc, base, fps, shown, rect: p.rect.clone(), packed })
+    }
+
+    /// The picture the client shows: the encoder's frame without the packing.
+    fn picture(&self) -> (u32, u32) {
+        let (w, h) = self.enc.size;
+        if self.packed { (w, h / 2) } else { (w, h) }
+    }
+
+    fn converter(&self, input: (u32, u32)) -> Option<Convert> {
+        Convert::with_chroma(&self.dev, &self.ctx, input, self.picture(), self.packed).ok()
     }
 
     fn shown(&self, notify: &Notify) {
-        *crate::input::STREAM_RECT.lock().unwrap() = Some(self.shown.rect);
+        *self.rect.lock().unwrap() = Some(self.shown.rect);
         notify(ServerMsg::StreamDisplays { list: capture::displays(), current: self.shown.id.clone() });
     }
 
@@ -424,6 +452,7 @@ impl Video {
         let (mut frame_id, mut cap_us) = (0u32, 0u64);
         let mut applied = *sh.target.lock().unwrap();
         let mut last_cursor = None;
+        let (mut pointer_visible, mut hotspot) = (true, (0i32, 0i32));
         let mut want = (p.w, p.h);
         let mut lats: Vec<u64> = Vec::new();
         while !sh.stopped() {
@@ -455,7 +484,7 @@ impl Video {
                     (img, conv, pending, last_cursor) = (None, None, false, None);
                     applied.notch = 0;
                     sh.idr.store(true, Ordering::Relaxed);
-                    notify(ready.msg(self.enc.size));
+                    notify(ready.msg(self.picture(), self.packed));
                     self.shown(notify);
                     if changed_display {
                         let [l, t, r, b] = self.shown.rect;
@@ -466,13 +495,14 @@ impl Video {
             }
             if t.notch != applied.notch {
                 let size = notch_size(self.base.0, self.base.1, t.notch);
-                match Encoder::selected(&self.dev, self.luid, self.enc.codec(), size, self.fps, t.kbps, &p.encoder) {
+                let frame = if self.packed { (size.0, size.1 * 2) } else { size };
+                match Encoder::selected(&self.dev, self.luid, self.enc.codec(), frame, self.fps, t.kbps, &p.encoder) {
                     Ok(e) => {
                         self.enc = e;
                         prepared.clear();
                         prepared_packets = None;
                         conv = None;
-                        notify(ready.msg(size));
+                        notify(ready.msg(size, self.packed));
                     }
                     Err(_) => break,
                 }
@@ -483,15 +513,40 @@ impl Video {
 
             // Pull the newest capture without waiting, then convert and encode it at once. The
             // send deadline then only pays for packetising, so arrival spacing is the grid.
+            // The pointer straight from Windows, every pass: capture reports pointer moves late on
+            // some displays (a virtual display gets them only with new frames), so the drawn cursor
+            // trailed behind. Capture still says whether it is visible and gives its shape.
+            let mut at = windows::Win32::Foundation::POINT::default();
+            // SAFETY: plain out-param call. It fails off the input desktop; capture's position is used then.
+            let polled = unsafe { windows::Win32::UI::WindowsAndMessaging::GetPhysicalCursorPos(&mut at) }.is_ok();
+            if polled {
+                // Desktop pixels → the picture: the pointer's hot spot, where clients put the shape's hotspot.
+                let [l, t, r, b] = self.shown.rect;
+                let (pw, ph) = self.picture();
+                let inside = at.x >= l && at.x < r && at.y >= t && at.y < b;
+                let c = ((at.x - l) * pw as i32 / (r - l).max(1), (at.y - t) * ph as i32 / (b - t).max(1), inside && pointer_visible);
+                if last_cursor != Some(c) {
+                    last_cursor = Some(c);
+                    sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2));
+                }
+            }
             if let Some(f) = self.cap.next(Duration::ZERO) {
                 let desk = self.cap.size().unwrap_or(self.base);
                 if let Some(p) = &f.pointer {
-                    let (sw, sh_) = self.enc.size;
-                    let c = (p.x * sw as i32 / desk.0.max(1) as i32, p.y * sh_ as i32 / desk.1.max(1) as i32, p.visible);
-                    if last_cursor != Some(c) {
-                        last_cursor = Some(c);
-                        sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2));
+                    pointer_visible = p.visible;
+                    if !polled {
+                        // Positions are for the picture, not a packed (4:4:4) frame twice its height.
+                        let (sw, sh_) = self.picture();
+                        // Capture gives the shape's top-left corner; clients place the hot spot.
+                        let c = ((p.x + hotspot.0) * sw as i32 / desk.0.max(1) as i32, (p.y + hotspot.1) * sh_ as i32 / desk.1.max(1) as i32, p.visible);
+                        if last_cursor != Some(c) {
+                            last_cursor = Some(c);
+                            sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2));
+                        }
                     }
+                }
+                if let Some(s) = &f.shape {
+                    hotspot = (s.hx, s.hy);
                 }
                 if let Some(png) = f.shape.as_ref().and_then(|s| cursor::png(s).map(|p| (p, s.hx, s.hy))) {
                     notify(ServerMsg::CursorShape { png: STANDARD.encode(&png.0), hx: png.1, hy: png.2 });
@@ -531,7 +586,7 @@ impl Video {
             if pending && prepared.is_empty() && sh.peer().is_some() && now >= encode_due && current {
                 if let (Some(src), Some(size)) = (img.as_ref(), self.cap.size()) {
                     if conv.is_none() {
-                        conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
+                        conv = self.converter(size);
                     }
                     let timing = secpar_stream::timing::begin();
                     if let Some(nv12) = conv.as_mut().and_then(|c| c.convert_frame(src).ok()) {
@@ -577,7 +632,7 @@ impl Video {
             if encode_now {
                 let (Some(src), Some(size)) = (img.as_ref().filter(|_| sh.peer().is_some()), self.cap.size()) else { continue };
                 if conv.is_none() {
-                    conv = Convert::new(&self.dev, &self.ctx, size, self.enc.size).ok();
+                    conv = self.converter(size);
                 }
                 let timing = secpar_stream::timing::begin();
                 let Some(nv12) = conv.as_mut().and_then(|c| c.convert_frame(src).ok()) else { continue };
@@ -664,6 +719,7 @@ static ACTIVE: OnceLock<Arc<secpar_host_core::limits::StreamSlots>> = OnceLock::
 pub struct StreamSession {
     sh: Arc<Shared>,
     threads: Vec<std::thread::JoinHandle<()>>,
+    rect: crate::input::Rect,
 }
 
 impl StreamSession {
@@ -698,7 +754,7 @@ impl StreamSession {
             let kbps = vsh.target.lock().unwrap().kbps;
             match Video::open(&vp, kbps) {
                 Ok(v) => {
-                    let _ = tx.send(Ok((v.enc.codec(), v.fps, v.base)));
+                    let _ = tx.send(Ok((v.enc.codec(), v.fps, v.base, v.packed)));
                     if let Ok(ready) = ready_rx.recv() {
                         v.run(&vsh, &ready, &vn, &vp);
                     }
@@ -710,7 +766,7 @@ impl StreamSession {
         });
         // While the encoder opens: this socket's public address, for the phone to punch towards.
         let reflexive = (!bind.is_loopback()).then(|| crate::remote::stun::public_addr(&sh.sock)).flatten();
-        let (codec, fps, base) = match rx.recv() {
+        let (codec, fps, base, packed) = match rx.recv() {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(err("capture_failed", "video pipeline crashed")),
@@ -741,7 +797,7 @@ impl StreamSession {
                 });
             }));
         }
-        Ok((ready.msg(base), StreamSession { sh, threads }))
+        Ok((ready.msg(base, packed), StreamSession { sh, threads, rect: p.rect.clone() }))
     }
 
     /// A phone candidate from `stream.cand`: punch towards it too, restarting the window.
@@ -775,7 +831,7 @@ impl Drop for StreamSession {
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
-        *crate::input::STREAM_RECT.lock().unwrap() = None;
+        *self.rect.lock().unwrap() = None;
     }
 }
 

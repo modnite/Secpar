@@ -80,6 +80,8 @@ sealed interface Msg {
         val cands: List<String> = emptyList(),
         /** A display id from [StreamDisplays]; empty = the one set on the PC. */
         val display: String = "",
+        /** "444": this device can show full colour packed into a double-height frame. */
+        val chroma: String = "",
     ) : Msg
     /** Switch the running stream to another display. */
     @Serializable @SerialName("stream.display") data class StreamDisplay(val id: String) : Msg
@@ -89,6 +91,8 @@ sealed interface Msg {
     @Serializable @SerialName("stream.ready") data class StreamReady(
         val codec: String, val w: Int, val h: Int, val fps: Int, val port: Int, val session: Long, val key: String,
         val cands: List<String> = emptyList(),
+        /** "444" when frames carry full colour packed into twice [h]; null for normal colour. */
+        val chroma: String? = null,
     ) : Msg
     @Serializable @SerialName("stream.cand") data class StreamCand(val c: String) : Msg
     @Serializable @SerialName("remote") data class Remote(val url: String, val dev: String, val ticket: String) : Msg

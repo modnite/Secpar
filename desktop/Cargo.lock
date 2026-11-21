@@ -3877,6 +3877,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-tungstenite",
  "url",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -3888,7 +3889,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-desktop"
-version = "4.1.4"
+version = "4.2.0"
 dependencies = [
  "base64",
  "cpal",
@@ -3932,7 +3933,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-host"
-version = "4.1.4"
+version = "4.2.0"
 dependencies = [
  "base64",
  "cc",

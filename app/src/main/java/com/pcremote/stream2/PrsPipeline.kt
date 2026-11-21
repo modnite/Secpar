@@ -39,6 +39,8 @@ class PrsPipeline(
 ) : Pipeline {
     private val audio: AudioPlayer
     @Volatile private lateinit var decoder: VideoDecoder
+    /** Unpacks full-colour frames onto the view; null for normal colour. */
+    @Volatile private var packed: com.pcremote.prs.PackedRenderer? = null
     private val receiver: Receiver
     @Volatile private var closed = false
 
@@ -66,14 +68,23 @@ class PrsPipeline(
             Thread.sleep(2_500)
             if (closed || sock.confirmed()) return@thread
             val t = TurnCreds.fetch(relay) ?: run { Log.i(TAG, "no direct path and no TURN relay configured"); return@thread }
-            val server = runCatching { InetSocketAddress(t.host, t.port) }.getOrNull() ?: return@thread
-            val relayed = sock.useTurn(server, t.user, t.pass) ?: run { Log.w(TAG, "TURN allocation failed"); return@thread }
+            val server = runCatching { InetSocketAddress(t.host, t.port) }.getOrNull()
+            // UDP first; networks that block it (many offices) still allow TLS on 443.
+            val relayed = server?.let { sock.useTurn(it, t.user, t.pass) }
+                ?: t.tlsHost?.takeIf { !closed }?.let { host -> sock.openTls(host, t.tlsPort)?.let { sock.useTurn(it, t.user, t.pass) } }
+                ?: run { Log.w(TAG, "TURN allocation failed"); return@thread }
             StunMsg.hostPort(relayed)?.let { if (!closed) { Log.i(TAG, "relaying via TURN at $it"); sendAgent(Msg.StreamCand(it)) } }
         }
     }
 
-    private fun newDecoder(r: Msg.StreamReady) = VideoDecoder(surface, r.codec, r.w, r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr, appVsyncOffsetNs)
-        .also { d -> d.onRendered = { receiver.decodeMs = d.decodeMs } }
+    private fun newDecoder(r: Msg.StreamReady): VideoDecoder {
+        packed?.release()
+        // Full colour: the frames are twice the picture's height, decoded into the renderer.
+        val renderer = if (r.chroma == "444") com.pcremote.prs.PackedRenderer(surface, r.w, r.h) { onDecoderFailed() } else null
+        packed = renderer
+        return VideoDecoder(renderer?.input ?: surface, r.codec, r.w, if (renderer != null) r.h * 2 else r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr, appVsyncOffsetNs)
+            .also { d -> d.onRendered = { receiver.decodeMs = d.decodeMs } }
+    }
 
     /** The host's relayed address (`stream.cand` from the host): talk relay-to-relay. */
     fun addCandidate(c: String) {
@@ -101,6 +112,7 @@ class PrsPipeline(
     override fun close() {
         closed = true
         decoder.release()
+        packed?.release()
         audio.release()
         thread(name = "pcr-rx-stop") { receiver.stop() }
     }

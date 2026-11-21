@@ -103,7 +103,7 @@ Carrier NATs can give the same PC (or phone) a different public IP for different
 - **Peer addresses:** each side treats packets that arrive through its relay (ChannelData or Data indication) as coming from the peer address inside them, and sends back the same way: ChannelData when a channel is bound, otherwise a Send indication.
 
 ### TURN client details
-- **Server:** RFC 8656 over UDP to the first `turn:` URL with `transport=udp` from `/v1/turn` (normally `turn.cloudflare.com:3478`). Authentication uses long-term credentials:
+- **Server:** RFC 8656 over UDP to the first `turn:` URL with `transport=udp` from `/v1/turn` (normally `turn.cloudflare.com:3478`). When that allocation fails, clients use the `turns:` URL (port 443 preferred) over TLS, for networks that block UDP. STUN messages and ChannelData are then framed by their own lengths, ChannelData padded to four bytes (RFC 8656 section 3.1); the relay still reaches the other side over UDP. Authentication uses long-term credentials:
   1. a 401 reply brings `REALM` and `NONCE`;
   2. `MESSAGE-INTEGRITY` uses key = `MD5(username ":" realm ":" password)`.
 - **Steps:**

@@ -170,6 +170,9 @@ pub(crate) struct Ctx {
     pub handlers: Arc<dyn Handlers>,
     pub idle: Duration,
     pub sessions: Mutex<HashMap<u64, (DeviceId, mpsc::UnboundedSender<Out>)>>,
+    /// Sessions the device actually uses. Another computer of the owner keeps a session open
+    /// for card previews; that alone is not "connected".
+    pub(crate) in_use: Mutex<std::collections::HashSet<u64>>,
     pub events: broadcast::Sender<Event>,
     next_id: AtomicU64,
     /// The rendezvous socket's outbox while it's connected.
@@ -181,14 +184,22 @@ impl Ctx {
     pub fn register(&self, dev: &DeviceId, tx: mpsc::UnboundedSender<Out>) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.sessions.lock().unwrap().insert(id, (dev.clone(), tx));
-        let _ = self.events.send(Event::Connected {
-            device: dev.clone(),
-        });
         id
     }
 
+    /// The first message that is more than a preview request makes the session count as connected.
+    pub fn used(&self, id: u64, m: &ClientMsg) {
+        if matches!(m, ClientMsg::ThumbSub { .. } | ClientMsg::Net) || !self.in_use.lock().unwrap().insert(id) {
+            return;
+        }
+        if let Some((dev, _)) = self.sessions.lock().unwrap().get(&id) {
+            let _ = self.events.send(Event::Connected { device: dev.clone() });
+        }
+    }
+
     pub fn unregister(&self, id: u64) {
-        if let Some((dev, _)) = self.sessions.lock().unwrap().remove(&id) {
+        let was_used = self.in_use.lock().unwrap().remove(&id);
+        if let Some((dev, _)) = self.sessions.lock().unwrap().remove(&id).filter(|_| was_used) {
             let _ = self.events.send(Event::Disconnected { device: dev });
         }
     }
@@ -264,13 +275,19 @@ impl AgentHandle {
     }
 
     /// Device ids with an open session (one entry per session).
+    /// Every open owner session, previews included.
+    pub fn registered(&self) -> Vec<DeviceId> {
+        self.ctx.sessions.lock().unwrap().values().map(|(d, _)| d.clone()).collect()
+    }
+
     pub fn connected(&self) -> Vec<DeviceId> {
         self.ctx
             .sessions
             .lock()
             .unwrap()
-            .values()
-            .map(|(d, _)| d.clone())
+            .iter()
+            .filter(|(id, _)| self.ctx.in_use.lock().unwrap().contains(id))
+            .map(|(_, (d, _))| d.clone())
             .collect()
     }
 }
@@ -306,6 +323,7 @@ impl Agent {
             handlers,
             idle,
             sessions: Mutex::default(),
+            in_use: Mutex::default(),
             events: broadcast::channel(32).0,
             next_id: AtomicU64::new(0),
             relay: Mutex::default(),

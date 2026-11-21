@@ -40,6 +40,11 @@ class SettingsModel(private val kv: KeyValue) {
         get() = kv.get(K_BITRATE)?.toIntOrNull()?.takeIf { it in BITRATES_MBPS } ?: DEFAULT_BITRATE_MBPS
         set(v) { if (v in BITRATES_MBPS) kv.put(K_BITRATE, v.toString()) }
 
+    /** Ask for 4:4:4 colour: sharper coloured text, about twice the video to send. */
+    var fullColour: Boolean
+        get() = bool("pcremote_full_colour", false)
+        set(v) = kv.put("pcremote_full_colour", v.toString())
+
     var haptics: Boolean
         get() = bool(K_HAPTICS, true)
         set(v) = kv.put(K_HAPTICS, v.toString())

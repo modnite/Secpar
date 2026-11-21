@@ -172,10 +172,19 @@ struct Data {
     clipboard_ready: bool,
     #[serde(default)]
     portal_restore: Option<String>,
+    /// Further screens picked in the sharing dialog, each with its own restore token.
+    #[serde(default)]
+    portal_screens: Vec<SavedScreen>,
     /// The rendezvous Worker accepted `master` as this PC's relay key (trust on first use);
     /// later connections leave out `register`.
     #[serde(default)]
     relay_registered: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedScreen {
+    id: String,
+    name: String,
+    token: Option<String>,
 }
 pub struct Store {
     path: PathBuf,
@@ -196,6 +205,7 @@ impl Store {
                 master: URL_SAFE_NO_PAD.encode(random::<32>()),
                 clipboard_ready: true,
                 portal_restore: None,
+                portal_screens: Vec::new(),
                 relay_registered: false,
             },
             Err(e) => return Err(e),
@@ -250,6 +260,30 @@ impl Store {
     pub fn set_portal_token(&mut self, token: Option<String>) -> io::Result<()> {
         self.data.portal_restore = token;
         self.save()
+    }
+    /// The extra screens: (id, name).
+    pub fn screens(&self) -> Vec<(String, String)> {
+        self.data.portal_screens.iter().map(|s| (s.id.clone(), s.name.clone())).collect()
+    }
+    pub fn screen_token(&self, id: &str) -> Option<String> {
+        self.data.portal_screens.iter().find(|s| s.id == id).and_then(|s| s.token.clone())
+    }
+    /// Keeps the dialog's answer for screen `id`, or as a new screen when `id` is None. Returns its id.
+    pub fn save_screen(&mut self, id: Option<&str>, token: Option<String>, (w, h): (u32, u32)) -> io::Result<String> {
+        let id = match id.and_then(|id| self.data.portal_screens.iter_mut().find(|s| s.id == id)) {
+            Some(screen) => {
+                screen.token = token;
+                screen.id.clone()
+            }
+            None => {
+                let n = (2..).find(|n| !self.data.portal_screens.iter().any(|s| s.id == format!("screen-{n}"))).unwrap_or(2);
+                let screen = SavedScreen { id: format!("screen-{n}"), name: format!("Screen {n} ({w}×{h})"), token };
+                self.data.portal_screens.push(screen);
+                format!("screen-{n}")
+            }
+        };
+        self.save()?;
+        Ok(id)
     }
     pub fn new_otp(&mut self) -> String {
         self.new_otp_at(Instant::now())

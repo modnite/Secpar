@@ -46,6 +46,17 @@ fn store(state: Option<bool>) {
 /// Locked, or the state cannot be read. The first call reads once before answering, then a
 /// thread refreshes twice a second, so a lock reaches a running stream within about half a second.
 pub fn locked_or_unknown() -> bool {
+    start();
+    STATE.load(Ordering::SeqCst) != UNLOCKED
+}
+
+/// Known to be locked (unknown counts as not locked).
+pub fn locked() -> bool {
+    start();
+    STATE.load(Ordering::SeqCst) == LOCKED
+}
+
+fn start() {
     START.call_once(|| {
         store(read());
         std::thread::spawn(|| loop {
@@ -54,7 +65,6 @@ pub fn locked_or_unknown() -> bool {
             std::thread::sleep(Duration::from_millis(500).saturating_sub(started.elapsed()));
         });
     });
-    STATE.load(Ordering::SeqCst) != UNLOCKED
 }
 
 #[cfg(test)]

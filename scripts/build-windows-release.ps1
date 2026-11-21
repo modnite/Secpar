@@ -28,6 +28,25 @@ try {
     $resources=@{}
     foreach($property in $unified.bundle.resources.PSObject.Properties){$resources[$property.Name]=$property.Value}
     $changed=$false
+    # The virtual display: the signed Virtual Display Driver (MIT), pinned by release and checksum.
+    $vdd=Join-Path $repo 'host/src-tauri/vdd'
+    $vddZip=Join-Path ([IO.Path]::GetTempPath()) 'secpar-vdd-25.7.23.zip'
+    $vddBase='https://github.com/VirtualDrivers/Virtual-Display-Driver'
+    if (!(Test-Path $vddZip) -or (Get-FileHash $vddZip -Algorithm SHA256).Hash -ne 'E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A') {
+        Invoke-WebRequest "$vddBase/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip" -OutFile $vddZip -UseBasicParsing
+    }
+    if ((Get-FileHash $vddZip -Algorithm SHA256).Hash -ne 'E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A') { throw 'Virtual display driver checksum differs' }
+    Remove-Item -Recurse -Force $vdd -ErrorAction SilentlyContinue
+    $vddUnpacked=Join-Path ([IO.Path]::GetTempPath()) 'secpar-vdd-unpacked'
+    Remove-Item -Recurse -Force $vddUnpacked -ErrorAction SilentlyContinue
+    Expand-Archive -LiteralPath $vddZip -DestinationPath $vddUnpacked
+    New-Item -ItemType Directory -Force $vdd | Out-Null
+    foreach($f in 'MttVDD.inf','MttVDD.dll','mttvdd.cat'){Copy-Item -LiteralPath (Join-Path $vddUnpacked "VirtualDisplayDriver/$f") -Destination $vdd}
+    $vddLicense=Join-Path $vdd 'LICENSE.txt'
+    Invoke-WebRequest 'https://raw.githubusercontent.com/VirtualDrivers/Virtual-Display-Driver/25.7.23/LICENSE' -OutFile $vddLicense -UseBasicParsing
+    if ((Get-FileHash $vddLicense -Algorithm SHA256).Hash -ne 'C2285C867DDC9B88F43B4F8FA2C77A9EEC66207166C1217B37353A2CCD62AC03') { throw 'Virtual display licence differs' }
+    $resources['vdd/']='vdd/'
+    $changed=$true
     if ($Features.Split(',') -contains 'ffmpeg') {
         if (!$env:SECPAR_FFMPEG_DIR -or !(Test-Path (Join-Path $env:SECPAR_FFMPEG_DIR 'share/licenses/encoders/sources.json'))) {
             & (Join-Path $PSScriptRoot 'build-windows-encoder-deps.ps1') -CacheRoot $EncoderDepsCacheRoot

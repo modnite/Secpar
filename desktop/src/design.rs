@@ -99,7 +99,7 @@ pub fn back_button(ui:&mut egui::Ui)->bool {
 /// A titled settings group: one surface, its rows inside, full width.
 pub fn group<R>(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
     surface()
-        .inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 6 })
+        .inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 12 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.;

@@ -232,7 +232,7 @@ async fn revoke_closes_only_that_device() {
     let mut b = hello(&r, &b_tok).await;
     assert_eq!(recv(&mut a).await.unwrap()["t"], "welcome");
     assert_eq!(recv(&mut b).await.unwrap()["t"], "welcome");
-    assert_eq!(r.handle.connected().len(), 2);
+    assert_eq!(r.handle.registered().len(), 2);
 
     r.handle.revoke(&a_id);
     assert_eq!(recv(&mut a).await.unwrap()["code"], "revoked");
@@ -497,7 +497,7 @@ mod relay {
         assert_eq!(env(&mut w).await, json!({"c":7,"m":{"t":"ok","of":"bin:3"}}));
         w.send(text_env(7, r#"{"t":"thumb.sub","on":true}"#)).await.unwrap();
         assert_eq!(env(&mut w).await, json!({"bin":[0, 0, 0, 7, 2, 0xFF, 0xD8]}), "binary frames carry the cid");
-        assert_eq!(r.handle.connected(), vec![dev.clone()]);
+        assert_eq!(r.handle.registered(), vec![dev.clone()]);
 
         // a second phone; the Worker closes it
         w.send(Message::text(r#"{"c":8,"o":"open"}"#)).await.unwrap();
@@ -528,10 +528,10 @@ mod relay {
         w.send(text_env(1, &json!({"t":"hello","v":1,"token":token,"device":"Pixel 8"}).to_string())).await.unwrap();
         env(&mut w).await;
         env(&mut w).await;
-        assert_eq!(r.handle.connected(), vec![dev]);
+        assert_eq!(r.handle.registered(), vec![dev]);
         w.send(close_env(1)).await.unwrap();
         assert_eq!(env(&mut w).await, json!({"c":1,"o":"close"}));
-        assert!(r.handle.connected().is_empty());
+        assert!(r.handle.registered().is_empty());
 
         drop(w); // the Worker socket drops: the host comes back after 1 s, now without `register`
         let t0 = std::time::Instant::now();
