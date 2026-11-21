@@ -1,5 +1,12 @@
 name: Point the account service and relay at the self-hosted box
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: Which step to run
+        type: choice
+        options: [selfhost-tunnel.mjs, relay-to-worker.mjs]
+        default: selfhost-tunnel.mjs
 permissions:
   contents: read
 jobs:
@@ -16,4 +23,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - run: umask 077 && node cloud/scripts/selfhost-tunnel.mjs
+      - run: umask 077 && node cloud/scripts/${{ inputs.script }}
