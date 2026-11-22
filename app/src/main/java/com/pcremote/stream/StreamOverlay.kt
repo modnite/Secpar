@@ -91,7 +91,16 @@ internal fun StreamOverlay(state: ToolbarState, a: ToolbarActions, onLocalUi: (B
         }
         if (!state.connected) return@BoxWithConstraints
         LaunchedEffect(state.buttonHidden) { if (state.buttonHidden) panel = false }
+        // With a TV remote or keyboard the floating button holds focus whenever the menu is closed:
+        // the arrows go to the computer then (a remote's arrows count as a controller's D-pad), so
+        // focus could never reach it, and select opens the menu from anywhere in the stream.
+        val button = remember { FocusRequester() }
+        val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+        LaunchedEffect(panel, keys, state.buttonHidden) {
+            if (keys && !panel && !state.buttonHidden) { withFrameNanos { }; runCatching { button.requestFocus() } }
+        }
         if (!state.buttonHidden) Box(Modifier.align(Alignment.TopStart).zIndex(2f).padding(MenuTokens.BUTTON_MARGIN.dp).size(MenuTokens.BUTTON.dp)
+            .focusRequester(button)
             .clip(RoundedCornerShape(MenuTokens.BUTTON_RADIUS.dp)).background(MenuColors.buttonFill)
             .semantics { contentDescription = "Stream menu" }
             .clickable(remember { MutableInteractionSource() }, null) { panel = !panel }, contentAlignment = Alignment.Center) {

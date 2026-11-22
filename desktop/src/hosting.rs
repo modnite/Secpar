@@ -207,6 +207,21 @@ impl Panel {
         ctx.request_repaint_after(Duration::from_secs(1));
     }
     pub fn open_settings(&mut self) {self.settings_open=true;}
+    /// Keeps the host's state fresh while the window is hidden, for the tray.
+    pub fn tick(&mut self, ctx: &egui::Context) {self.pump(ctx);}
+    /// Who is connected to this computer now: (id, label). Friends by username; the owner's own
+    /// devices by the owner's username and the device.
+    pub fn viewers(&self, owner: Option<&str>) -> Vec<(String, String)> {
+        let Some(state) = &self.state else { return Vec::new() };
+        state.friends.iter().map(|f| (f.id.clone(), format!("{} (friend)", f.name)))
+            .chain(state.devices.iter().filter(|d| d.connected).map(|d| (d.id.clone(), match owner {
+                Some(owner) => format!("{owner} on {}", d.name),
+                None => d.name.clone(),
+            })))
+            .collect()
+    }
+    /// Ends that friend's or device's session on this computer.
+    pub fn disconnect(&mut self, id: String) {self.send(Command::Disconnect(id));}
     fn send(&mut self, command: Command) {
         if self.sample {
             return;
@@ -684,7 +699,7 @@ impl Panel {
                 });
                 if display != old { self.send(Command::Patch(json!({"display":display}))); }
                 if self.settings["vdd"].as_bool() == Some(true) {
-                    self.setting_toggle(ui, &config, "virtual_display", "Virtual display", "");
+                    self.setting_toggle(ui, &config, "virtual_display", "Virtual display while streaming", "");
                     if config["virtual_display"].as_bool() == Some(true) {
                         let mut size = config["virtual_size"].as_str().unwrap_or("1920x1080").to_string();
                         let old = size.clone();

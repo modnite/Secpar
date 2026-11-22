@@ -31,7 +31,7 @@ pub(crate) const RESOLUTIONS:[(u32,u32);6]=[(0,0),(3840,2160),(2560,1440),(1920,
 pub(crate) fn resolution_label(w:u32,h:u32)->String {
     if w==0 {"Host native".into()} else {format!("{w} × {h}")}
 }
-fn path()->Option<PathBuf> {
+pub(crate) fn path()->Option<PathBuf> {
     #[cfg(windows)]
     { return std::env::var_os("APPDATA").map(|p|PathBuf::from(p).join("Secpar/client.json")); }
     #[cfg(target_os="linux")]

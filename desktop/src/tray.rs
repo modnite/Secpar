@@ -4,7 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// Ends the running stream from the tray's own thread. The window may be hidden or behind
@@ -18,6 +18,12 @@ pub struct Tray {
     disconnect: MenuItem,
     disconnect_asked: Arc<AtomicBool>,
     enabled: std::cell::Cell<bool>,
+    menu: Menu,
+    /// Who is connected to this computer, as shown: a heading and one Disconnect item each.
+    viewers: std::cell::RefCell<(Vec<(String, String)>, Vec<MenuItem>)>,
+    /// Menu item ids of the Disconnect items, to the session each ends.
+    kick_ids: Arc<std::sync::Mutex<std::collections::HashMap<MenuId, String>>>,
+    kicks: Arc<std::sync::Mutex<Vec<String>>>,
 }
 impl Tray {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Option<Self> {
@@ -43,7 +49,7 @@ impl Tray {
         let tray = TrayIconBuilder::new()
             .with_tooltip("Secpar")
             .with_icon(icon)
-            .with_menu(Box::new(menu))
+            .with_menu(Box::new(menu.clone()))
             .build()
             .ok()?;
         let quitting = Arc::new(AtomicBool::new(false));
@@ -59,8 +65,14 @@ impl Tray {
         let ctx_disconnect = ctx.clone();
         let stop: Stop = Default::default();
         let stop_now = stop.clone();
+        let kick_ids: Arc<std::sync::Mutex<std::collections::HashMap<MenuId, String>>> = Default::default();
+        let kicks: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let (kick_ids_menu, kicks_menu, ctx_kick) = (kick_ids.clone(), kicks.clone(), ctx.clone());
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            if event.id == quit_id || event.id == restart_id {
+            if let Some(id) = kick_ids_menu.lock().unwrap().get(&event.id).cloned() {
+                kicks_menu.lock().unwrap().push(id);
+                ctx_kick.request_repaint();
+            } else if event.id == quit_id || event.id == restart_id {
                 let restart = event.id == restart_id;
                 let (should_quit, opener, ctx) =
                     (should_quit.clone(), menu_opener.clone(), ctx_menu.clone());
@@ -100,6 +112,10 @@ impl Tray {
             disconnect_asked,
             stop,
             enabled: std::cell::Cell::new(false),
+            menu,
+            viewers: Default::default(),
+            kick_ids,
+            kicks,
         })
     }
     #[cfg(feature="tray-review")]
@@ -110,6 +126,36 @@ impl Tray {
         if self.enabled.replace(connected) != connected {
             self.disconnect.set_enabled(connected);
         }
+    }
+    /// Shows who is connected to this computer, each with Disconnect, under Open Secpar.
+    pub fn set_viewers(&self, viewers: Vec<(String, String)>) {
+        let mut shown = self.viewers.borrow_mut();
+        if shown.0 == viewers {
+            return;
+        }
+        for item in shown.1.drain(..) {
+            let _ = self.menu.remove(&item);
+        }
+        let mut ids = self.kick_ids.lock().unwrap();
+        ids.clear();
+        if !viewers.is_empty() {
+            let heading = MenuItem::new("Connected to this computer", false, None);
+            let mut items = vec![heading];
+            for (id, label) in &viewers {
+                let item = MenuItem::new(format!("Disconnect {label}"), true, None);
+                ids.insert(item.id().clone(), id.clone());
+                items.push(item);
+            }
+            for (i, item) in items.iter().enumerate() {
+                let _ = self.menu.insert(item, 1 + i);
+            }
+            shown.1 = items;
+        }
+        shown.0 = viewers;
+    }
+    /// The sessions picked for Disconnect in the tray since the last call.
+    pub fn take_kicks(&self) -> Vec<String> {
+        std::mem::take(&mut *self.kicks.lock().unwrap())
     }
     /// True once after Disconnect was picked in the tray menu.
     pub fn take_disconnect(&self) -> bool {

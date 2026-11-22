@@ -6,7 +6,7 @@ BINARY = Path(os.environ.get("CARGO_TARGET_DIR", ROOT/"desktop/target"))/"releas
 TOOL = Path(os.environ["SECPAR_APPIMAGETOOL"])
 RUNTIME = Path(os.environ["SECPAR_APPIMAGE_RUNTIME"])
 TAG = os.environ["SECPAR_RELEASE_TAG"]
-if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", TAG):raise RuntimeError("Use a plain vX.Y.Z release tag")
+if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(-r[0-9]+)?", TAG):raise RuntimeError("Use a vX.Y.Z or vX.Y.Z-rN release tag")
 if TAG.encode() not in BINARY.read_bytes():raise RuntimeError("Build the binary with the selected release tag")
 if ".debug_" in subprocess.check_output(["readelf","-S",str(BINARY)],text=True):raise RuntimeError("Debug sections must not be published")
 DEST = ROOT/"dist-desktop/Secpar-Linux-x64.AppImage"

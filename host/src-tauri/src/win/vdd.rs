@@ -1,7 +1,8 @@
-//! The virtual display: a screen that exists only for streaming, for computers with no monitor
-//! attached or to stream a second screen. It uses the signed Virtual Display Driver (MIT,
+//! The virtual display: a screen that exists only while a device streams, for computers with no
+//! monitor attached or to stream a second screen. It uses the signed Virtual Display Driver (MIT,
 //! github.com/VirtualDrivers/Virtual-Display-Driver), installed with Secpar in `vdd\`.
-//! Turning it on adds one root display device; turning it off removes the device again.
+//! Each stream holds a [Lease]: the first adds one root display device, and a few seconds after
+//! the last ends the device is removed again, so it never stays behind in Windows.
 //! The server runs as SYSTEM, which may install drivers and devices.
 
 use std::path::PathBuf;
@@ -98,6 +99,76 @@ fn present() -> bool {
         let _ = unsafe { SetupDiDestroyDeviceInfoList(*set) };
     }
     !found.is_empty()
+}
+
+/// Streams using the virtual display now, and a count of changes so a late removal can tell
+/// whether a new stream started in the meantime.
+static USERS: std::sync::Mutex<(u32, u64)> = std::sync::Mutex::new((0, 0));
+/// Adding and removing the device take seconds; one at a time.
+static DEVICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// How long the display stays after the last stream ends: a reconnect or a screen switch reuses it.
+const LINGER: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// One stream's hold on the virtual display. Dropping the last one removes the display shortly after.
+pub struct Lease(());
+
+/// Adds the virtual display at `size` for a stream, unless another stream already holds it.
+/// Waits until Windows shows the screen, so the stream can capture it from its first frame.
+pub fn lease(size: (u32, u32)) -> Result<Lease, String> {
+    let first = {
+        let mut users = USERS.lock().unwrap();
+        users.0 += 1;
+        users.1 += 1;
+        users.0 == 1
+    };
+    let lease = Lease(());
+    if first || screen().is_none() {
+        let _device = DEVICE.lock().unwrap();
+        apply(true, size)?;
+    }
+    Ok(lease)
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let generation = {
+            let mut users = USERS.lock().unwrap();
+            users.0 = users.0.saturating_sub(1);
+            users.1 += 1;
+            if users.0 > 0 {
+                return;
+            }
+            users.1
+        };
+        std::thread::spawn(move || {
+            std::thread::sleep(LINGER);
+            let _device = DEVICE.lock().unwrap();
+            if *USERS.lock().unwrap() == (0, generation) {
+                if let Err(e) = remove() {
+                    crate::log::line(&format!("virtual display: {e}"));
+                }
+            }
+        });
+    }
+}
+
+/// Removes any virtual display left behind (an older Secpar kept it, or Secpar stopped mid-stream).
+pub fn clear() {
+    let _device = DEVICE.lock().unwrap();
+    if USERS.lock().unwrap().0 == 0 && present() {
+        if let Err(e) = remove() {
+            crate::log::line(&format!("virtual display: {e}"));
+        }
+    }
+}
+
+/// Resizes the virtual display while a stream holds it; otherwise the next stream uses the new size.
+pub fn resize_if_held(size: (u32, u32)) -> Result<(), String> {
+    if USERS.lock().unwrap().0 == 0 {
+        return Ok(());
+    }
+    let _device = DEVICE.lock().unwrap();
+    apply(true, size)
 }
 
 /// Turns the virtual display on (at `size`) or off. Errors are short sentences for the owner.

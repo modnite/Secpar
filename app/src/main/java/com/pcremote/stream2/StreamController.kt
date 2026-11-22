@@ -51,6 +51,19 @@ class StreamController(
     private var listen: Job? = null
     private var timeout: Job? = null
 
+    /**
+     * Asks for the same stream in normal colour: full colour asked more of this device than it can
+     * give at this size (a Chromecast decodes 1080p full colour at about 42 frames a second).
+     */
+    fun dropFullColour(): Boolean {
+        val r = request ?: return false
+        if (!r.fullColour) return false
+        request = r.copy(fullColour = false)
+        timeout?.cancel(); teardown(); send(Msg.StreamStop)
+        ask()
+        return true
+    }
+
     fun start(r: StreamRequest) {
         request = r
         if (listen == null) listen = scope.launch { incoming.collect(::onMsg) }

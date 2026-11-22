@@ -90,11 +90,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     });
     tokio::spawn(watch_lock(agent.clone(), ui.clone()));
     tokio::spawn(start_tray(store.clone()));
-    // A reinstall or a driver update can leave the virtual display missing: bring it back.
-    if store.lock().unwrap().config().virtual_display {
-        let size = crate::win::vdd::parse_size(&store.lock().unwrap().config().virtual_size);
-        tokio::task::spawn_blocking(move || if let Err(e) = crate::win::vdd::apply(true, size) { crate::log::line(&format!("virtual display: {e}")) });
-    }
+    // The virtual display exists only while a device streams: remove one left behind.
+    tokio::task::spawn_blocking(crate::win::vdd::clear);
 
     if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
     let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends });

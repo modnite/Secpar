@@ -14,8 +14,8 @@ if (!$HostTarget) { $HostTarget = Join-Path $repo 'host/src-tauri/target' }
 $DesktopTarget = [IO.Path]::GetFullPath($DesktopTarget)
 $HostTarget = [IO.Path]::GetFullPath($HostTarget)
 $manifest = Get-Content -LiteralPath (Join-Path $repo 'desktop/Cargo.toml') -Raw
-$version = [regex]::Match($manifest, '(?m)^version = "([0-9]+\.[0-9]+\.[0-9]+)"').Groups[1].Value
-if (!$version) { throw 'A plain x.x.x release version is required' }
+$version = [regex]::Match($manifest, '(?m)^version = "([0-9]+\.[0-9]+\.[0-9]+(-r[0-9]+)?)"').Groups[1].Value
+if (!$version) { throw 'An x.x.x or x.x.x-rN release version is required' }
 $hostManifest = Get-Content -LiteralPath (Join-Path $repo 'host/src-tauri/Cargo.toml') -Raw
 if ($hostManifest -notmatch ('(?m)^version = "' + [regex]::Escape($version) + '"')) { throw 'Desktop and host versions differ' }
 $config = Get-Content -LiteralPath (Join-Path $repo 'host/src-tauri/tauri.conf.json') -Raw | ConvertFrom-Json

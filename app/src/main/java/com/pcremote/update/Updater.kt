@@ -74,7 +74,7 @@ object Updater {
         val o = Json.parseToJsonElement(json).jsonObject
         if (o["draft"]?.jsonPrimitive?.content == "true") return null
         val tag = o["tag_name"]!!.jsonPrimitive.content
-        if (!Regex("v\\d+\\.\\d+\\.\\d+(?:-secpar-preview\\.\\d+)?").matches(tag)) return null
+        if (!Regex("v\\d+\\.\\d+\\.\\d+(?:-secpar-preview\\.\\d+|-r\\d+)?").matches(tag)) return null
         val apk = o["assets"]!!.jsonArray.map { it.jsonObject }
             .first { Regex("Secpar(?:-preview[0-9]+)?\\.apk").matches(it["name"]!!.jsonPrimitive.content) }
         val url = apk["browser_download_url"]!!.jsonPrimitive.content
@@ -98,7 +98,9 @@ object Updater {
             val clean = s.trimStart('v')
             val base = clean.substringBefore('-').split('.').map { it.toLongOrNull() ?: 0 }
             val preview = clean.substringAfter("-secpar", "").trimStart('-', '.').removePrefix("preview.").toLongOrNull()
-            return (base + listOf(0L, 0L, 0L)).take(3) + listOf(if (preview == null) 1L else 0L, preview ?: 0)
+            // A revision of a release: 4.2.0-r1 follows 4.2.0 and comes before 4.2.1.
+            val revision = Regex("-r(\\d+)$").find(clean)?.groupValues?.get(1)?.toLongOrNull() ?: 0
+            return (base + listOf(0L, 0L, 0L)).take(3) + listOf(if (preview == null) 1L else 0L, preview ?: 0, revision)
         }
         val a=v(latest); val b=v(current)
         for (i in a.indices) if (a[i] != b[i]) return a[i] > b[i]

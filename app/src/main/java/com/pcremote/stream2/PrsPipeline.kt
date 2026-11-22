@@ -36,6 +36,8 @@ class PrsPipeline(
     private val onDecoderFailed: () -> Unit,
     private val onEnded: () -> Unit,
     private val appVsyncOffsetNs: Long = 0,
+    /** Full colour is too much for this device: of 30 or more frames a second, under 80% shown, for 10 seconds. */
+    private val onFullColourTooSlow: () -> Unit = {},
 ) : Pipeline {
     private val audio: AudioPlayer
     @Volatile private lateinit var decoder: VideoDecoder
@@ -82,8 +84,18 @@ class PrsPipeline(
         // Full colour: the frames are twice the picture's height, decoded into the renderer.
         val renderer = if (r.chroma == "444") com.pcremote.prs.PackedRenderer(surface, r.w, r.h) { onDecoderFailed() } else null
         packed = renderer
-        return VideoDecoder(surface, r.codec, r.w, if (renderer != null) r.h * 2 else r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr, appVsyncOffsetNs, renderer?.let { it::frame })
-            .also { d -> d.onRendered = { receiver.decodeMs = d.decodeMs } }
+        // A renderer with its own input takes the decoder's output directly; otherwise frame by frame.
+        val direct = renderer?.input
+        return VideoDecoder(direct ?: surface, r.codec, r.w, if (renderer != null) r.h * 2 else r.h, r.fps, { onDecoderFailed() }, receiver::requestIdr, appVsyncOffsetNs,
+            if (renderer != null && direct == null) renderer::frame else null)
+            .also { d ->
+                d.onRendered = { receiver.decodeMs = d.decodeMs }
+                if (renderer != null) {
+                    var slow = 0
+                    // A still screen sends few frames: only frames that arrived and were not shown count.
+                    d.onPace = { shown, arrived -> slow = if (arrived >= 30 && shown < arrived * 0.8) slow + 1 else 0; if (slow == 2) onFullColourTooSlow() }
+                }
+            }
     }
 
     /** The host's relayed address (`stream.cand` from the host): talk relay-to-relay. */

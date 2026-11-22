@@ -50,10 +50,15 @@ class VideoDecoder(
     private var decodeAvgUs = 0.0
     private val outputDrops = java.util.concurrent.atomic.AtomicInteger()
     private var presented = 0
+    /** Frames that arrived since the last stats line: the host only sends one when the screen changes. */
+    private val arrived = java.util.concurrent.atomic.AtomicInteger()
     private var statsAtNs = System.nanoTime()
 
     /** The MediaCodec component in use, empty until the first keyframe configures it. */
     @Volatile var name = ""; private set
+
+    /** Called every 5 seconds with the frames shown and the frames that arrived, per second. */
+    @Volatile var onPace: ((shown: Int, arrived: Int) -> Unit)? = null
 
     /** Called on each rendered frame with the frame's arrival time (our clock, µs). */
     @Volatile var onRendered: ((receivedUs: Long) -> Unit)? = null
@@ -61,6 +66,7 @@ class VideoDecoder(
     fun submit(f: Frame) {
         if (dead) return
         synchronized(lock) {
+            arrived.incrementAndGet()
             val admission = frames.offer(f, System.nanoTime() / 1000)
             if (admission.requestKey) onNeedKeyframe()
             if (!admission.accepted) return
@@ -205,6 +211,8 @@ class VideoDecoder(
                         val shownFps = presented * 1_000_000_000.0 / (now - statsAtNs)
                         val resyncs = synchronized(lock) { frames.resyncs }
                         Log.i(TAG, "pacing shownFps=${shownFps.toInt()} queueDrops=${outputDrops.getAndSet(0)} inputResyncs=$resyncs decodeMs=$decodeMs")
+                        val arrivedFps = arrived.getAndSet(0) * 1_000_000_000.0 / (now - statsAtNs)
+                        onPace?.invoke(shownFps.toInt(), arrivedFps.toInt())
                         statsAtNs = now
                         presented = 0
                     }

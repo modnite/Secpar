@@ -136,6 +136,8 @@ fn supervise() {
     if let Some((c, _)) = server {
         c.kill();
     }
+    // Quit, an update or uninstalling stops the service: no virtual display stays behind.
+    crate::win::vdd::clear();
     crate::log::line("service: stopped");
 }
 

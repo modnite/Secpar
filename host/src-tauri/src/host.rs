@@ -70,6 +70,7 @@ impl Host {
             thumb: None,
             net: self.net.clone(),
             stream: None,
+            screen: None,
             gate,
             checked: None,
         })
@@ -132,6 +133,8 @@ pub struct HostSession {
     thumb: Option<tokio::task::JoinHandle<()>>,
     net: Arc<Mutex<net::NetStatus>>,
     stream: Option<StreamSession>,
+    /// This session's hold on the virtual display while it streams (setting on, driver installed).
+    screen: Option<crate::win::vdd::Lease>,
     /// Set for a friend's session. Everything that reaches the PC asks it first.
     gate: Option<Gate>,
     checked: Option<std::time::Instant>,
@@ -276,6 +279,19 @@ impl Session for HostSession {
             }
             ClientMsg::StreamStart { w, h, fps, codecs, max_kbps, audio, cands, display, chroma } => {
                 self.stream = None; // a restart from this phone replaces its stream
+                // The virtual display exists only while someone streams: added before capture starts.
+                let (virtual_on, size) = {
+                    let store = self.store.lock().unwrap();
+                    (store.config().virtual_display, crate::win::vdd::parse_size(&store.config().virtual_size))
+                };
+                if !virtual_on {
+                    self.screen = None;
+                } else if self.screen.is_none() && crate::win::vdd::available() {
+                    match crate::win::vdd::lease(size) {
+                        Ok(lease) => self.screen = Some(lease),
+                        Err(e) => crate::log::line(&format!("virtual display: {e}")),
+                    }
+                }
                 let cands = cands.iter().filter_map(|c| c.parse().ok()).collect();
                 let st = self.net.lock().unwrap().clone();
                 let public = st.public.filter(|_| st.upnp).and_then(|ip| ip.parse().ok());
@@ -299,6 +315,7 @@ impl Session for HostSession {
             }
             ClientMsg::StreamStop => {
                 self.stream = None;
+                self.screen = None;
                 None
             }
             ClientMsg::StreamDisplay { id } => {
