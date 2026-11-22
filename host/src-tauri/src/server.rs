@@ -96,6 +96,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(account) = &account { tokio::spawn(account.clone().run()); }
     let app = Arc::new(App { store, agent, fp: identity.fingerprint_hex.clone(), identity, account, outgoing, net, friends });
     let weak = Arc::downgrade(&app);
+    if let Ok(account) = &app.account {
+        let weak = weak.clone();
+        tokio::spawn(account.clone().serve_pairings(move |owner, id| {
+            let app = weak.upgrade();
+            async move { match app { Some(app) => crate::commands::owner_pair_url(&app, &id, &owner), None => Err("Secpar is stopping".to_string()) } }
+        }));
+    }
     tokio::spawn(async move {
         let mut timer = tokio::time::interval(Duration::from_secs(3));
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -121,12 +128,6 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             account.set_presence(presence).await;
             let revoked = app.store.lock().unwrap().set_account_owner(owner.clone());
             for device in revoked { app.revoke(&device); }
-            if let Some(owner) = owner {
-                let _ = account.poll_pairings(|id| {
-                    let app = app.clone(); let owner = owner.clone();
-                    async move { crate::commands::owner_pair_url(&app,&id,&owner) }
-                }).await;
-            }
         }
     });
     let handler: ipc::Handler = Arc::new(move |cmd, args| Box::pin(crate::commands::dispatch(app.clone(), cmd, args)));
