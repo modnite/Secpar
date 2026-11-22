@@ -6,9 +6,11 @@ if (!response.ok) throw Error(`Release lookup failed (${response.status})`);
 const releases = await response.json(), result = {};
 const names = { windows: 'Secpar-Windows-x64-setup.exe', linux: 'Secpar-Linux-x64.AppImage', android: 'Secpar.apk' };
 for (const [platform, name] of Object.entries(names)) {
-  const candidates = releases.filter(r => !r.draft && /^v\d+\.\d+\.\d+$/.test(r.tag_name)).sort((a, b) => {
-    const x = a.tag_name.slice(1).split('.').map(Number), y = b.tag_name.slice(1).split('.').map(Number);
-    return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+  // vX.Y.Z or a revision of it, vX.Y.Z-rN, which follows vX.Y.Z and comes before the next release.
+  const part = tag => { const [base, rev] = tag.slice(1).split('-r'); return [...base.split('.').map(Number), Number(rev ?? 0)]; };
+  const candidates = releases.filter(r => !r.draft && /^v\d+\.\d+\.\d+(-r\d+)?$/.test(r.tag_name)).sort((a, b) => {
+    const x = part(a.tag_name), y = part(b.tag_name);
+    return y[0] - x[0] || y[1] - x[1] || y[2] - x[2] || y[3] - x[3];
   });
   for (const release of candidates) {
     const asset = release.assets.find(a => a.name === name);
