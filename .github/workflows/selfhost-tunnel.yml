@@ -5,7 +5,7 @@ on:
       script:
         description: Which step to run
         type: choice
-        options: [selfhost-tunnel.mjs, relay-to-worker.mjs]
+        options: [selfhost-tunnel.mjs, relay-to-worker.mjs, turn-key.mjs]
         default: selfhost-tunnel.mjs
 permissions:
   contents: read
