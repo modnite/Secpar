@@ -8,12 +8,18 @@ use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValu
 
 const URL: &str = "wss://accounts.secpar.win/v1/events";
 
+/// True while the channel is connected: the account loop then polls only every ten minutes.
+pub static LIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn live(on: bool) { LIVE.store(on, std::sync::atomic::Ordering::Relaxed); }
+pub fn is_live() -> bool { LIVE.load(std::sync::atomic::Ordering::Relaxed) }
+
 /// Runs until aborted: connects, reports each change, and reconnects with a short backoff.
 pub async fn run(token: String, changed: mpsc::Sender<crate::account::Command>) {
     let mut wait = Duration::from_secs(1);
     loop {
         let started = std::time::Instant::now();
         let _ = session(&token, &changed).await;
+        live(false);
         // A channel that stayed up a while starts over quickly; one that keeps failing backs off.
         if started.elapsed() > Duration::from_secs(60) { wait = Duration::from_secs(1); }
         tokio::time::sleep(wait).await;
@@ -26,6 +32,7 @@ async fn session(token: &str, changed: &mpsc::Sender<crate::account::Command>) -
     request.headers_mut().insert("authorization", HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| ())?);
     let (mut socket, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(request))
         .await.map_err(|_| ())?.map_err(|_| ())?;
+    live(true);
     // Anything missed while the channel was down.
     let _ = changed.try_send(crate::account::Command::Changed);
     let mut ping = tokio::time::interval(Duration::from_secs(30));

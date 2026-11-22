@@ -21,6 +21,11 @@ import java.util.concurrent.TimeUnit
  */
 object AccountEvents {
     private const val URL = "wss://accounts.secpar.win/v1/events"
+
+    /** True while the channel is connected: background polling then waits ten minutes. */
+    @Volatile var live = false; private set
+    /** Counts changes, so a waiting poll can look at once. */
+    val changes = java.util.concurrent.atomic.AtomicInteger()
     private val client by lazy {
         OkHttpClient.Builder().followRedirects(false).readTimeout(0, TimeUnit.MILLISECONDS).build()
     }
@@ -33,8 +38,8 @@ object AccountEvents {
             val socket = client.newWebSocket(Request.Builder().url(URL).header("Authorization", "Bearer $token").build(),
                 object : WebSocketListener() {
                     // Anything missed while the channel was down.
-                    override fun onOpen(webSocket: WebSocket, response: Response) = onChanged()
-                    override fun onMessage(webSocket: WebSocket, text: String) { if (text == "changed") onChanged() }
+                    override fun onOpen(webSocket: WebSocket, response: Response) { live = true; changes.incrementAndGet(); onChanged() }
+                    override fun onMessage(webSocket: WebSocket, text: String) { if (text == "changed") { changes.incrementAndGet(); onChanged() } }
                     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null); closed.complete(Unit) }
                     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { closed.complete(Unit) }
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { closed.complete(Unit) }
@@ -44,7 +49,7 @@ object AccountEvents {
                 while (!closed.isCompleted) {
                     if (withTimeoutOrNull(30_000) { closed.await() } == null && !socket.send("ping")) break
                 }
-            } finally { socket.cancel() }
+            } finally { socket.cancel(); live = false }
             if (System.currentTimeMillis() - opened > 60_000) wait = 1_000L
             delay(wait)
             wait = (wait * 2).coerceAtMost(30_000L)

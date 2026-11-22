@@ -2109,19 +2109,21 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 match (api.token.clone().filter(|_| signed_owner.is_some()), &live) {
                     (Some(token), Some((current, _))) if *current == token => {}
                     (Some(token), _) => {
-                        if let Some((_, task)) = live.take() { task.abort(); }
+                        if let Some((_, task)) = live.take() { task.abort(); crate::account_events::LIVE.store(false, std::sync::atomic::Ordering::Relaxed); }
                         live = Some((token.clone(), tokio::spawn(crate::account_events::run(token, tx_changes.clone()))));
                     }
-                    (None, Some(_)) => { if let Some((_, task)) = live.take() { task.abort(); } }
+                    (None, Some(_)) => { if let Some((_, task)) = live.take() { task.abort(); crate::account_events::LIVE.store(false, std::sync::atomic::Ordering::Relaxed); } }
                     (None, None) => {}
                 }
-                // Changes arrive on the live channel. Polling is only the fallback: every 15 seconds
-                // while the window is in front, at once on looking at it again, otherwise every minute.
+                // Changes arrive on the live channel. Polling is only the fallback: every ten minutes
+                // while the channel is up; otherwise every minute in front, at once on looking at it
+                // again, and every five minutes behind other windows.
+                let channel=crate::account_events::is_live();
                 let focused=ctx.input(|i| i.viewport().focused.unwrap_or(true) && !i.viewport().minimized.unwrap_or(false));
                 if focused && !was_focused { next_friend_computers=Instant::now(); }
                 was_focused=focused;
                 if signed_owner.is_some() && api.token.is_some() && Instant::now()>=next_friend_computers {
-                    next_friend_computers=Instant::now()+Duration::from_secs(if focused {60} else {300});
+                    next_friend_computers=Instant::now()+Duration::from_secs(if channel {600} else if focused {60} else {300});
                     let (shared,own)=tokio::join!(api.friend_computers(),api.computers());
                     if let Ok(list)=own { known=list.clone(); let _=events.send(Event::Owned(list)).await; }
                     match shared {
@@ -2159,7 +2161,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 }
                 if sync_fut.is_none() {
                     if let Some(owner)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_owned) {
-                        next_owned=Instant::now()+Duration::from_secs(120);
+                        next_owned=Instant::now()+Duration::from_secs(if channel {600} else {120});
                         let enroll=suppressed_owner.as_deref()!=Some(owner.as_str());
                         sync_fut=Some(Box::pin(synchronize_owned(api.clone(),owner,enroll)));
                     }
@@ -2189,7 +2191,7 @@ pub fn start(ctx: eframe::egui::Context) -> (mpsc::Sender<Command>, mpsc::Receiv
                 if let Some(me)=signed_owner.clone().filter(|_| api.token.is_some() && Instant::now()>=next_alerts) {
                     // While someone is waiting for an answer, look again soon, so a request answered
                     // from the notification leaves this window quickly too.
-                    next_alerts=Instant::now()+Duration::from_secs(if pending_requests {5} else {60});
+                    next_alerts=Instant::now()+Duration::from_secs(if channel {600} else if pending_requests {5} else {60});
                     match api.live().await {
                         Ok((friends,requests))=>{
                             pending_requests=requests.iter().any(|r| r.owner==me && r.state=="pending");

@@ -71,3 +71,7 @@ On 2026-11-21 the Cloudflare account ran out of the free plan's 100,000 Worker r
   Cloudflare TURN key).
 - Apps poll less (desktop alerts 60 s, owned list 120 s; Android alerts 60 s) and keep the last
   known computers when the service is unreachable, connecting with their saved keys.
+- Next release, not yet deployed: hosts stop asking for owner pairings every 3 s (about 28,800
+  requests a day each); the service holds `GET /v1/host/owner-pairings?wait=25` until a device asks.
+  Apps whose live channel is connected poll only every 10 minutes. Old hosts and an old service
+  still work with either side.

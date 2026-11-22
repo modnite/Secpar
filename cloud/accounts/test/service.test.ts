@@ -451,6 +451,18 @@ describe("same-account owner pairing", () => {
     expect(await (await call("/v1/computers", "bob")).json()).toEqual([]);
     expect((await call("/v1/computers", null)).status).toBe(401);
   });
+  it("holds a waiting host until a device asks to pair", async () => {
+    const host = await enrolledHost();
+    let started = Date.now();
+    expect(await (await machine("/v1/host/owner-pairings?wait=2", host.credential)).json()).toEqual([]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1900);
+    started = Date.now();
+    const held = machine("/v1/host/owner-pairings?wait=25", host.credential);
+    await new Promise((r) => setTimeout(r, 300));
+    const pair = await request(host);
+    expect((await (await held).json()).map((j: { id: string }) => j.id)).toEqual([pair.id]);
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, 15000);
   it("round-trips an encrypted one-use result only to the requesting device session", async () => {
     const host = await enrolledHost(), pair = await request(host);
     expect((await call(`/v1/owner-pairings/${pair.id}`)).status).toBe(202);

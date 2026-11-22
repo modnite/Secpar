@@ -88,7 +88,11 @@ class AlertService : Service() {
                 val open = requests.filter { it.state == "pending" }.map { it.id } + friends.filter { it.pending }.map { it.id }
                 nm.activeNotifications.filter { it.id != WATCH_ID && it.tag != null && it.tag !in open }.forEach { nm.cancel(it.tag, it.id) }
             }
-            delay(POLL_MS)
+            // Every minute; every ten while the app's live channel is up, or at once when it
+            // reports a change.
+            val seen = AccountEvents.changes.get()
+            var waited = 0L
+            while (waited < (if (AccountEvents.live) 600_000L else POLL_MS) && AccountEvents.changes.get() == seen) { delay(2_000); waited += 2_000 }
         }
     }
 

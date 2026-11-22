@@ -238,6 +238,8 @@ impl Account {
             .request(method, format!("{}{path}", self.origin))
             .bearer_auth(&registration.credential);
         let request = if let Some(body) = body { request.json(&body) } else { request };
+        // A waiting request is held by the service for up to 25 seconds.
+        let request = if path.contains("?wait=") { request.timeout(Duration::from_secs(40)) } else { request };
         let mut response = request.send()
             .await
             .map_err(|_| {
@@ -388,11 +390,31 @@ impl Account {
         let handle = roster.handle(guest).unwrap_or_default().to_owned();
         crate::guest_policy::admit(&roster, &lease, signed, guest).map(|a| (a, handle)).map_err(|d| d.message().into())
     }
-    pub async fn poll_pairings<F, Fut>(&self, mut make_link: F) -> Result<usize, String>
+    pub async fn poll_pairings<F, Fut>(&self, make_link: F) -> Result<usize, String>
+    where F: FnMut(String) -> Fut, Fut: std::future::Future<Output = Result<String, String>> {
+        self.poll_pairings_waiting(0, make_link).await
+    }
+    /// Waits for the owner's devices asking to pair and answers each with a pairing link. The
+    /// service holds each request until a device asks or 25 seconds pass; an older service answers
+    /// at once, so a round never starts sooner than 3 seconds after the last.
+    pub async fn serve_pairings<F, Fut>(self: Arc<Self>, make_link: F)
+    where F: Fn(String, String) -> Fut, Fut: std::future::Future<Output = Result<String, String>> {
+        loop {
+            let started = std::time::Instant::now();
+            let failed = match self.state().await.owner {
+                Some(owner) => self.poll_pairings_waiting(25, |id| make_link(owner.clone(), id)).await.is_err(),
+                None => false,
+            };
+            let floor = Duration::from_secs(if failed { 10 } else { 3 });
+            tokio::time::sleep(floor.saturating_sub(started.elapsed())).await;
+        }
+    }
+    async fn poll_pairings_waiting<F, Fut>(&self, wait: u64, mut make_link: F) -> Result<usize, String>
     where F: FnMut(String) -> Fut, Fut: std::future::Future<Output = Result<String, String>> {
         let registration = self.inner.lock().await.registration.clone();
         let Some(registration) = registration else { return Ok(0); };
-        let jobs = self.request(&registration, Method::GET, "/v1/host/owner-pairings").await.map_err(|(_, note)| note)?;
+        let path = if wait > 0 { format!("/v1/host/owner-pairings?wait={wait}") } else { "/v1/host/owner-pairings".into() };
+        let jobs = self.request(&registration, Method::GET, &path).await.map_err(|(_, note)| note)?;
         let jobs: Vec<PairRequest> = serde_json::from_value(jobs).map_err(|_| "Invalid owner pairing response")?;
         if jobs.len() > 8 || jobs.iter().any(|job| !valid_id(&job.id)) { return Err("Invalid owner pairing response".into()); }
         let mut delivered = 0;

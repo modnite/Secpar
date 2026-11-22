@@ -76,7 +76,16 @@ const active = "p.expires>? AND p.host_key_hash=k.credential_hash AND p.certific
 export async function ownerRoutes(request: Request, env: Environment, owner: string | null, machine: Machine | null, api: Helpers): Promise<Response | null> {
   const { pathname: path } = new URL(request.url), method = request.method;
   if (machine && path === "/v1/host/owner-pairings" && method === "GET") {
-    const rows = await q(env, `SELECT p.id,p.device_name,p.expires FROM owner_pairings p JOIN host_keys k ON k.computer=p.computer WHERE p.computer=? AND p.owner=? AND ${active} AND p.sealed IS NULL ORDER BY p.expires LIMIT 8`, machine.computer, machine.owner, now()).all();
+    const pending = () => q(env, `SELECT p.id,p.device_name,p.expires FROM owner_pairings p JOIN host_keys k ON k.computer=p.computer WHERE p.computer=? AND p.owner=? AND ${active} AND p.sealed IS NULL ORDER BY p.expires LIMIT 8`, machine.computer, machine.owner, now()).all();
+    // Hosts that send ?wait=N are answered as soon as a device asks to pair, or after N seconds
+    // (at most 25) with nothing: one request per host every 25 seconds instead of every 3.
+    const wait = Math.min(25, Math.max(0, Math.floor(Number(new URL(request.url).searchParams.get("wait")) || 0)));
+    const until = Date.now() + wait * 1000;
+    let rows = await pending();
+    while (!rows.results.length && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 1000));
+      rows = await pending();
+    }
     return json(rows.results);
   }
   const delivery = path.match(/^\/v1\/host\/owner-pairings\/([a-f0-9-]{36})$/);

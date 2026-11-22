@@ -187,6 +187,13 @@ impl Backend {
             }
         });
         let weak = Arc::downgrade(&host);
+        if let Ok(account) = &host.account {
+            let weak = weak.clone();
+            tokio::spawn(account.clone().serve_pairings(move |owner, id| {
+                let host = weak.upgrade();
+                async move { match host { Some(host) => host.owner_pair_link(&id, &owner), None => Err("Secpar is stopping".to_string()) } }
+            }));
+        }
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(Duration::from_secs(3));
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -211,12 +218,6 @@ impl Backend {
                 };
                 account.set_presence(presence).await;
                 host.sync_account_owner(owner.clone());
-                if let Some(owner) = owner {
-                    let _ = account.poll_pairings(|id| {
-                        let host = host.clone(); let owner = owner.clone();
-                        async move { host.owner_pair_link(&id,&owner) }
-                    }).await;
-                }
             }
         });
         Ok(host)
