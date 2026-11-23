@@ -11,7 +11,7 @@ class StreamMenuModelTest {
     @Test fun `main page order with every optional row`() {
         assertEquals(
             listOf("Keyboard", "Trackpad", "Picture in picture", "Resolution", "Switch display", "Share clipboard",
-                "Stream stats", "Audio", "More keys", "Help", "Disconnect"),
+                "Stream stats", "Mute audio", "Audio", "More keys", "Help", "Disconnect"),
             StreamMenuModel.mainRows(canPip = true, displayCount = 2).map { it.label })
     }
 
@@ -27,7 +27,9 @@ class StreamMenuModelTest {
     @Test fun `share clipboard sits before stream stats and audio after it`() {
         val rows = StreamMenuModel.mainRows(true, 3)
         assertEquals(rows.indexOf(MenuRow.STREAM_STATS) - 1, rows.indexOf(MenuRow.SHARE_CLIPBOARD))
-        assertEquals(rows.indexOf(MenuRow.STREAM_STATS) + 1, rows.indexOf(MenuRow.AUDIO))
+        assertEquals(rows.indexOf(MenuRow.STREAM_STATS) + 1, rows.indexOf(MenuRow.MUTE))
+        assertEquals(rows.indexOf(MenuRow.MUTE) + 1, rows.indexOf(MenuRow.AUDIO))
+        assertFalse(MenuRow.MUTE in StreamMenuModel.mainRows(true, 3, audioOn = false))
     }
 
     @Test fun `back row title is the label of the row that opened the page`() {

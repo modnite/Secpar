@@ -3889,7 +3889,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-desktop"
-version = "4.2.0-r3"
+version = "4.2.0-r4"
 dependencies = [
  "base64",
  "cpal",
@@ -3933,7 +3933,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-host"
-version = "4.2.0-r3"
+version = "4.2.0-r4"
 dependencies = [
  "base64",
  "cc",

@@ -12,6 +12,7 @@ enum class MenuRow(val label: String) {
     SWITCH_DISPLAY("Switch display"),
     SHARE_CLIPBOARD("Share clipboard"),
     STREAM_STATS("Stream stats"),
+    MUTE("Mute audio"),
     AUDIO("Audio"),
     MORE_KEYS("More keys"),
     HELP("Help"),
@@ -27,7 +28,7 @@ object StreamMenuModel {
     const val WAITING_FOR_STATS = "Waiting for stream stats"
 
     /** The main page: Picture in picture only where the device has it, Switch display only with several displays. */
-    fun mainRows(canPip: Boolean, displayCount: Int): List<MenuRow> = buildList {
+    fun mainRows(canPip: Boolean, displayCount: Int, audioOn: Boolean = true): List<MenuRow> = buildList {
         add(MenuRow.KEYBOARD)
         add(MenuRow.TRACKPAD)
         if (canPip) add(MenuRow.PICTURE_IN_PICTURE)
@@ -35,6 +36,7 @@ object StreamMenuModel {
         if (displayCount > 1) add(MenuRow.SWITCH_DISPLAY)
         add(MenuRow.SHARE_CLIPBOARD)
         add(MenuRow.STREAM_STATS)
+        if (audioOn) add(MenuRow.MUTE)
         add(MenuRow.AUDIO)
         add(MenuRow.MORE_KEYS)
         add(MenuRow.HELP)

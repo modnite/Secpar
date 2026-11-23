@@ -14,8 +14,8 @@ android {
         minSdk 26
         targetSdk 36
 
-        versionName "4.2.0-r3"
-        versionCode = 570
+        versionName "4.2.0-r4"
+        versionCode = 571
     }
 
     flavorDimensions.add("root")
@@ -78,6 +78,15 @@ android {
             shrinkResources true
             signingConfig ksFile.exists() ? signingConfigs.release : signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // AAudio output for stream audio (app/src/main/cpp).
+    ndkVersion "28.2.13676358"
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
         }
     }
 

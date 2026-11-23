@@ -29,6 +29,8 @@ class ToolbarState {
     /** "Share clipboard" row (saved in settings, default on) and whether host audio is on. */
     var shareClipboard by mutableStateOf(true)
     var audioOn by mutableStateOf(true)
+    /** Stream audio muted on this device only; the host keeps playing. */
+    var muted by mutableStateOf(false)
     var resizeNotice by mutableStateOf(false)
     /** Ctrl+Alt+S hides the Secpar button. */
     var buttonHidden by mutableStateOf(false)
@@ -51,4 +53,5 @@ interface ToolbarActions {
     fun audioDetails(): String = ""
     fun copyText(text: String) {}
     fun reopenAudio() {}
+    fun setMuted(on: Boolean) {}
 }

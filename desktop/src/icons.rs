@@ -2,7 +2,7 @@
 //! assets/icons/lucide. Rasterized from SVG; tinted after DPI-aware downsampling.
 use eframe::egui::{self,Color32,Rect,TextureHandle,TextureOptions};
 #[derive(Clone,Copy,Debug)]
-pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Help,Exit,Back,Check,Chevron,ChevronDown,Keyboard,Mouse,Refresh,SignIn,Download,Upload,Folder,File,Close}
+pub enum Icon {Window,Windowed,Decoder,Display,Clipboard,Stats,Audio,Mute,Help,Exit,Back,Check,Chevron,ChevronDown,Keyboard,Mouse,Refresh,SignIn,Download,Upload,Folder,File,Close}
 impl Icon {
     fn png(self)->&'static [u8] {match self {
         Self::Window=>include_bytes!("../../assets/icons/lucide/png/maximize.png"),
@@ -12,6 +12,7 @@ impl Icon {
         Self::Clipboard=>include_bytes!("../../assets/icons/lucide/png/clipboard.png"),
         Self::Stats=>include_bytes!("../../assets/icons/lucide/png/chart-no-axes-column-increasing.png"),
         Self::Audio=>include_bytes!("../../assets/icons/lucide/png/volume-2.png"),
+        Self::Mute=>include_bytes!("../../assets/icons/lucide/png/volume-x.png"),
         Self::Help=>include_bytes!("../../assets/icons/lucide/png/circle-help.png"),
         Self::Exit=>include_bytes!("../../assets/icons/lucide/png/log-out.png"),
         Self::Back=>include_bytes!("../../assets/icons/lucide/png/arrow-left.png"),
