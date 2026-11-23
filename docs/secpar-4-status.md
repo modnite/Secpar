@@ -67,8 +67,10 @@ On 2026-11-21 the Cloudflare account ran out of the free plan's 100,000 Worker r
   cannot be exported, and its traffic is light.
 - The deploy workflow refuses to deploy the account Worker, which would take the name back with
   stale data. `selfhost-tunnel.yml` and `accounts-export.yml` are the one-off jobs used.
-- Not yet on the box: email (needs a new Resend key) and TURN credentials for friends (needs a new
-  Cloudflare TURN key).
+- Email works again since 2026-11-22: a sending-only Resend key for mail.secpar.win, in
+  `accounts/.dev.vars`. Since 2026-11-22 the rendezvous also holds a Cloudflare TURN key
+  (`secpar-self-hosted`) in `rendezvous/.dev.vars`, so friends get relay credentials again.
+  `selfhost-tunnel.yml` with `turn-key.mjs` replaces it (API token needs Cloudflare Realtime: Edit).
 - Apps poll less (desktop alerts 60 s, owned list 120 s; Android alerts 60 s) and keep the last
   known computers when the service is unreachable, connecting with their saved keys.
 - Next release, not yet deployed: hosts stop asking for owner pairings every 3 s (about 28,800
