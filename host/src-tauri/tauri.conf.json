@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Secpar Host",
-  "version": "4.2.0-r3",
+  "version": "4.2.0-r4",
   "identifier": "com.secpar.host",
   "build": {
     "frontendDist": "../dist",

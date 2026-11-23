@@ -67,7 +67,8 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   after HDMI. Not released.
 - Mute audio in the stream menu on Android and desktop: this device only, plays silence so
   unmuting stays in sync. Not released.
-- Phone (SM-S911B) audio crackles on the AudioTrack path; not diagnosed yet.
+- Phone (SM-S911B) audio crackled once on the AudioTrack path (18 underruns at stream start, none
+  after); gone in the owner's next test on 2026-11-23 without a change for it. Watch for a return.
 - Windows window garbled after an update until moved: the service starts the window hidden and
   the updater only shows it. Reproduced by restarting the service; fixed (not released) by moving
   the window a pixel and back the first time it opens, verified the same way.
