@@ -45,6 +45,8 @@ impl Buffer {
         out
     }
 }
+/// Stream audio muted on this computer only. Silence still plays, so unmuting is instant and in sync.
+pub static MUTED: AtomicBool = AtomicBool::new(false);
 pub struct Audio {
     decoder: opus::Decoder,
     buffer: Arc<Mutex<Buffer>>,
@@ -147,6 +149,7 @@ impl Audio {
         self.received_packets += 1;
         let mut pcm = [0f32; 5760 * 2];
         if let Ok(n) = self.decoder.decode_float(packet, &mut pcm, false) {
+            if MUTED.load(Ordering::Relaxed) { pcm[..n * 2].fill(0.); }
             #[cfg(target_os = "linux")]
             if let Some(pulse) = self.pulse.as_mut() { pulse.packet(&pcm[..n*2]); return; }
             self.buffer.lock().unwrap().push(&pcm[..n * 2]);

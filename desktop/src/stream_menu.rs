@@ -109,6 +109,10 @@ impl App {
                             self.clipboard=self.client.clipboard.then(secpar_clipboard::Bridge::start);self.send(Command::ClipboardSharing(self.client.clipboard));
                         }
                         if row(ui,Icon::Stats,"Stream stats","",false,self.show_stream_stats,false).clicked(){self.show_stream_stats=!self.show_stream_stats;self.stream_menu_open=false;}
+                        if self.client.audio {
+                            let muted=crate::audio::MUTED.load(std::sync::atomic::Ordering::Relaxed);
+                            if row(ui,Icon::Mute,"Mute audio","",false,muted,false).clicked(){crate::audio::MUTED.store(!muted,std::sync::atomic::Ordering::Relaxed);}
+                        }
                         if row(ui,Icon::Audio,"Audio","",true,false,false).clicked(){self.menu_page=3;}
                         if row(ui,Icon::Help,"Help","",false,false,false).clicked(){let _=open::that("https://secpar.win/help/#stream-menu");}
                         divider(ui);

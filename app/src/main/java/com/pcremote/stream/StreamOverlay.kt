@@ -159,7 +159,7 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
         .background(MenuColors.fill)
         .verticalScroll(rememberScrollState()).padding(MenuTokens.PANEL_PADDING.dp)) {
         if (page == MenuPage.MAIN) {
-            for (row in StreamMenuModel.mainRows(state.canPip, state.displays.size)) when (row) {
+            for (row in StreamMenuModel.mainRows(state.canPip, state.displays.size, state.audioOn)) when (row) {
                 MenuRow.KEYBOARD -> StreamMenuRow(R.drawable.lucide_keyboard, row.label, checked = state.keyboardOpen) { a.keyboard(); close() }
                 MenuRow.TRACKPAD -> StreamMenuRow(R.drawable.lucide_mouse, row.label, checked = state.trackpad) {
                     state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad); close()
@@ -171,6 +171,9 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                     state.shareClipboard = !state.shareClipboard; a.setShareClipboard(state.shareClipboard)
                 }
                 MenuRow.STREAM_STATS -> StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, row.label, checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
+                MenuRow.MUTE -> StreamMenuRow(R.drawable.lucide_volume_x, row.label, checked = state.muted) {
+                    state.muted = !state.muted; a.setMuted(state.muted)
+                }
                 MenuRow.AUDIO -> StreamMenuRow(R.drawable.lucide_volume_2, row.label, arrow = true) { page = MenuPage.AUDIO }
                 MenuRow.MORE_KEYS -> StreamMenuRow(R.drawable.lucide_command, row.label, arrow = true) { page = MenuPage.KEYS }
                 MenuRow.HELP -> {

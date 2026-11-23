@@ -57,6 +57,20 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   12–15 ms. The too-slow fallback and the stats now count frames actually drawn.
 - Laptop 4:4:4: drops with ping spikes after a few minutes. The X250 is on Wi-Fi with
   power saving on; unconfirmed whether that is the cause.
+- Chromecast audio trailed its picture: AudioTrack there goes through the mixer's 2048-frame
+  blocks (about 130 ms). Stream audio now plays through AAudio (app/src/main/cpp), which reaches
+  the MMAP output: 42–56 ms total on the Chromecast, measured. AudioTrack stays as the fallback;
+  the AAudio queue is trimmed above 40 ms. AAudio is used only when it lands on MMAP (the
+  phone gets the shared path, whose start threshold never filled: no sound). After a gap an MMAP
+  stream reads past the write position; the player now reopens it (owner: sound stays on,
+  2026-11-23). The owner still hears the TV's audio behind its picture: the remaining delay is
+  after HDMI. Not released.
+- Mute audio in the stream menu on Android and desktop: this device only, plays silence so
+  unmuting stays in sync. Not released.
+- Phone (SM-S911B) audio crackles on the AudioTrack path; not diagnosed yet.
+- Windows window garbled after an update until moved: the service starts the window hidden and
+  the updater only shows it. Reproduced by restarting the service; fixed (not released) by moving
+  the window a pixel and back the first time it opens, verified the same way.
 - Android stats now match the desktop (decoded and drawn fps, 4:4:4) and both refresh
   every half second, with "Ping (RTT)" as the label. Not released yet.
 

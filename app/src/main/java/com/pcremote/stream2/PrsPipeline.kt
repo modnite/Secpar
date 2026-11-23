@@ -140,6 +140,7 @@ class PrsPipeline(
     }
     fun audioDetails() = audio.details()
     fun reopenAudio() = audio.reopen()
+    fun setMuted(on: Boolean) = audio.setMuted(on)
     val cursor: StateFlow<Cursor> get() = receiver.cursor
 
     override fun sendInput(m: Msg) = receiver.sendInput(m)

@@ -81,6 +81,15 @@ android {
         }
     }
 
+    // AAudio output for stream audio (app/src/main/cpp).
+    ndkVersion "28.2.13676358"
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
     packaging {
         resources {
             excludes += '/META-INF/*.md'

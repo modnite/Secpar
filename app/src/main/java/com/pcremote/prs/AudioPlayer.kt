@@ -1,6 +1,5 @@
 package com.pcremote.prs
 
-import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.MediaCodec
@@ -10,7 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.Executors
 
-/** Opus (48 kHz stereo, 10 ms packets) → MediaCodec → low-latency AudioTrack, with a 30–60 ms buffer. */
+/** Opus (48 kHz stereo, 10 ms packets) → MediaCodec → low-latency output ([PcmOut]), with a 30–60 ms buffer. */
 class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private val exec = Executors.newSingleThreadScheduledExecutor { task -> Thread({
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
@@ -18,9 +17,8 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     }, "pcr-audio") }
     private var codec: MediaCodec? = null
     private var pump: java.util.concurrent.ScheduledFuture<*>? = null
-    @Volatile private var track: AudioTrack? = null
+    @Volatile private var track: PcmOut? = null
     private var writer = PcmWriter()
-    private var head = PlaybackHead()
     private var playing = false
     private var fading = true
     private var previousLeft = 0
@@ -50,11 +48,12 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private var retryAfterNs = 0L
     private var healthySinceNs = 0L
     private var recoveryDrops = 0
+    private var trimmedPackets = 0
     internal fun diagnostics() = "submitted=$submittedPackets decoded=$decodedFrames accepted=$acceptedFrames overflow=${overflowPackets.get()} firstOverflow=[$firstOverflow] stale=$staleFrames incomplete=$incompleteWrites timelineMisses=$timelineMisses recoveries=$recoveries audioFailures=$audioFailures recoveryDrops=$recoveryDrops pending=${pending.get()} codecTimestampOffsetUs=$codecTimestampOffsetUs"
     /** Output device and counters, for the stream menu's Audio page. */
     fun details(): String {
-        val device = runCatching { track?.routedDevice?.let { d -> d.productName?.toString().orEmpty().ifBlank { "device ${d.type}" } } }.getOrNull()
-        return "Output: ${device ?: "not open"}\n" + diagnostics()
+        val output = runCatching { track?.describe() }.getOrNull()
+        return "Output: ${output ?: "not open"}\n" + diagnostics()
     }
 
     /** Close the output and open it again on the next packet; clears the restart back-off. */
@@ -71,6 +70,14 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     private val info = MediaCodec.BufferInfo()
     private var pcm = ByteArray(0)
     @Volatile private var dead = false
+    /** Muted plays silence: the output keeps its timing, so unmuting is instant and in sync. */
+    @Volatile private var muted = false
+
+    fun setMuted(on: Boolean) {
+        if (muted == on) return
+        muted = on
+        if (!on) runCatching { exec.execute { fading = true } } // fade back in rather than click
+    }
 
     /** Prepare before announcing a stream peer, so codec startup cannot backlog live packets. */
     fun prepare() {
@@ -105,7 +112,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     fun release() {
         dead = true
         // Pause wakes a blocking write, so release cannot wait behind output backpressure.
-        runCatching { track?.pause() }
+        runCatching { (track as? TrackOut)?.track?.pause() }
         runCatching { exec.execute { shutdown() } }
         exec.shutdown()
     }
@@ -123,15 +130,9 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         decoder.configure(fmt, null, null, 0)
         decoder.start()
         val min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-        track = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-            .setAudioFormat(AudioFormat.Builder().setSampleRate(RATE).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            .setBufferSizeInBytes(bufferBytes(min))
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        if (android.os.Build.VERSION.SDK_INT >= 31) track!!.setStartThresholdInFrames(PRIME_FRAMES)
-        Log.i(TAG, "start decoder=${codec!!.name} bufferFrames=${track!!.bufferSizeInFrames} primeFrames=$PRIME_FRAMES")
+        // AAudio where it opens: on TVs it skips the mixer's large blocks (about 90 ms less delay).
+        track = AAudioOut.open(RATE, AAUDIO_BUFFER_FRAMES) ?: TrackOut(RATE, bufferBytes(min), PRIME_FRAMES)
+        Log.i(TAG, "start decoder=${codec!!.name} output=[${track!!.describe()}] primeFrames=$PRIME_FRAMES")
         pump = exec.scheduleWithFixedDelay({
             if (!dead) runCatching { drain(codec!!, track!!, 0) }
                 .onFailure { recoverAudio(it) }
@@ -168,12 +169,12 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         drain(c, t, 1_000)
         if (System.nanoTime() - statsAt >= 5_000_000_000) {
             val queued = queuedFrames(t)
-            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underrunCount} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()} recoveries=$recoveries audioFailures=$audioFailures recoveryDrops=$recoveryDrops staleFrames=$staleFrames captureAgeMs=${lastQueuedAgeUs / 1000} inputAgeMs=${inputAgeUs / 1000} decodedAgeMs=${decodedAgeUs / 1000} codecTimestampOffsetMs=${codecTimestampOffsetUs / 1000} timelineMisses=$timelineMisses")
+            Log.i(TAG, "queuedMs=${queued * 1000 / RATE} underruns=${t.underruns()} shortWrites=${writer.shortWrites} zeroWrites=${writer.zeroWrites} inputWaits=$inputWaits pendingPackets=${pending.get()} overflowPackets=${overflowPackets.get()} recoveries=$recoveries audioFailures=$audioFailures recoveryDrops=$recoveryDrops trimmed=$trimmedPackets staleFrames=$staleFrames captureAgeMs=${lastQueuedAgeUs / 1000} inputAgeMs=${inputAgeUs / 1000} decodedAgeMs=${decodedAgeUs / 1000} codecTimestampOffsetMs=${codecTimestampOffsetUs / 1000} timelineMisses=$timelineMisses output=[${t.describe()}]")
             statsAt = System.nanoTime()
         }
     }
 
-    private fun drain(c: MediaCodec, t: AudioTrack, timeoutUs: Long) {
+    private fun drain(c: MediaCodec, t: PcmOut, timeoutUs: Long) {
         while (!dead) {
             val outIdx = c.dequeueOutputBuffer(info, timeoutUs)
             if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) continue
@@ -196,6 +197,10 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 val decision = AudioPlayout.decide(captureUs, nowUs, queued)
                 if (decision.reset && (playing || writer.writtenFrames > 0)) resetOutput(t, if (decision.discard) "stale-packet" else "latency-budget", decodedAgeUs, queued)
                 if (decision.discard) { staleFrames++; continue }
+                // A low-latency output reads at exactly the incoming rate, so a backlog from startup or a
+                // network burst would stay for good. Skip a packet instead; the next one is blended in.
+                if (playing && t.trims && queued > TRIM_ABOVE_FRAMES) { trimmedPackets++; gapCaptureUs = hostCaptureUs; continue }
+                if (muted) java.util.Arrays.fill(pcm, 0, info.size, 0)
                 if (gapCaptureUs?.let { hostCaptureUs >= it } == true) {
                     PcmFade.bridge(pcm, info.size, previousLeft, previousRight)
                     gapCaptureUs = null
@@ -204,7 +209,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 val before = writer.writtenFrames
                 val deadlineUs = captureUs?.plus(AudioPlayout.MAX_PACKET_AGE_US) ?: (nowUs + AudioPlayout.MAX_PACKET_AGE_US)
                 writer.write(pcm, info.size, { !dead && System.nanoTime() / 1000 <= deadlineUs }, { Thread.sleep(1) }) { data, offset, size ->
-                    t.write(data, offset, size, AudioTrack.WRITE_NON_BLOCKING)
+                    t.write(data, offset, size)
                 }
                 val accepted = writer.writtenFrames - before
                 acceptedFrames += accepted
@@ -213,6 +218,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                     if (healthySinceNs == 0L) healthySinceNs = nowNs
                     if (nowNs - healthySinceNs >= 1_000_000_000L) failureStreak = 0
                 }
+                if (!dead && playing && t.behind()) { resetOutput(t, "output-behind", decodedAgeUs); continue }
                 if (!dead && accepted * 4 < info.size) { incompleteWrites++; staleFrames++; resetOutput(t, "incomplete-write", decodedAgeUs); continue }
                 if (info.size >= 4) {
                     previousLeft = PcmFade.sample(pcm, info.size - 4)
@@ -228,16 +234,14 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         }
     }
 
-    private fun queuedFrames(t: AudioTrack) = if (playing) (writer.writtenFrames - head.frames(t.playbackHeadPosition)).coerceAtLeast(0) else writer.writtenFrames
+    private fun queuedFrames(t: PcmOut) = if (playing) (t.queuedFrames() ?: (writer.writtenFrames - t.playedFrames())).coerceAtLeast(0) else writer.writtenFrames
 
     // AudioTrack resumes when fresh PCM arrives. Flushing on its cumulative
     // underrun counter can itself starve playback and start another reset cycle.
-    private fun resetOutput(t: AudioTrack, reason: String, captureAgeUs: Long, queued: Long = queuedFrames(t)) {
-        Log.i(TAG, "output reset reason=$reason queuedMs=${queued * 1000 / RATE} captureAgeMs=${captureAgeUs / 1000} underruns=${t.underrunCount} pendingPackets=${pending.get()} playing=$playing")
-        t.pause()
-        t.flush()
+    private fun resetOutput(t: PcmOut, reason: String, captureAgeUs: Long, queued: Long = queuedFrames(t)) {
+        Log.i(TAG, "output reset reason=$reason queuedMs=${queued * 1000 / RATE} captureAgeMs=${captureAgeUs / 1000} underruns=${t.underruns()} pendingPackets=${pending.get()} playing=$playing")
+        t.reset()
         writer = PcmWriter()
-        head = PlaybackHead()
         playing = false
         fading = true
         previousLeft = 0; previousRight = 0
@@ -247,11 +251,10 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
 
     private fun closeAudio() {
         pump?.cancel(false); pump = null
-        runCatching { track?.stop() }; runCatching { track?.release() }; track = null
+        runCatching { track?.release() }; track = null
         runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
         timeline.clear()
         writer = PcmWriter()
-        head = PlaybackHead()
         playing = false
         fading = true
         previousLeft = 0; previousRight = 0
@@ -280,6 +283,10 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         const val RATE = 48_000
         private const val PRIME_FRAMES = RATE * 30 / 1000
         private const val BYTES_PER_MS = RATE / 1000 * 4
+        /** The AAudio buffer holds the player's whole latency budget plus a margin. */
+        private const val AAUDIO_BUFFER_FRAMES = RATE / 10
+        /** Above this a low-latency output drops a packet: about 30 to 40 ms stays queued. */
+        private const val TRIM_ABOVE_FRAMES = RATE * 40 / 1000
 
         /** Keep the platform's allocation minimum; prime 30 ms before playback. */
         fun bufferBytes(min: Int) = maxOf(min, 30 * BYTES_PER_MS) // the minimum wins over the 60 ms cap: a smaller track stutters

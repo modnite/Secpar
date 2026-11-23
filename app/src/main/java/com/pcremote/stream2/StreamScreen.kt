@@ -119,6 +119,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                     if (dropFullColour.get()?.invoke() == true) android.widget.Toast.makeText(ctx,
                         "Full colour is off for this stream: this device can't show it at full speed at this size.", android.widget.Toast.LENGTH_LONG).show()
                 } })
+            created.setMuted(toolbar.muted)
             pipe = created
             moving.set(false)
             created
@@ -255,6 +256,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("Audio details", text))
             }
             override fun reopenAudio() { pipe?.reopenAudio() }
+            override fun setMuted(on: Boolean) { pipe?.setMuted(on) }
             override fun selectDisplay(id: String) {
                 // The old stream says goodbye at once; Windows keeps its stream, so the guard lapses by itself.
                 moving.set(true); scope.launch { kotlinx.coroutines.delay(3_000); moving.set(false) }
