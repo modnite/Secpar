@@ -18,10 +18,15 @@ async function api(path, method = "GET", body, step) {
     const why = (j.errors ?? []).map((e) => `${e.code} ${e.message}`).join("; ") || r.status;
     throw new Error(`${step ?? path}: ${why}`);
   }
-  return j.result;
+  return j.result ?? j; // TURN key routes answer without the usual wrapper
 }
 
 const account = (await api("/accounts", "GET", undefined, "read the account"))[0].id;
+const base = `/accounts/${account}/calls/turn_keys`;
+const listed = await api(base, "GET", undefined, "list TURN keys");
+for (const k of Array.isArray(listed) ? listed : []) {
+  if (k?.name === "secpar-self-hosted" && k.uid) await api(`${base}/${k.uid}`, "DELETE", undefined, "remove an older TURN key");
+}
 const key = await api(`/accounts/${account}/calls/turn_keys`, "POST", { name: "secpar-self-hosted" }, "create the TURN key (needs Calls: Edit)");
 if (!key?.uid || !key?.key) throw new Error("create the TURN key: no key in the answer");
 writeFileSync(OUT, `TURN_KEY_ID=${key.uid}\nTURN_KEY_TOKEN=${key.key}\n`, { mode: 0o600 });
