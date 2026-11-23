@@ -27,8 +27,9 @@ const listed = await api(base, "GET", undefined, "list TURN keys");
 for (const k of Array.isArray(listed) ? listed : []) {
   if (k?.name === "secpar-self-hosted" && k.uid) await api(`${base}/${k.uid}`, "DELETE", undefined, "remove an older TURN key");
 }
-const key = await api(`/accounts/${account}/calls/turn_keys`, "POST", { name: "secpar-self-hosted" }, "create the TURN key (needs Calls: Edit)");
+const key = await api(`/accounts/${account}/calls/turn_keys`, "POST", { name: "secpar-self-hosted" }, "create the TURN key (needs Cloudflare Realtime: Edit)");
 const shape = (o) => o && typeof o === "object" ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v && typeof v === "object" ? shape(v) : typeof v])) : typeof o;
-if (!key?.uid || !key?.key) throw new Error(`create the TURN key: no key in the answer; fields ${JSON.stringify(shape(key))}`);
-writeFileSync(OUT, `TURN_KEY_ID=${key.uid}\nTURN_KEY_TOKEN=${key.key}\n`, { mode: 0o600 });
+const secret = key?.secret ?? key?.key;
+if (!key?.uid || !secret) throw new Error(`create the TURN key: no key in the answer; fields ${JSON.stringify(shape(key))}`);
+writeFileSync(OUT, `TURN_KEY_ID=${key.uid}\nTURN_KEY_TOKEN=${secret}\n`, { mode: 0o600 });
 console.log(`TURN key secpar-self-hosted is ready; it is in ${OUT}.`);
