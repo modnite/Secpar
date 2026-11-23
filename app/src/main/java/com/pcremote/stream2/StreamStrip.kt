@@ -14,14 +14,19 @@ const val RESIZE_UNSUPPORTED = "This computer's Secpar can't resize a live strea
 data class StripStats(
     val w: Int, val h: Int, val fps: Int, val status: String,
     val rttMs: Int, val kbps: Int, val receivedFps: Int, val decoder: String,
+    val decodedFps: Float = -1f, val drawnFps: Float = -1f, val fullColour: Boolean = false,
 )
 
 fun stripText(s: StripStats): String {
     val parts = mutableListOf("${s.w} × ${s.h}", "${s.fps} fps", s.status)
-    if (s.rttMs > 0) parts += "RTT ${s.rttMs} ms"
+    if (s.rttMs > 0) parts += "Ping (RTT) ${s.rttMs} ms"
     parts += String.format(Locale.ROOT, "%.1f Mbps", s.kbps / 1000f)
     parts += String.format(Locale.ROOT, "%.1f received fps", s.receivedFps.toFloat())
-    if (s.decoder.isNotEmpty()) parts += s.decoder
+    if (s.decoder.isNotEmpty()) {
+        // As the desktop strip: decoded against drawn shows frames the screen never got.
+        val decoder = if (s.fullColour) "${s.decoder} · 4:4:4" else s.decoder
+        parts += if (s.decodedFps >= 0) String.format(Locale.ROOT, "%.0f decoded · %.0f drawn fps · %s", s.decodedFps, s.drawnFps, decoder) else decoder
+    }
     return parts.joinToString("   ·   ")
 }
 

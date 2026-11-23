@@ -38,7 +38,7 @@ pub(crate) fn resize_notice_state(age:std::time::Duration)->(bool,bool) {
 pub(crate) fn strip_text(size:[usize;2],fps:u32,status:&str,stats:Option<(Option<u16>,f32,f32)>,decoder:Option<&str>)->String {
     let Some((rtt,mbps,received))=stats else {return WAITING.into()};
     let mut parts=vec![format!("{} × {}",size[0],size[1]),format!("{fps} fps"),status.to_string()];
-    if let Some(n)=rtt {parts.push(format!("RTT {n} ms"));}
+    if let Some(n)=rtt {parts.push(format!("Ping (RTT) {n} ms"));}
     parts.push(format!("{mbps:.1} Mbps"));
     parts.push(format!("{received:.1} received fps"));
     if let Some(decoder)=decoder {parts.push(decoder.to_string());}
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn strip_joins_parts() {
         let t=strip_text([1280,720],60,"Connected",Some((Some(2),18.44,59.96)),Some("H.264 · software"));
-        assert_eq!(t,"1280 × 720   ·   60 fps   ·   Connected   ·   RTT 2 ms   ·   18.4 Mbps   ·   60.0 received fps   ·   H.264 · software");
+        assert_eq!(t,"1280 × 720   ·   60 fps   ·   Connected   ·   Ping (RTT) 2 ms   ·   18.4 Mbps   ·   60.0 received fps   ·   H.264 · software");
         let t=strip_text([1280,720],60,"Connected",Some((None,1.,2.)),None);
         assert!(!t.contains("RTT") && t.ends_with("2.0 received fps"));
     }

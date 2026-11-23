@@ -180,7 +180,7 @@ class ReceiverTest {
         }
         assertEquals("fast probing before video", 5, probesBetween(0, 1_000_000))
         packetize(1, true, ByteArray(10)).forEach { (h, d) -> fromHost(h, d, 1_000_000) }
-        // while video flows: keepalive once a second
+        // while video flows: keepalive every half second, which also refreshes the ping
         var now = 1_000_000L
         var probes = 0
         while (now < 4_000_000) {
@@ -188,7 +188,7 @@ class ReceiverTest {
             val before = sentOf(Prs.PROBE).size; r.step(now); probes += sentOf(Prs.PROBE).size - before
             now += 16_000
         }
-        assertTrue("keepalive only, got $probes", probes in 2..4)
+        assertTrue("keepalive only, got $probes", probes in 5..7)
         // video stops (phone switched networks): back to fast probing so the host learns the new address
         assertTrue(probesBetween(5_100_000, 6_100_000) >= 5)
     }

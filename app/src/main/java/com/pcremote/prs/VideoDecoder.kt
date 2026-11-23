@@ -54,6 +54,13 @@ class VideoDecoder(
     private val arrived = java.util.concurrent.atomic.AtomicInteger()
     private var statsAtNs = System.nanoTime()
 
+    private val decodedTotal = java.util.concurrent.atomic.AtomicInteger()
+    private val renderedTotal = java.util.concurrent.atomic.AtomicInteger()
+    /** Pictures the decoder has finished since it started, shown or not. */
+    val decoded get() = decodedTotal.get()
+    /** Pictures the system says reached the screen (normal colour; full colour counts its own). */
+    val rendered get() = renderedTotal.get()
+
     /** The MediaCodec component in use, empty until the first keyframe configures it. */
     @Volatile var name = ""; private set
 
@@ -109,6 +116,7 @@ class VideoDecoder(
             val c = MediaCodec.createByCodecName(info.name)
             configuring = c
             c.setCallback(callback, handler)
+            if (images == null) c.setOnFrameRenderedListener({ _, _, _ -> renderedTotal.incrementAndGet() }, handler)
             val attempts = CodecPicker.lowLatencyConfigurations(info.name, info.lowLatency)
             for ((attempt, options) in attempts.withIndex()) {
                 try {
@@ -175,6 +183,7 @@ class VideoDecoder(
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
             if (dead) { runCatching { codec.releaseOutputBuffer(index, false) }; return }
+            decodedTotal.incrementAndGet()
             pictures.offer(VideoOutputQueue.Picture(index, info.presentationTimeUs))?.let {
                 outputDrops.incrementAndGet()
                 runCatching { codec.releaseOutputBuffer(it.index, false) }

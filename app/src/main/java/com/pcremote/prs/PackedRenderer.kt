@@ -56,8 +56,10 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
     private val drawPosted = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var hasFrame = false
     @Volatile private var failed = false
-    /** Frames drawn, for tests. */
+    /** Frames drawn onto the view. */
     @Volatile var drawn = 0; private set
+    /** Average GPU time of one frame's drawing, ms, measured by waiting for it to finish. */
+    @Volatile var drawMs = 0f; private set
     /** The decoder renders here directly when this GPU reads raw YUV; null means use [frame]. */
     @Volatile var input: Surface? = null; private set
     private var direct: SurfaceTexture? = null
@@ -105,7 +107,7 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
             GLES30.glUseProgram(directProgram)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE5)
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, directTexture)
-            unpackOnce(directProgram)
+            timed { unpackOnce(directProgram) }
         }.onFailure { fail("Full colour stopped: ${it.message}") }
     }
 
@@ -262,7 +264,19 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
         GLES30.glViewport(0, 0, w, h)
         GLES30.glUseProgram(unpack)
         GLES30.glUniform1i(unpackMode, m)
-        unpackOnce(unpack)
+        timed { unpackOnce(unpack) }
+    }
+
+    /** Runs [draw] and waits for the GPU once a second, so [drawMs] shows what one frame costs it. */
+    private var timedAtNs = 0L
+    private var loggedPath = false
+    private inline fun timed(draw: () -> Unit) {
+        val start = System.nanoTime()
+        if (start - timedAtNs < 1_000_000_000L) return draw()
+        draw()
+        GLES30.glFinish()
+        timedAtNs = System.nanoTime()
+        drawMs = (timedAtNs - start) / 1e6f
     }
 
     /**
@@ -276,6 +290,7 @@ class PackedRenderer(private val output: Surface, private val w: Int, private va
         EGL14.eglQuerySurface(display, surface, EGL14.EGL_WIDTH, size, 0)
         EGL14.eglQuerySurface(display, surface, EGL14.EGL_HEIGHT, size, 1)
         val exact = size[0] == w && size[1] == h
+        if (!loggedPath) { loggedPath = true; Log.i(TAG, "view ${size[0]}x${size[1]} picture ${w}x$h onePass=$exact direct=${program == directProgram}") }
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "flip"), if (exact) 1 else 0)
         if (exact) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -358,7 +373,7 @@ void main() {
 }"""
         /** One picture pixel: row y of the RGB texture is picture row y. Limited-range BT.709, as the hosts encode. */
         const val UNPACK = """#version 300 es
-precision highp float;
+precision mediump float;
 precision highp int;
 uniform sampler2D luma;
 uniform sampler2D uv;
@@ -392,7 +407,7 @@ void main() {
          */
         const val DIRECT = """#version 300 es
 #extension GL_EXT_YUV_target : require
-precision highp float;
+precision mediump float;
 precision highp int;
 uniform __samplerExternal2DY2YEXT frame;
 uniform int h;

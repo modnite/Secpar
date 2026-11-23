@@ -48,10 +48,17 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   TV home screen, every focusable control shows a 2dp accent outline, computer cards
   outline as a whole, and the stream menu moves with the remote's arrows. The APK
   carries armeabi-v7a as well as arm64-v8a; the unused QR scanner was removed (2.0 MB).
-- 4.2.0, not yet tried by the owner: 4:4:4 on real devices, the relay over TLS on
-  a network that blocks UDP, KDE screen choice, the virtual display size, Linux
-  lock screen input through uinput (owner sessions only) and Windows lock screen
-  input after the per-session pointer change.
+- 4.2.0-r2, confirmed by the owner on 2026-11-22: KDE screen choice, the virtual display
+  size, and lock screen keyboard and mouse.
+- 4.2.0, not yet tried by the owner: 4:4:4 on real devices and the relay over TLS on a
+  network that blocks UDP.
+- Chromecast 4:4:4 (HEVC 1920×2160, GPU reads the decoder output directly, one pass): the
+  GPU needed 12–21 ms of the 16.7 ms frame; half-precision colour maths brought it to
+  12–15 ms. The too-slow fallback and the stats now count frames actually drawn.
+- Laptop 4:4:4: drops with ping spikes after a few minutes. The X250 is on Wi-Fi with
+  power saving on; unconfirmed whether that is the cause.
+- Android stats now match the desktop (decoded and drawn fps, 4:4:4) and both refresh
+  every half second, with "Ping (RTT)" as the label. Not released yet.
 
 ## Account service: self-hosted since 2026-11-21
 

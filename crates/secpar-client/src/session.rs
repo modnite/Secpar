@@ -467,7 +467,7 @@ pub async fn run(
             Some(relayed)=turn_rx.recv()=>if let Some(c)=relayed{control::send(&mut conn.socket,json!({"t":"stream.cand","c":c.to_string()})).await?;},
             _=tick.tick()=>{
                 events.flush()?;
-                if stats_at.elapsed()>=Duration::from_secs(1) {
+                if stats_at.elapsed()>=Duration::from_millis(500) {
                     let seconds=stats_at.elapsed().as_secs_f32();
                     events.emit(Event::Stats{rtt_ms:rtt_known.then_some(rtt),mbps:stats_bytes as f32*8./seconds/1_000_000.,received_fps:stats_frames as f32/seconds})?;
                     stats_at=Instant::now();stats_bytes=0;stats_frames=0;
@@ -481,7 +481,7 @@ pub async fn run(
                 }
                 if let Some(r)=receiver.as_mut(){
                     r.assembler.tick(Instant::now());
-                    if probe_at.elapsed()>Duration::from_millis(if peer.confirmed.is_some(){1000}else{200}){probe_at=Instant::now();let mut body=(start.elapsed().as_micros() as u64).to_be_bytes().to_vec();body.extend(peer_t.to_be_bytes());emit(r,&peer,Type::Probe,&body)?;}
+                    if probe_at.elapsed()>Duration::from_millis(if peer.confirmed.is_some(){500}else{200}){probe_at=Instant::now();let mut body=(start.elapsed().as_micros() as u64).to_be_bytes().to_vec();body.extend(peer_t.to_be_bytes());emit(r,&peer,Type::Probe,&body)?;}
                     if report_at.elapsed()>Duration::from_millis(100){report_at=Instant::now();let expected=high_seq.map(|h|h.saturating_sub(report_base)).unwrap_or(0);let loss=if expected==0{0}else{expected.saturating_sub(received).saturating_mul(1000)/expected};let mut body=[0;16];body[..4].copy_from_slice(&last_frame.to_be_bytes());body[4..6].copy_from_slice(&(loss.min(1000) as u16).to_be_bytes());body[10..12].copy_from_slice(&rtt.to_be_bytes());emit(r,&peer,Type::Report,&body)?;report_base=high_seq.unwrap_or(0);received=0;}
                     if (r.assembler.needs_keyframe() || events.needs_keyframe()) && idr_at.elapsed()>Duration::from_millis(250){idr_at=Instant::now();emit(r,&peer,Type::Idr,&[])?;}
                 }
