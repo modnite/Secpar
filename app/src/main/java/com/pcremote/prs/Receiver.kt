@@ -171,13 +171,13 @@ class Receiver(
     internal fun step(nowUs: Long) {
         assembler.tick(nowUs)
         // fast probing until video flows; back to fast if it stops (network change, host restart)
-        val gap = if (nowUs - lastVideoUs < 1_000_000) 1_000_000 else 200_000
+        val gap = if (nowUs - lastVideoUs < 1_000_000) 500_000 else 200_000
         if (nowUs - lastProbeUs >= gap) {
             lastProbeUs = nowUs
             send(Header(Prs.PROBE), ByteBuffer.allocate(16).putLong(nowUs).putLong(peerT).array())
         }
         if (nowUs - lastReportUs >= 100_000) { lastReportUs = nowUs; report() }
-        if (nowUs - lastStatsUs >= 1_000_000) {
+        if (nowUs - lastStatsUs >= 500_000) {
             val secs = (nowUs - lastStatsUs) / 1e6
             _stats.value = Stats((rttUs / 1000).toInt(), lossPermille / 10f, (statBytes * 8 / 1000 / secs).toInt(),
                 (statFrames / secs).toInt(), assembler.dropped, (jitterUs / 1000).toInt(), decodeMs,

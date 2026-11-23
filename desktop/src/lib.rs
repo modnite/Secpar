@@ -962,7 +962,7 @@ impl App {
             let (start, decoded_at, drawn, _, _) = self.frame_rates;
             if output.image.is_some() { self.frame_rates.2 = drawn + 1; }
             let span = start.elapsed().as_secs_f32();
-            if span >= 1. {
+            if span >= 0.5 {
                 let decoded = output.decoded.saturating_sub(decoded_at) as f32 / span;
                 let drawn = self.frame_rates.2 as f32 / span;
                 self.frame_rates = (Instant::now(), output.decoded, 0, decoded, drawn);

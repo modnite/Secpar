@@ -178,7 +178,9 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
     toolbar.link = if (stats.lossPct > 5f || stats.rttMs > 80) LinkState.POOR else LinkState.GOOD
     val route by remember(pipe) { pipe?.route ?: MutableStateFlow("Connecting") }.collectAsState()
     toolbar.perfText = streaming?.let {
-        stripText(StripStats(it.w, it.h, it.fps, route, stats.rttMs, stats.kbps, stats.fps, pipe?.decoderName.orEmpty()))
+        val (decoded, drawn) = pipe?.frameRates() ?: (-1f to -1f)
+        stripText(StripStats(it.w, it.h, it.fps, route, stats.rttMs, stats.kbps, stats.fps, pipe?.decoderName.orEmpty(),
+            decoded, drawn, pipe?.fullColour == true))
     }.orEmpty()
 
     // latest controller: a retry builds a new one, and handlers created earlier must reach it

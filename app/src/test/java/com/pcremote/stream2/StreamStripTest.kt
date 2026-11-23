@@ -16,8 +16,14 @@ class StreamStripTest {
 
     @Test fun `strip joins the parts with spaced dots`() {
         val s = StripStats(1920, 1080, 60, "Direct", 12, 24_500, 59, "c2.qti.hevc.decoder")
-        assertEquals("1920 × 1080   ·   60 fps   ·   Direct   ·   RTT 12 ms   ·   24.5 Mbps   ·   59.0 received fps   ·   c2.qti.hevc.decoder",
+        assertEquals("1920 × 1080   ·   60 fps   ·   Direct   ·   Ping (RTT) 12 ms   ·   24.5 Mbps   ·   59.0 received fps   ·   c2.qti.hevc.decoder",
             stripText(s))
+    }
+
+    @Test fun `strip shows decoded and drawn fps and full colour as the desktop does`() {
+        val s = StripStats(1920, 1080, 60, "Direct", 12, 24_500, 59, "c2.amlogic.hevc.decoder", 59.4f, 41.2f, fullColour = true)
+        assertEquals("1920 × 1080   ·   60 fps   ·   Direct   ·   Ping (RTT) 12 ms   ·   24.5 Mbps   ·   59.0 received fps   ·   " +
+            "59 decoded · 41 drawn fps · c2.amlogic.hevc.decoder · 4:4:4", stripText(s))
     }
 
     @Test fun `strip leaves out what is unknown`() {

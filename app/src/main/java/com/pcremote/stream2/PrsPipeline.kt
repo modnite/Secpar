@@ -56,7 +56,7 @@ class PrsPipeline(
             override fun onAudio(a: AudioPacket) = audio.play(a)
             override fun onBye() = onEnded()
             override fun onStats(stats: Stats) {
-                if (++reports % 5 == 0) Log.i("PcrReceive", "fps=${stats.fps} kbps=${stats.kbps} loss=${stats.lossPct} rttMs=${stats.rttMs} assemblyDrops=${stats.dropped} invalid=${stats.invalidPackets} processPeakMs=${stats.processPeakMs} backlog=${stats.packetBacklog} socketDrops=${stats.socketDrops} audioMissing=${stats.audioMissing} audioReordered=${stats.audioReordered}")
+                if (++reports % 10 == 0) Log.i("PcrReceive", "fps=${stats.fps} kbps=${stats.kbps} loss=${stats.lossPct} rttMs=${stats.rttMs} assemblyDrops=${stats.dropped} invalid=${stats.invalidPackets} processPeakMs=${stats.processPeakMs} backlog=${stats.packetBacklog} socketDrops=${stats.socketDrops} audioMissing=${stats.audioMissing} audioReordered=${stats.audioReordered}")
             }
         }
         receiver = Receiver(sock, Crypt(Base64.decode(ready.key, Base64.DEFAULT), ready.session.toInt()), listener)
@@ -92,8 +92,16 @@ class PrsPipeline(
                 d.onRendered = { receiver.decodeMs = d.decodeMs }
                 if (renderer != null) {
                     var slow = 0
-                    // A still screen sends few frames: only frames that arrived and were not shown count.
-                    d.onPace = { shown, arrived -> slow = if (arrived >= 30 && shown < arrived * 0.8) slow + 1 else 0; if (slow == 2) onFullColourTooSlow() }
+                    var drawnAt = renderer.drawn
+                    // A still screen sends few frames: only frames that arrived and were not drawn count. The
+                    // decoder can keep up while the GPU merges frames, so the renderer's own count decides.
+                    d.onPace = { _, arrived ->
+                        val drawn = (renderer.drawn - drawnAt) / 5
+                        drawnAt = renderer.drawn
+                        Log.i(TAG, "full colour drawnFps=$drawn arrivedFps=$arrived drawMs=${"%.1f".format(renderer.drawMs)}")
+                        slow = if (arrived >= 30 && drawn < arrived * 0.8) slow + 1 else 0
+                        if (slow == 2) onFullColourTooSlow()
+                    }
                 }
             }
     }
@@ -109,6 +117,27 @@ class PrsPipeline(
     override val stats: StateFlow<Stats> get() = receiver.stats
     val route get() = sock.route
     val decoderName get() = decoder.name
+    val fullColour get() = packed != null
+
+    private var rateDecoder: VideoDecoder? = null
+    private var rateAtNs = 0L
+    private var decodedAt = 0
+    private var drawnAt = 0
+    private var rates = -1f to -1f
+
+    /** Decoded and drawn frames per second over the last half second or more, as the desktop strip shows. */
+    fun frameRates(): Pair<Float, Float> {
+        val d = decoder
+        val drawn = packed?.drawn ?: d.rendered
+        val now = System.nanoTime()
+        if (d !== rateDecoder) { rateDecoder = d; rateAtNs = now; decodedAt = d.decoded; drawnAt = drawn; return rates }
+        val span = (now - rateAtNs) / 1e9f
+        if (span >= 0.5f) {
+            rates = (d.decoded - decodedAt).coerceAtLeast(0) / span to (drawn - drawnAt).coerceAtLeast(0) / span
+            rateAtNs = now; decodedAt = d.decoded; drawnAt = drawn
+        }
+        return rates
+    }
     fun audioDetails() = audio.details()
     fun reopenAudio() = audio.reopen()
     val cursor: StateFlow<Cursor> get() = receiver.cursor
