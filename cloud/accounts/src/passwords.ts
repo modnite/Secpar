@@ -254,19 +254,26 @@ export async function passwordRoutes(
       return sent();
     }
     if (route === "sign-in") {
-      const address = email(b.email);
+      // The email or the username: a name without "@" is the username.
+      const raw = typeof b.email === "string" ? b.email.trim() : "";
+      const byName = raw !== "" && !raw.includes("@");
+      if (byName && !/^[a-zA-Z0-9_]{3,30}$/.test(raw))
+        fail(400, "Enter your username or email address.", "invalid_email");
+      const address = byName ? raw.toLowerCase() : email(b.email);
       const pass = password(b.password);
       await rate(env, request, "login", address);
       const account = await q(
         env,
-        "SELECT user_id,password_hash,verified FROM password_accounts WHERE email=?",
+        byName
+          ? "SELECT p.user_id,p.password_hash,p.verified FROM password_accounts p JOIN accounts a ON a.id=p.user_id WHERE a.handle_lower=?"
+          : "SELECT user_id,password_hash,verified FROM password_accounts WHERE email=?",
         address,
       ).first<{ user_id: string; password_hash: string; verified: number }>();
       // Use the same work factor even for missing accounts.
       const dummy = `scrypt-16384-8-5$${"0".repeat(64)}$${"0".repeat(64)}`;
       const match = await passwordMatches(pass, account?.password_hash ?? dummy);
       if (!account || !match || !account.verified)
-        fail(401, "The email or password is wrong, or the email is not confirmed yet.", "bad_credentials");
+        fail(401, "The username, email or password is wrong, or the email is not confirmed yet.", "bad_credentials");
       const token = random(),
         expires = now() + 30 * 86400;
       const created = await q(

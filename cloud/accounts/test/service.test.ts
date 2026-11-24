@@ -931,6 +931,17 @@ describe("in-app accounts", () => {
     expect((await handle(new Request(base + "/auth/logout", { method: "POST", headers: { authorization: `Bearer ${body.token}` } }), env)).status).toBe(204);
     expect((await me(body.token)).status).toBe(401);
   });
+  it("signs in with the username instead of the email, in any letter case", async () => {
+    await signUp();
+    const byName = await app("sign-in", { email: "friend_one", password: user.password });
+    expect(byName.status).toBe(200);
+    expect((await byName.json()).user.handle).toBe("Friend_One");
+    expect((await app("sign-in", { email: " Friend_One ", password: user.password }, "3.3.3.3")).status).toBe(200);
+    expect((await app("sign-in", { email: "friend_one", password: "wrong password here" }, "4.4.4.4")).status).toBe(401);
+    expect((await app("sign-in", { email: "nobody_here", password: user.password }, "4.4.4.5")).status).toBe(401);
+    const bad = await app("sign-in", { email: "no spaces", password: user.password }, "4.4.4.6");
+    expect([bad.status, (await bad.json()).error]).toEqual([400, "invalid_email"]);
+  });
   it("does not sign in before the email is confirmed, or with a wrong password", async () => {
     await app("register", user);
     expect((await app("sign-in", { email: user.email, password: user.password })).status).toBe(401);

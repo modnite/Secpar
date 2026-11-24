@@ -244,6 +244,9 @@ struct App {
     owned_connecting: Option<(String,String)>,
     /// A friend's computer is open. Nothing about it is remembered.
     guest_session: bool,
+    /// The friend's computer being joined, for the loading screen. The computer paired on this
+    /// device is a different one and must not be named there.
+    guest_name: Option<String>,
     session_keyboard:bool,
     guest_error: bool,
     decoder: Option<video::Worker>,
@@ -319,6 +322,8 @@ struct App {
     /// Focus at the last frame: gaining it (a restore always does) also starts the nudges.
     #[cfg(windows)]
     was_focused: bool,
+    /// An input method shows text it has not committed yet (Chinese, Japanese and the like).
+    ime_composing: bool,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -376,6 +381,7 @@ impl App {
             session_account: None,
             owned_connecting: None,
             guest_session: false,
+            guest_name: None,
             session_keyboard:true,
             guest_error: false,
             decoder: None,
@@ -439,6 +445,7 @@ impl App {
             back: None,
             #[cfg(windows)]
             was_focused: false,
+            ime_composing: false,
         };
         #[cfg(feature="ui-review")]
         if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("stream")) {
@@ -545,6 +552,7 @@ impl App {
         if self.command.is_some() { return; }
         self.session_account=self.computer_account.clone();
         self.guest_session=guest.is_some();
+        self.guest_name=guest.as_ref().map(|g|g.name.clone());
         // A friend's keyboard and mouse follow the owner's settings live; the host drops what is not
         // allowed at the moment, so this side always sends.
         self.session_keyboard=true;
@@ -601,7 +609,12 @@ impl App {
             };
             runtime.block_on(async move {
                 let connection = if let Some(g) = guest {
-                    Connected::guest(&g.relay, &g.pc, &g.grant, &g.name).await
+                    // Which friend computer this was, by its id, so the log shows where a stream went.
+                    let started = std::time::Instant::now();
+                    let joined = Connected::guest(&g.relay, &g.pc, &g.grant, &g.name).await;
+                    secpar_client::connlog::note(&secpar_client::connlog::short_label(&g.pc), "guest",
+                        if joined.is_ok() { "joined" } else { "refused" }, started.elapsed().as_millis() as u64);
+                    joined
                 } else if let Some(p) = pairing {
                     if lan_first { Connected::pair_lan_first(p, &device_name()).await }
                     else { Connected::pair(p, &device_name()).await }
@@ -1011,6 +1024,22 @@ impl App {
 }
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // A commit with nothing being composed is plain typing (KDE's virtual keyboard sends every key
+        // this way). egui inserts a commit only where the last composition started, so after the
+        // first character it dropped the rest; as typed text it goes in at the cursor.
+        for event in raw.events.iter_mut() {
+            if let UiEvent::Ime(ime) = event {
+                match ime {
+                    egui::ImeEvent::Preedit(text) => self.ime_composing = !text.is_empty(),
+                    egui::ImeEvent::Commit(text) => {
+                        if !std::mem::take(&mut self.ime_composing) && text != "\n" && text != "\r" {
+                            *event = UiEvent::Text(std::mem::take(text));
+                        }
+                    }
+                    egui::ImeEvent::Enabled | egui::ImeEvent::Disabled => self.ime_composing = false,
+                }
+            }
+        }
         #[cfg(target_os="linux")]
         {
             self.focused=raw.focused;
@@ -1622,7 +1651,8 @@ impl App {
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label(connecting_text(self.computer.as_ref().map(|c|c.name.as_str())));
+                        let name = if self.guest_session { self.guest_name.as_deref() } else { self.computer.as_ref().map(|c|c.name.as_str()) };
+                        ui.label(connecting_text(name));
                     });
                 }
             });
