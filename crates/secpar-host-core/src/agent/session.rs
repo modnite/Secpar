@@ -279,9 +279,6 @@ async fn admit_guest(ctx: &Arc<Ctx>, grant: &str) -> Result<(Arc<guest::GuestAdm
     if ctx.handlers.guest_locked() {
         return refuse("locked", "This PC is locked.");
     }
-    if ctx.guest.owner_streams.load(std::sync::atomic::Ordering::SeqCst) > 0 {
-        return refuse("busy", "This PC is in use.");
-    }
     // A card preview gives way to a real connection, of the same friend or of another.
     let mut evicted = false;
     if ctx.guest.has(&pass.guest) {
@@ -656,7 +653,7 @@ mod guest_tests {
     }
 
     #[tokio::test]
-    async fn the_owner_streaming_closes_every_friend() {
+    async fn three_friends_stay_when_the_owner_streams_too() {
         let r = rig("full", "always", true).await;
         let mut seats = Vec::new();
         for n in 0..3u8 {
@@ -667,8 +664,9 @@ mod guest_tests {
         }
         let mut owner = OwnerWatch { inner: Box::new(Recorder(Default::default())), ctx: r.ctx.clone(), streaming: false };
         owner.on_msg(start());
+        assert_eq!(r.ctx.guest.count(), 3, "the owner's stream takes no friend's seat");
         for c in seats.iter_mut() {
-            assert_eq!(c.next().await.unwrap()["msg"], "The owner ended this session.");
+            assert!(tokio::time::timeout(std::time::Duration::from_millis(100), c.next()).await.is_err(), "the friend stays connected");
         }
     }
 
@@ -737,20 +735,20 @@ mod guest_tests {
     }
 
     #[tokio::test]
-    async fn the_owner_streaming_closes_a_friend_and_a_friend_cannot_start_over_the_owner() {
+    async fn the_owner_streaming_leaves_friends_connected_and_free_to_stream() {
         let r = rig("full", "always", true).await;
         let mut c = connect(&r.ctx);
         c.say(serde_json::json!({"t":"guest","grant":token()})).await;
         c.next().await.unwrap();
         let mut owner = OwnerWatch { inner: Box::new(Recorder(Default::default())), ctx: r.ctx.clone(), streaming: false };
         owner.on_msg(start());
-        assert_eq!(c.next().await.unwrap()["msg"], "The owner ended this session.");
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(200), c.next()).await.is_err(), "the friend stays connected");
         let set: std::collections::BTreeSet<String> = ["view".to_string()].into();
         let roster = Roster::parse(&serde_json::json!([{"id":"x","handle":"x"}])).unwrap();
         let lease = Lease { guest: "x".into(), approved: set.clone(), active: true };
         let gate = admit(&roster, &lease, &set, "x").unwrap().gate().clone();
         let mut f = Filtered { inner: Box::new(Recorder(Default::default())), gate, ctx: r.ctx.clone(), guest_id: guest_id(0) };
-        assert_eq!(f.on_msg(start()), Some(ServerMsg::error("busy", "The owner is using this PC.", Some("stream.start"))));
+        assert_ne!(f.on_msg(start()).and_then(|m| serde_json::to_value(m).ok()).and_then(|v| v["code"].as_str().map(str::to_string)).as_deref(), Some("busy"));
         drop(owner);
         assert_eq!(r.ctx.guest.owner_streams.load(Ordering::SeqCst), 0);
     }

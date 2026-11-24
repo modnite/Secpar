@@ -157,6 +157,8 @@ pub struct Grant {
     pub name: String,
     pub owner_handle: String,
     pub permissions: Vec<String>,
+    /// Relay credentials from the account, for when the two networks cannot reach each other.
+    pub turn: Option<secpar_client::session::GuestTurn>,
 }
 impl Grant {
     pub fn allows(&self, permission: &str) -> bool { self.permissions.iter().any(|p| p == permission) }
@@ -1461,7 +1463,12 @@ impl Api {
         let relay = value["host"]["relay"].as_str().ok_or_else(bad)?;
         // The relay and computer id are checked here, so a bad answer never reaches the session.
         secpar_client::control::guest_url(relay, pc).map_err(|note| (StatusCode::BAD_GATEWAY, note))?;
-        Ok(Grant { relay: relay.into(), pc: pc.into(), grant: grant.into(), name: computer.name.clone(), owner_handle: computer.owner_handle.clone(), permissions })
+        // Without a relay a friend behind a strict NAT gets no video; joining still works without one.
+        let turn = self.call(Method::POST, "/v1/devices/relay", None).await.ok().and_then(|v| {
+            let text = |k: &str| v[k].as_str().filter(|s| !s.is_empty() && s.len() <= 512).map(str::to_string);
+            Some(secpar_client::session::GuestTurn { server: text("server")?, user: text("username")?, pass: text("credential")? })
+        });
+        Ok(Grant { relay: relay.into(), pc: pc.into(), grant: grant.into(), name: computer.name.clone(), owner_handle: computer.owner_handle.clone(), permissions, turn })
     }
     async fn live(&self) -> Result<(Vec<Friend>, Vec<Incoming>), (StatusCode, String)> {
         let friends = serde_json::from_value(self.call(Method::GET, "/v1/friends", None).await?)

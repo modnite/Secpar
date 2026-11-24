@@ -123,9 +123,18 @@ class FriendsConnectTest {
         assertEquals("pc_1-A", grant.pc)
         assertEquals("https://rendezvous.example.com", grant.relay)
         assertEquals("c".repeat(64), grant.fingerprint)
-        assertEquals("POST", f.requests.single().method)
-        assertEquals("https://accounts.secpar.win/v1/requests/$request/claim", f.requests.single().url)
+        assertEquals("POST", f.requests.first().method)
+        assertEquals("https://accounts.secpar.win/v1/requests/$request/claim", f.requests.first().url)
+        // Then the relay credentials, for networks that cannot reach each other directly.
+        assertEquals("https://accounts.secpar.win/v1/devices/relay", f.requests[1].url)
         assertFalse(grant.toString().contains("aaa"))
+    }
+
+    @Test fun `a claim carries the account's relay for the stream`() = runBlocking {
+        val f = Fake().apply { reply(claimBody); reply("""{"server":"turn.example.com:3478","username":"u1","credential":"p1"}""") }
+        val turn = api(f).claimAccess(request).turn!!
+        assertEquals(listOf("turn.example.com", "3478", "u1", "p1", "turn.example.com", "443"),
+            listOf(turn.host, turn.port.toString(), turn.user, turn.pass, turn.tlsHost, turn.tlsPort.toString()))
     }
 
     @Test fun `a claim answer that could add a path or a query is refused`() {
@@ -166,11 +175,11 @@ class FriendsConnectTest {
             "/v1/blocks", "/v1/directory", "/v1/directory?q=bob_1", "/v1/requests", "/v1/friend-computers", "/v1/owner-pairings",
             "/v1/friends/by-username/bob_1", "/v1/friends/$owner", "/v1/friends/$owner/accept", "/v1/friends/$owner/settings", "/v1/blocks/$owner",
             "/v1/requests/$request", "/v1/requests/$request/claim", "/v1/requests/$request/approve", "/v1/requests/$request/revoke",
-            "/v1/owner-pairings/$request")
+            "/v1/owner-pairings/$request", "/v1/devices/relay")
         for (p in ok) assertTrue(p, transportAllows("https://accounts.secpar.win$p"))
         val no = listOf("/", "/v1", "/v1/friend-computers/x", "/v1/friend-computers?x=1", "/v1/requests?x=1", "/v1/requests/$request/other",
             "/v1/requests/$request/claim/", "/v1/requests/abc/claim", "/v1/requests/../me", "/v1/requests/%2e%2e/claim", "/v1/admin", "/v1/friends//accept",
-            "/v1/requests/$request/claim#x", "/v1/friends/by-username/a", "/v1/friends/by-username/Bob")
+            "/v1/requests/$request/claim#x", "/v1/friends/by-username/a", "/v1/friends/by-username/Bob", "/v1/devices", "/v1/devices/relay/x")
         for (p in no) assertFalse(p, transportAllows("https://accounts.secpar.win$p"))
         for (u in listOf("http://accounts.secpar.win/v1/me", "https://accounts.secpar.win.evil.test/v1/me", "https://evil.test/v1/me",
             "https://accounts.secpar.win@evil.test/v1/me", "https://accounts.secpar.win:8443/v1/me", "not a url")) assertFalse(u, transportAllows(u))

@@ -72,6 +72,12 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   friend connections now logged by computer id; KDE virtual keyboard typed only one character
   (egui drops input-method commits after the first; plain commits now count as typing; test build
   on the laptop, untried). "Busy" from a friend's PC means its owner is streaming to it.
+- Relay for strict networks, 2026-11-24: relay.secpar.win (Worker secpar-rendezvous) had no TURN
+  key, so no host could ever allocate a relay (answer 503). It now has the same key as the OMV
+  rendezvous (selfhost-tunnel.yml, relay-turn-secrets.mjs); a host-signed request gets
+  credentials. Friend streams also had no client-side relay; desktop and Android now take TURN
+  from the account (/v1/devices/relay) when joining. Owner streaming no longer blocks or closes
+  friends: the PC plus three streaming devices in total. These app changes are not released.
 - Mute audio in the stream menu on Android and desktop: this device only, plays silence so
   unmuting stays in sync. Not released.
 - Phone (SM-S911B) audio crackled once on the AudioTrack path (18 underruns at stream start, none

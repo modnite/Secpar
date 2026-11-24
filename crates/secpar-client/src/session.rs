@@ -82,6 +82,16 @@ pub struct Options {
     pub display: String,
     /// Ask for full colour (4:4:4 packed into a double-height frame).
     pub chroma444: bool,
+    /// Relay credentials from the account, for a friend's computer: there is no relay key to
+    /// ask with, and without a relay a friend behind a strict NAT gets no video at all.
+    pub turn: Option<GuestTurn>,
+}
+/// A TURN server (`host:port`, UDP) with its username and password.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GuestTurn {
+    pub server: String,
+    pub user: String,
+    pub pass: String,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -97,6 +107,7 @@ impl Default for Options {
             clipboard: true,
             display: String::new(),
             chroma444: false,
+            turn: None,
         }
     }
 }
@@ -225,6 +236,14 @@ struct TurnCreds {
     tls: Option<(String, u16)>,
     user: String,
     pass: String,
+}
+
+/// The account's relay credentials as the stream uses them: UDP to the server, and the same
+/// server over TLS on 443 for networks that block UDP.
+async fn guest_credentials(t: &GuestTurn) -> Option<TurnCreds> {
+    let host = t.server.rsplit_once(':').map(|(h, _)| h.to_string())?;
+    let udp = tokio::net::lookup_host(t.server.as_str()).await.ok()?.find(SocketAddr::is_ipv4);
+    Some(TurnCreds { udp, tls: Some((host, 443)), user: t.user.clone(), pass: t.pass.clone() })
 }
 
 async fn turn_credentials(computer: &Computer) -> Option<TurnCreds> {
@@ -419,7 +438,7 @@ pub async fn run(
                         if let (Some(host),Some(port))=(&conn.direct_host,v["port"].as_u64().and_then(|p|u16::try_from(p).ok())){if let Ok(ip)=host.parse(){let a=SocketAddr::new(ip,port);if !peer.targets.contains(&a){peer.targets.push(a);}}}
                         peer.permit();
                     }
-                    "stream.cand"=>if let Some(c)=v["c"].as_str().and_then(|s|s.parse::<SocketAddr>().ok()).filter(SocketAddr::is_ipv4){if peer.targets.len()<32 && !peer.targets.contains(&c){peer.targets.push(c);peer.permit();}},
+                    "stream.cand"=>if let Some(c)=v["c"].as_str().and_then(|s|s.parse::<SocketAddr>().ok()).filter(SocketAddr::is_ipv4){if peer.targets.len()<32 && !peer.targets.contains(&c){crate::connlog::note(&crate::connlog::short_label(&conn.computer.id),"turn","host_candidate",0);peer.targets.push(c);peer.permit();}},
                     "stream.displays"=>events.emit(Event::Displays(v))?,
                     "rumble"=>if let Some(slot)=v["id"].as_u64().and_then(|i|rumble.get_mut(i as usize)){
                         *slot=(v["lo"].as_u64().unwrap_or(0).min(255) as u8,v["hi"].as_u64().unwrap_or(0).min(255) as u8);
@@ -447,7 +466,7 @@ pub async fn run(
                 let Some(r)=receiver.as_mut()else{continue;};let Some((h,plain))=r.open(&packet.data)else{continue;};
                 stats_bytes=stats_bytes.saturating_add(packet.data.len() as u64);
                 let route=Some((packet.from,packet.relayed));
-                if peer.confirmed!=route {peer.confirmed=route;events.emit(Event::Status(if packet.relayed{"Relay"}else{"Direct"}.into()))?;}
+                if peer.confirmed!=route {peer.confirmed=route;crate::connlog::note(&crate::connlog::short_label(&conn.computer.id),"stream",if packet.relayed{"relay"}else{"direct"},start.elapsed().as_millis() as u64);events.emit(Event::Status(if packet.relayed{"Relay"}else{"Direct"}.into()))?;}
                 last_packet=Instant::now();received_authenticated=true;
                 if high_seq.is_none() && matches!(h.typ,Type::Video|Type::Fec){report_base=h.seq;high_seq=Some(h.seq);}
                 if let Some(high)=high_seq.as_mut(){*high=(*high).max(h.seq);received=received.saturating_add(1);}
@@ -486,12 +505,16 @@ pub async fn run(
                     if (r.assembler.needs_keyframe() || events.needs_keyframe()) && idr_at.elapsed()>Duration::from_millis(250){idr_at=Instant::now();emit(r,&peer,Type::Idr,&[])?;}
                 }
                 if ping_at.elapsed()>Duration::from_secs(10){ping_at=Instant::now();control::send(&mut conn.socket,json!({"t":"ping"})).await?;}
-                if !turn_started && peer.confirmed.is_none() && start.elapsed()>Duration::from_secs(3) && conn.computer.relay.is_some(){
-                    turn_started=true;let computer=conn.computer.clone();let socket=peer.socket.clone();let slot=peer.turn.clone();let peers:Vec<_>=peer.targets.iter().filter_map(|a|if let SocketAddr::V4(a)=a{Some(*a)}else{None}).collect();let tx=turn_tx.clone();let live=peer.live.clone();
+                if !turn_started && peer.confirmed.is_none() && start.elapsed()>Duration::from_secs(3) && (conn.computer.relay.is_some() || options.turn.is_some()){
+                    turn_started=true;let computer=conn.computer.clone();let guest_turn=options.turn.clone();let socket=peer.socket.clone();let slot=peer.turn.clone();let peers:Vec<_>=peer.targets.iter().filter_map(|a|if let SocketAddr::V4(a)=a{Some(*a)}else{None}).collect();let tx=turn_tx.clone();let live=peer.live.clone();
                     let packets=peer.packets.clone();
                     tokio::spawn(async move{
                         let mut allocated=None;
-                        if let Some(c)=turn_credentials(&computer).await{
+                        // Each relay step goes in the log: a friend's network can stop it anywhere.
+                        let log=crate::connlog::Conn::new(&computer.id);
+                        let creds=match &guest_turn { Some(t)=>guest_credentials(t).await, None=>turn_credentials(&computer).await };
+                        log.note("turn",if creds.is_some(){"credentials"}else{"no_credentials"},0);
+                        if let Some(c)=creds{
                             if let Some(server)=c.udp{
                                 let t=Arc::new(Turn::new(server,c.user.clone(),c.pass.clone()));*slot.lock().unwrap()=Some(t.clone());
                                 allocated=start_relay(t,socket.clone(),peers.clone(),live.clone()).await;
@@ -506,6 +529,7 @@ pub async fn run(
                                 }
                             }
                         }
+                        log.note("turn",if allocated.is_some(){"allocated"}else{"not_allocated"},log.began().elapsed().as_millis() as u64);
                         let _=tx.send(allocated).await;
                     });
                 }

@@ -526,18 +526,22 @@ impl Stream {
         self.shared.link.punch([peer], PUNCH_FOR);
         self.shared.probe_to(peer);
         self.shared.link.permit_in_background(&self.shared.socket, peer);
-        let Some(relay) = self.relay.clone() else { return };
+        // Each relay step goes to the journal: a friend's network can stop it anywhere.
+        let Some(relay) = self.relay.clone() else { eprintln!("secpar: turn: no relay configured on this host"); return };
         if self.shared.link.turn().is_some() {
             return;
         }
         let (shared, out) = (self.shared.clone(), self.out.clone());
         std::thread::spawn(move || {
-            let Some(server) = relay() else { return };
+            let Some(server) = relay() else { eprintln!("secpar: turn: the relay gave no credentials"); return };
             let weak = Arc::downgrade(&shared);
             let stopped = move || weak.upgrade().is_none_or(|s| s.stop.load(Ordering::Relaxed));
             if let Some(relayed) = shared.link.start_turn(&shared.socket, stopped, server.addr, server.user, server.pass, None) {
+                eprintln!("secpar: turn: relayed at {relayed}, sent to the device");
                 shared.link.punch([], PUNCH_FOR);
                 out.send(ServerMsg::StreamCand { c: relayed.to_string() });
+            } else {
+                eprintln!("secpar: turn: no allocation from {} (UDP to the relay blocked?)", server.addr);
             }
         });
     }
