@@ -69,9 +69,12 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   unmuting stays in sync. Not released.
 - Phone (SM-S911B) audio crackled once on the AudioTrack path (18 underruns at stream start, none
   after); gone in the owner's next test on 2026-11-23 without a change for it. Watch for a return.
-- Windows window garbled after an update until moved: the service starts the window hidden and
-  the updater only shows it. Reproduced by restarting the service; fixed (not released) by moving
-  the window a pixel and back the first time it opens, verified the same way.
+- Windows window garbled until moved: after an update (the service starts it hidden; reproduced by
+  restarting the service) and, as the owner saw on 2026-11-23, when restored after hours minimized
+  (not reproduced). r4 nudged only on the first open. Next release: the window moves a pixel and
+  back every time it comes back from minimized or hidden, waiting until Windows reports a real
+  position (it reports -32000 during the restore). Checked with a temporary log and the service
+  restart test. The owner saw it again after under an hour minimized; moving the window by a pixel by hand cured it, so the nudge now also repeats at 0.5 s and 2 s and starts on focus gain (not in fullscreen). A 10-minute minimize restored clean; unconfirmed by the owner.
 - Android stats now match the desktop (decoded and drawn fps, 4:4:4) and both refresh
   every half second, with "Ping (RTT)" as the label. Not released yet.
 

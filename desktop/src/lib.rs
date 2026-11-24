@@ -310,6 +310,15 @@ struct App {
     hook: Option<keyhook::KeyHook>,
     #[cfg(windows)]
     native: Option<native_window::NativeWindow>,
+    /// The window was minimized or hidden at the last frame; it is nudged when it comes back.
+    #[cfg(windows)]
+    away: bool,
+    /// When the window came back, and how many of the follow-up nudges are still due.
+    #[cfg(windows)]
+    back: Option<(std::time::Instant, usize)>,
+    /// Focus at the last frame: gaining it (a restore always does) also starts the nudges.
+    #[cfg(windows)]
+    was_focused: bool,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -424,6 +433,12 @@ impl App {
             hook: None,
             #[cfg(windows)]
             native: native_window::NativeWindow::from_context(cc),
+            #[cfg(windows)]
+            away: false,
+            #[cfg(windows)]
+            back: None,
+            #[cfg(windows)]
+            was_focused: false,
         };
         #[cfg(feature="ui-review")]
         if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.starts_with("stream")) {
@@ -1140,6 +1155,23 @@ impl eframe::App for App {
 impl App {
     fn update_inner(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let _ = frame;
+        // Back from minimized or hidden: move a pixel and back so the surface matches the window again.
+        #[cfg(windows)]
+        if let Some(window) = self.native {
+            // Windows can still be rebuilding the window's screen copy after the first frame back (seen
+            // after an hour minimized), so the nudge repeats at 0.5 s and 2 s.
+            const LATER: [std::time::Duration; 2] = [std::time::Duration::from_millis(500), std::time::Duration::from_secs(2)];
+            let focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+            if focused && !std::mem::replace(&mut self.was_focused, focused) && !self.away && self.back.is_none() && !self.fs.on { self.away = true; }
+            if !focused { self.was_focused = false; }
+            if window.away() { self.away = true; self.back = None; }
+            else if self.away { if window.nudge() { self.away = false; self.back = Some((std::time::Instant::now(), 0)); } else { ctx.request_repaint(); } }
+            else if let Some((at, next)) = self.back {
+                let due = LATER[next];
+                if at.elapsed() < due { ctx.request_repaint_after(due - at.elapsed()); }
+                else if window.nudge() { self.back = (next + 1 < LATER.len()).then_some((at, next + 1)); }
+            }
+        }
         #[cfg(feature="ui-review")]
         if std::env::var_os("SECPAR_REVIEW_KEYS").is_some() && self.review_frames<6 {
             eprintln!("review_tick focused={} stream={} keyboard={}",self.focused,self.stream_active(),self.remote_keyboard);
