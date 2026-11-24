@@ -1,4 +1,4 @@
-// Gives the relay Worker (pcr-rendezvous) the TURN key the self-hosted rendezvous already has,
+// Gives the relay Worker (secpar-rendezvous) the TURN key the self-hosted rendezvous already has,
 // so hosts get relay credentials too. Run by .github/workflows/selfhost-tunnel.yml on the build
 // box. The key is read from a private file there, sent only to Cloudflare, removed, never printed.
 import { readFileSync, unlinkSync } from "node:fs";
@@ -6,7 +6,7 @@ import { readFileSync, unlinkSync } from "node:fs";
 const token = process.env.CLOUDFLARE_API_TOKEN;
 if (!token) throw new Error("CLOUDFLARE_API_TOKEN is not set");
 const IN = "/opt/secpar-accounts/inbox/turn-key";
-const WORKER = "pcr-rendezvous";
+const WORKER = "secpar-rendezvous"; // relay.secpar.win (cloud/scripts/cloudflare.mjs)
 
 async function api(path, method, body, step) {
   const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
