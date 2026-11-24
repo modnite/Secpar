@@ -30,7 +30,7 @@ object SignInRules {
 
     /** Plain words for a problem the app can see before asking the service. Null means fine. */
     fun problem(step: SignInStep, reset: Boolean, email: String, password: String, handle: String, code: String): String? = when {
-        step == SignInStep.SIGN_IN && !emailOk(email) -> "Enter your email address."
+        step == SignInStep.SIGN_IN && !emailOk(email) && !handleOk(email.trim()) -> "Enter your username or email address."
         step == SignInStep.SIGN_IN && password.isEmpty() -> "Enter your password."
         step == SignInStep.SIGN_UP && !emailOk(email) -> "Enter a valid email address."
         step == SignInStep.SIGN_UP && !handleOk(handle) -> "Use a username of 3 to 30 letters, numbers or underscores."
@@ -81,7 +81,8 @@ fun SignInForm(acts: AccountActions, busy: Boolean, modifier: Modifier = Modifie
         Text(if (step == SignInStep.CODE) (if (reset) "Choose a new password" else "Enter the code") else titles.getValue(step),
             color = c.text, style = MaterialTheme.typography.titleSmall)
         if (info.isNotEmpty()) Text(info, color = c.textDim, style = MaterialTheme.typography.bodyMedium)
-        if (step != SignInStep.CODE) FlatField(email, { email = it }, "Email", Modifier.fillMaxWidth().semantics { contentType = ContentType.EmailAddress },
+        // Signing in takes the username too; signing up and resetting need the email for the code.
+        if (step != SignInStep.CODE) FlatField(email, { email = it }, if (step == SignInStep.SIGN_IN) "Username or email" else "Email", Modifier.fillMaxWidth().semantics { contentType = ContentType.EmailAddress },
             keyboardType = KeyboardType.Email)
         if (step == SignInStep.SIGN_UP) FlatField(handle, { handle = it }, "Username", Modifier.fillMaxWidth().semantics { contentType = ContentType.NewUsername })
         if (step == SignInStep.CODE) FlatField(code, { code = it }, "Six digit code", Modifier.fillMaxWidth().semantics { contentType = ContentType.SmsOtpCode },

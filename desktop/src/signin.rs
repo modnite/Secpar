@@ -143,7 +143,9 @@ impl Form {
         let mut enter = false;
         match self.step {
             Step::SignIn | Step::SignUp | Step::Forgot => {
-                enter |= Self::field(ui, &mut self.email, "Email", false).lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Signing in takes the username too; signing up and resetting need the email for the code.
+                let label = if self.step == Step::SignIn { "Username or email" } else { "Email" };
+                enter |= Self::field(ui, &mut self.email, label, false).lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if self.step == Step::SignUp {
                     enter |= Self::field(ui, &mut self.handle, "Username", false).lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 }
@@ -206,7 +208,7 @@ impl Form {
         let email = self.email.trim().to_string();
         let code: String = self.code.chars().filter(|c| !c.is_whitespace()).collect();
         let bad = match self.step {
-            Step::SignIn if !email_ok(&email) => Some("Enter your email address."),
+            Step::SignIn if !email_ok(&email) && !handle_ok(email.trim()) => Some("Enter your username or email address."),
             Step::SignIn if self.password.is_empty() => Some("Enter your password."),
             Step::SignUp if !email_ok(&email) => Some("Enter a valid email address."),
             Step::SignUp if !handle_ok(&self.handle) => Some("Use a username of 3 to 30 letters, numbers or underscores."),
@@ -241,7 +243,9 @@ mod tests {
     fn checks_say_what_to_fix_and_send_nothing() {
         let mut f = Form::default();
         assert_eq!(f.check(), None);
-        assert_eq!(f.error, "Enter your email address.");
+        assert_eq!(f.error, "Enter your username or email address.");
+        let mut by_name = Form { email: " Mia_1 ".into(), password: "long enough".into(), ..Form::default() };
+        assert!(by_name.check().is_some(), "a username signs in too");
         let mut f = Form { step: Step::SignUp, ..filled(Step::SignUp) };
         f.handle = "no spaces".into();
         assert_eq!(f.check(), None);

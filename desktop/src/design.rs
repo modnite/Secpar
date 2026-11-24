@@ -50,7 +50,11 @@ pub fn configure(ctx: &egui::Context) {
     style
         .text_styles
         .insert(egui::TextStyle::Heading, egui::FontId::proportional(20.));
-    ctx.set_style(style);
+    // Secpar has one look. egui follows the system's light or dark mode and keeps a style for each,
+    // so with Windows in light mode the default light style (white fields and buttons) took over.
+    ctx.set_theme(egui::ThemePreference::Dark);
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
 }
 pub fn surface() -> egui::Frame {
     egui::Frame::new()
@@ -175,4 +179,17 @@ pub fn segmented(ui: &mut egui::Ui, options: &[&str], chosen: usize) -> Option<u
         }
     }
     picked
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_dark_look_stays_when_the_system_is_in_light_mode() {
+        let ctx = eframe::egui::Context::default();
+        super::configure(&ctx);
+        // Windows in light mode: egui is told the system theme is light.
+        ctx.set_theme(eframe::egui::Theme::Light);
+        assert!(ctx.style().visuals.dark_mode);
+        assert_eq!(ctx.style().visuals.widgets.inactive.bg_fill, eframe::egui::Color32::from_rgb(31, 39, 51));
+    }
 }

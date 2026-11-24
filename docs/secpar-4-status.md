@@ -65,6 +65,13 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   stream reads past the write position; the player now reopens it (owner: sound stays on,
   2026-11-23). The owner still hears the TV's audio behind its picture: the remaining delay is
   after HDMI. Not released.
+- Ready but not committed or released (owner said not yet, 2026-11-24): sign in with username or
+  email (account service change needs deploying to OMV first; apps say "Username or email");
+  dark look kept when Windows is in light mode (Bryan saw white fields and buttons); the desktop
+  loading screen named the link-paired computer (ULTISUS) when joining a friend's (bryan-bed-pc);
+  friend connections now logged by computer id; KDE virtual keyboard typed only one character
+  (egui drops input-method commits after the first; plain commits now count as typing; test build
+  on the laptop, untried). "Busy" from a friend's PC means its owner is streaming to it.
 - Mute audio in the stream menu on Android and desktop: this device only, plays silence so
   unmuting stays in sync. Not released.
 - Phone (SM-S911B) audio crackled once on the AudioTrack path (18 underruns at stream start, none
