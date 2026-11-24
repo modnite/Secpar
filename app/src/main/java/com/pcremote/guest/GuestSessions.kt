@@ -13,7 +13,8 @@ import kotlinx.coroutines.CoroutineScope
 import java.util.concurrent.ConcurrentHashMap
 
 /** The socket to a friend's computer, joined and waiting for the stream screen to take it over. */
-class GuestLink(val route: String, val pc: PairedPc, val conn: AgentConnection, val ownerHandle: String, val permissions: Set<String>)
+class GuestLink(val route: String, val pc: PairedPc, val conn: AgentConnection, val ownerHandle: String, val permissions: Set<String>,
+    val turn: com.pcremote.remote.TurnServer? = null)
 
 /** Joined friend sessions by route. A route starts with [PREFIX], so it never matches a paired computer. */
 object GuestSessions {
@@ -54,7 +55,7 @@ object GuestConnector {
         }
         val route = GuestSessions.PREFIX + routeId
         val pc = PairedPc(route, computerName.ifBlank { online.pc.name }, emptyList(), 0, "", "", emptyList())
-        GuestSessions.add(GuestLink(route, pc, conn, ownerHandle, permissions))
+        GuestSessions.add(GuestLink(route, pc, conn, ownerHandle, permissions, grant.turn))
         return route
     }
 }

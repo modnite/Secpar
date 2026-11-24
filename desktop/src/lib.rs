@@ -572,6 +572,7 @@ impl App {
         let options = Options {
             audio: self.client.audio && guest.as_ref().is_none_or(|g|g.allows("audio")),
             chroma444: self.client.full_colour,
+            turn: guest.as_ref().and_then(|g| g.turn.clone()),
             audio_sink:Some(self.audio_route.sink()),
             video_sink:Some(self.video_route.sink()),
             clipboard,

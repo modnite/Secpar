@@ -316,9 +316,6 @@ impl Session for Filtered {
             Verdict::Deny => return Some(ServerMsg::error("forbidden", "This is not allowed for a friend.", Some(of))),
         }
         if let ClientMsg::StreamStart { audio, .. } = &mut m {
-            if self.ctx.guest.owner_streams.load(Ordering::SeqCst) > 0 {
-                return Some(ServerMsg::error("busy", "The owner is using this PC.", Some(of)));
-            }
             *audio = *audio && self.gate.has("audio");
             self.gate.mark_streaming();
             if self.gate.announce_once() {
@@ -352,8 +349,9 @@ impl Session for OwnerWatch {
         match &m {
             ClientMsg::StreamStart { .. } if !self.streaming => {
                 self.streaming = true;
+                // The owner and friends play together: the PC plus three streaming devices,
+                // counted by the stream slots, whoever they belong to.
                 self.ctx.guest.owner_streams.fetch_add(1, Ordering::SeqCst);
-                self.ctx.guest.close_all("owner");
             }
             ClientMsg::StreamStop => self.stopped(),
             _ => {}

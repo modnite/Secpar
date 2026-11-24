@@ -34,6 +34,8 @@ private val ALLOWED_PATHS = listOf(
     Regex("/v1/blocks/$UUID_PATTERN"),
     Regex("/v1/requests/$UUID_PATTERN(/approve|/claim|/revoke)?"),
     Regex("/v1/owner-pairings/$UUID_PATTERN"),
+    // Relay credentials for a friend's computer, which has no relay key to ask with.
+    Regex("/v1/devices/relay"),
 )
 
 /** True for an https URL on the account service with an allowed path, no fragment, and a query only on the directory. */
@@ -138,7 +140,9 @@ data class AccessRequest(val id: String, val state: String, val expires: Long, v
     val pending get() = state == "pending"
 }
 /** The one-time answer to a claim. It works once and for 60 seconds. */
-class GuestGrant(val grant: String, val expiresAt: Long, val pc: String, val relay: String, val fingerprint: String?) {
+class GuestGrant(val grant: String, val expiresAt: Long, val pc: String, val relay: String, val fingerprint: String?,
+    /** TURN for when the two networks cannot reach each other; null when the account has none. */
+    val turn: com.pcremote.remote.TurnServer? = null) {
     override fun toString() = "GuestGrant(redacted)"
 }
 sealed interface SignInPoll {
@@ -374,7 +378,14 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         valid(com.pcremote.guest.GuestRelay.socketUrl(relay, pc) != null)
         val fp = (host["fingerprint"] as? JsonPrimitive)?.takeIf { it.isString }?.content
         valid(fp == null || HEX64.matches(fp))
-        return GuestGrant(o.text("grant").also { valid(GRANT_TEXT.matches(it)) }, o.positive("expires_at"), pc, relay, fp)
+        // Without a relay a friend behind a strict NAT gets no video; joining still works without one.
+        val turn = runCatching {
+            val t = call("POST", "/v1/devices/relay", obj()).objectValue()
+            val server = t.text("server"); val host = server.substringBeforeLast(':')
+            val port = server.substringAfterLast(':', "").toIntOrNull()?.takeIf { it in 1..65535 } ?: return@runCatching null
+            com.pcremote.remote.TurnServer(host, port, t.text("username"), t.text("credential"), host, 443)
+        }.getOrNull()
+        return GuestGrant(o.text("grant").also { valid(GRANT_TEXT.matches(it)) }, o.positive("expires_at"), pc, relay, fp, turn)
     }
 
     override suspend fun cancelAccess(id: String) {

@@ -233,7 +233,7 @@ pub fn short_label(id: &str) -> String {
 /// The steps the log knows. Anything else is written as `other`, so free text cannot get in here.
 pub const PHASES: &[&str] = &[
     "account_fetch", "credential", "pair_request", "pair_wait", "auto_pair", "handoff", "schedule", "route_try", "tcp", "tls", "tls_ws", "ws_upgrade",
-    "turn_wait", "hello", "pair", "welcome", "first_reply", "preview", "stream", "cache", "step", "guest",
+    "turn_wait", "hello", "pair", "welcome", "first_reply", "preview", "stream", "cache", "step", "guest", "turn",
 ];
 fn phase_name(phase: &str) -> String {
     if PHASES.contains(&phase) { phase.to_string() } else { "other".into() }

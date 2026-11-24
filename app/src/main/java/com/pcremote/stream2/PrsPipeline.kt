@@ -38,6 +38,8 @@ class PrsPipeline(
     private val appVsyncOffsetNs: Long = 0,
     /** Full colour is too much for this device: of 30 or more frames a second, under 80% shown, for 10 seconds. */
     private val onFullColourTooSlow: () -> Unit = {},
+    /** A friend's computer has no relay key: the account's TURN credentials instead. */
+    guestTurn: com.pcremote.remote.TurnServer? = null,
 ) : Pipeline {
     private val audio: AudioPlayer
     @Volatile private lateinit var decoder: VideoDecoder
@@ -66,10 +68,10 @@ class PrsPipeline(
             runCatching { audio.prepare() }.onFailure { Log.w(TAG, "Audio preparation failed", it) }
             if (!closed) receiver.run()
         }
-        if (relay != null) thread(name = "pcr-turn-start") {
+        if (relay != null || guestTurn != null) thread(name = "pcr-turn-start") {
             Thread.sleep(2_500)
             if (closed || sock.confirmed()) return@thread
-            val t = TurnCreds.fetch(relay) ?: run { Log.i(TAG, "no direct path and no TURN relay configured"); return@thread }
+            val t = guestTurn ?: relay?.let { TurnCreds.fetch(it) } ?: run { Log.i(TAG, "no direct path and no TURN relay configured"); return@thread }
             val server = runCatching { InetSocketAddress(t.host, t.port) }.getOrNull()
             // UDP first; networks that block it (many offices) still allow TLS on 443.
             val relayed = server?.let { sock.useTurn(it, t.user, t.pass) }
