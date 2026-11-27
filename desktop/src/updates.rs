@@ -395,8 +395,10 @@ impl Panel {
                     self.message = format!("Installing {version}. Secpar will reopen.");
                 }
                 ResultEvent::Installed(Err(e)) => {
+                    // The full installer asks for approval on a screen a stream cannot show, and
+                    // removes the old version first: only offer it to someone at this PC.
                     self.fallback = true;
-                    self.message = e;
+                    self.message = format!("{e}. The full installer below needs someone at this PC to approve it.");
                 }
                 ResultEvent::Checked(Err(e)) | ResultEvent::BackgroundChecked(Err(e)) | ResultEvent::Downloaded(Err(e)) => self.message = e,
             }

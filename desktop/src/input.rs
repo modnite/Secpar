@@ -85,8 +85,10 @@ impl Input {
             vec![]
         }
     }
+    /// Also while the hook is up: a modifier the hook took never reaches the window, so this only
+    /// sends what the hook let through, and lifts only what it sent itself.
     pub fn modifiers(&mut self, m: Modifiers) -> Vec<Value> {
-        if !self.enabled || self.hooked {
+        if !self.enabled {
             return vec![];
         }
         if !m.ctrl {
@@ -109,9 +111,6 @@ impl Input {
     }
     pub fn event(&mut self, event: &Event) -> Vec<Value> {
         if !self.enabled {
-            return vec![];
-        }
-        if self.hooked && matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
             return vec![];
         }
         match event {
@@ -392,8 +391,9 @@ mod tests {
         let key=Event::Key{key:Key::A,physical_key:Some(Key::A),pressed:true,repeat:false,modifiers:Modifiers::default()};
         // The hook swallows what it takes, so a key that still reaches the window was let through by it.
         assert_eq!(input.event(&key).len(),1,"a key the hook let through still goes to the host");
-        assert!(input.event(&Event::Copy).is_empty());
-        assert!(input.modifiers(Modifiers{ctrl:true,..Default::default()}).is_empty());
+        assert!(!input.event(&Event::Copy).is_empty(),"a Ctrl+C the hook let through still copies on the host");
+        assert_eq!(input.modifiers(Modifiers{ctrl:true,..Default::default()}).len(),1,"a Ctrl the hook let through goes too");
+        input.modifiers(Modifiers::default());
         let click=Event::PointerButton{pos:eframe::egui::pos2(1.,1.),button:PointerButton::Primary,pressed:true,modifiers:Modifiers::default()};
         assert_eq!(input.event(&click).len(),1,"the mouse still works");
         assert!(input.keys_to_hook(false).is_empty());
