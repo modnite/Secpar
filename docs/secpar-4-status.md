@@ -125,6 +125,10 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   the hosting log (Windows: service command `host_log`, newest 360 KB; Linux: Secpar lines from the
   user journal) into "Secpar logs <time> UTC" in Downloads. Owner used it on NIGG10. Next: the same
   from the T480 after a stream from NIGG10 dies.
+- T480 host log (owner, 2026-11-27): every relay attempt "turn: allocation failed" from 141.101.90.1:3478;
+  the office blocks UDP to the relay. 4.2.0-r14: Windows and Linux hosts fall back to the same relay
+  over TLS (turns: entry, port 443); the TLS link moved to secpar-network (feature "tls"), frames reach
+  the stream socket through loopback. Checked against Cloudflare over TLS; not yet tried at the office.
 
 ## Account service: self-hosted since 2026-11-21
 
