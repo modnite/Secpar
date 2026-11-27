@@ -9,6 +9,8 @@ use std::{collections::VecDeque, sync::{Arc, Condvar, Mutex}, thread::JoinHandle
 mod linux;
 #[cfg(windows)]
 mod dxva;
+#[cfg(windows)]
+pub mod dxgl;
 mod nal;
 use secpar_stream::frame::Codec;
 #[derive(Clone,Copy,Default,PartialEq,serde::Serialize,serde::Deserialize)]
@@ -90,6 +92,7 @@ impl Backend {
         #[cfg(windows)]
         if preference.wants_hardware() && detected_factory().is_some() {
             if let Ok(mut hardware)=dxva::Hardware::open() {
+                hardware.gpu_out=true;
                 // The stream is H.264 today; a failure here means software from the first frame.
                 if hardware.prepare(Codec::H264).is_ok() {return Ok(Self::Hardware(hardware));}
             }
@@ -346,7 +349,9 @@ impl Worker {
                 };
                 let mut state = lock.lock().unwrap();
                 if generation == state.generation && !state.stopped {
-                    if let Some(image) = image { state.images.push_back(image); if state.images.len()>2 {state.images.pop_front();} state.decoded += 1; state.backend=Some(if slow_fallback {"H.264 · software (hardware too slow)"}else{decoder.label(codec)}); }
+                    if let Some(image) = image { #[cfg(windows)] let on_gpu=image.gpu.is_some(); state.images.push_back(image); if state.images.len()>2 {state.images.pop_front();} state.decoded += 1;
+                        #[cfg(not(windows))] let on_gpu=false;
+                        state.backend=Some(if slow_fallback {"H.264 · software (hardware too slow)"} else if on_gpu {"H.264 · Hardware (D3D11, drawn from the GPU)"} else {decoder.label(codec)}); }
                 }
                 drop(state);
                 ctx.request_repaint();
