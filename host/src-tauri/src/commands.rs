@@ -319,7 +319,14 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
         "host_log" => {
             let dir = crate::data_dir();
             let read = |name: &str| std::fs::read(dir.join(name)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-            to_value(format!("{}{}", read("host.old.log"), read("host.log")))
+            let text = format!("{}{}", read("host.old.log"), read("host.log"));
+            // The newest part only: the window refuses replies over 512 KB, and escaping adds to it.
+            const KEEP: usize = 360 * 1024;
+            let mut start = text.len().saturating_sub(KEEP);
+            while !text.is_char_boundary(start) {
+                start += 1;
+            }
+            to_value(&text[start..])
         }
         "install_update" => to_value(crate::update::install_tag(&crate::data_dir(), &arg::<String>(&args, "tag")?).await?),
         _ => Err(format!("unknown command {cmd}")),
