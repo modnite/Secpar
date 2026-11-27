@@ -176,8 +176,10 @@ impl Filter {
             return Verdict::pass();
         }
         if self.host.contains(&vk) {
-            // Auto-repeat. The host keeps the key down, as the window path always did.
-            return Verdict::swallow(vec![]);
+            // Auto-repeat: sent again, at this computer's repeat rate. Windows does not repeat injected
+            // keys on its own, so a held arrow moved the cursor once. A Linux host ignores the extra
+            // downs: its compositor repeats held keys itself.
+            return Verdict::swallow(vec![(vk, true)]);
         }
         self.down.insert(vk);
         if let Some(action) = Escape::from_vk(vk) {
@@ -346,10 +348,10 @@ mod tests {
     }
 
     #[test]
-    fn repeat_is_swallowed_without_resending() {
+    fn a_held_key_repeats_on_the_host() {
         let mut f = filter();
         assert_eq!(f.key(0x41, true).send, vec![(0x41, true)]);
-        assert_eq!(f.key(0x41, true), Verdict::swallow(vec![]));
+        assert_eq!(f.key(0x41, true), Verdict::swallow(vec![(0x41, true)]));
         assert_eq!(f.key(0x41, false).send, vec![(0x41, false)]);
     }
 

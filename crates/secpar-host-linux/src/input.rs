@@ -121,7 +121,10 @@ impl Input {
                 let Some(code) = evdev_key(vk) else { return };
                 let code = code as u16;
                 if down {
-                    self.desk_keys.insert(code);
+                    // A repeat from the device: the compositor already repeats held keys.
+                    if !self.desk_keys.insert(code) {
+                        return;
+                    }
                 } else {
                     self.desk_keys.remove(&code);
                 }
@@ -266,7 +269,10 @@ impl Input {
                     return Ok(());
                 };
                 if down {
-                    self.keys.insert(code);
+                    // A repeat from the device: the compositor already repeats held keys.
+                    if !self.keys.insert(code) {
+                        return Ok(());
+                    }
                 } else {
                     self.keys.remove(&code);
                 }

@@ -125,12 +125,13 @@ impl Input {
                 repeat,
                 ..
             } => {
-                if *repeat {
-                    return vec![];
-                }
                 let Some(vk) = vk(physical_key.unwrap_or(*key)) else {
                     return vec![];
                 };
+                // A held key repeats on the host as it does here (Windows hosts do not repeat injected keys).
+                if *repeat {
+                    return if *pressed && self.held.contains(&vk) { vec![json!({"t":"key","vk":vk,"down":true})] } else { vec![] };
+                }
                 if *pressed {
                     self.held.insert(vk);
                 } else {
