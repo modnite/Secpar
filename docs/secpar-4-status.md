@@ -140,6 +140,13 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   so the host's relay setup ran into the shutdown (and the stopped stream dropped the TLS link).
   4.2.0-r16: `Link::searching()` (a candidate inside the punch window, or a relay setup running) keeps
   the Windows and Linux receive loops open. Not yet tried at the office.
+- r16 on the T480, even on the home LAN: same pattern, and NIGG10's own host allocates its relay
+  every time. Since r8, Intel hosts encode with FFmpeg Quick Sync (never confirmed working). QSV
+  keeps each input surface until the next frame is sent, but the frame pool had one surface, so the
+  next frame's buffer failed, and `encode(..) else { break }` ended the stream silently (which also
+  stopped the receive loop: no relay answers, 0 TLS frames). 4.2.0-r17: QSV pool of 4; encode
+  errors are logged and the encoder reopened (stream ends after 4 in a row, logged); the chosen
+  encoder is logged at each open. Not yet tried on the T480.
 
 ## Account service: self-hosted since 2026-11-21
 

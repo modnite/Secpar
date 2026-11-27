@@ -431,6 +431,27 @@ impl Video {
         if self.packed { (w, h / 2) } else { (w, h) }
     }
 
+    /// After a failed encode: logs it and opens the encoder again, so one bad frame does not end
+    /// the stream. False when the encoder can't be reopened or keeps failing.
+    fn recover(&mut self, e: &windows::core::Error, fails: &mut u32, kbps: u32, settings: &super::encode::Settings) -> bool {
+        *fails += 1;
+        crate::log::line(&format!("stream: encode failed ({}): {}", *fails, e.message()));
+        if *fails > 3 {
+            crate::log::line("stream: the encoder keeps failing; ending the stream");
+            return false;
+        }
+        match Encoder::selected(&self.dev, self.luid, self.enc.codec(), self.enc.size, self.fps, kbps, settings) {
+            Ok(enc) => {
+                self.enc = enc;
+                true
+            }
+            Err(e) => {
+                crate::log::line(&format!("stream: the encoder could not be reopened: {}", e.message()));
+                false
+            }
+        }
+    }
+
     fn converter(&self, input: (u32, u32)) -> Option<Convert> {
         Convert::with_chroma(&self.dev, &self.ctx, input, self.picture(), self.packed).ok()
     }
@@ -464,6 +485,7 @@ impl Video {
         let (mut pointer_visible, mut hotspot) = (true, (0i32, 0i32));
         let mut want = (p.w, p.h);
         let mut lats: Vec<u64> = Vec::new();
+        let mut fails = 0u32;
         while !sh.stopped() {
             if let Some(g) = &p.gate {
                 // Checked before every frame: a friend never follows the owner onto the lock screen.
@@ -513,7 +535,10 @@ impl Video {
                         conv = None;
                         notify(ready.msg(size, self.packed));
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        crate::log::line(&format!("stream: no encoder at the new size: {}", e.message()));
+                        break;
+                    }
                 }
             } else if t.kbps != applied.kbps {
                 let _ = self.enc.set_bitrate(t.kbps);
@@ -603,10 +628,19 @@ impl Video {
                         let timing = secpar_stream::timing::begin();
                         let force = sh.idr.swap(false, Ordering::Relaxed);
                         if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=false");}
-                        if let Ok(outs) = self.enc.encode(&nv12, cap_us, force) {
-                            secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode, timing);
-                            prepared.extend(outs);
-                            pending = false;
+                        match self.enc.encode(&nv12, cap_us, force) {
+                            Ok(outs) => {
+                                secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode, timing);
+                                prepared.extend(outs);
+                                pending = false;
+                                fails = 0;
+                            }
+                            Err(e) => {
+                                if !self.recover(&e, &mut fails, t.kbps, &p.encoder) {
+                                    break;
+                                }
+                                sh.idr.store(true, Ordering::Relaxed); // a new encoder starts with a key frame
+                            }
                         }
                     }
                 }
@@ -650,7 +684,19 @@ impl Video {
                 let force = sh.idr.swap(false, Ordering::Relaxed);
                 if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=true");}
                 let stamp = if pending { cap_us } else { now_us() };
-                let Ok(outs) = self.enc.encode(&nv12, stamp, force) else { break };
+                let outs = match self.enc.encode(&nv12, stamp, force) {
+                    Ok(outs) => {
+                        fails = 0;
+                        outs
+                    }
+                    Err(e) => {
+                        if !self.recover(&e, &mut fails, t.kbps, &p.encoder) {
+                            break;
+                        }
+                        sh.idr.store(true, Ordering::Relaxed);
+                        continue;
+                    }
+                };
                 secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode, timing);
                 pending = false;
                 prepared.extend(outs);
