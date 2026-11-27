@@ -79,9 +79,11 @@ struct Encoder {
         auto* frames = reinterpret_cast<AVHWFramesContext*>(codec->hw_frames_ctx->data);
         frames->format = codec->pix_fmt; frames->sw_format = AV_PIX_FMT_NV12;
         frames->width = w; frames->height = h;
-        // A single render-target texture backs the hardware frames.
-        // NV12 array textures without decoder binding are rejected by D3D11 drivers.
-        frames->initial_pool_size = 1;
+        // D3D11: a single render-target texture backs the hardware frames (NV12 array textures
+        // without decoder binding are rejected by D3D11 drivers). QSV keeps each input surface
+        // until the next frame is sent, so one surface leaves nothing for that next frame: its
+        // pool is a decoder-bound array with room to spare.
+        frames->initial_pool_size = qsv ? 4 : 1;
         if (!qsv) {
             auto* textures=static_cast<AVD3D11VAFramesContext*>(frames->hwctx);
             textures->BindFlags=D3D11_BIND_RENDER_TARGET;
