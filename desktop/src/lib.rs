@@ -42,6 +42,7 @@ mod tray;
 #[path = "tray_linux.rs"]
 mod tray;
 mod updates;
+mod logs;
 mod viewer;
 #[cfg(target_os = "linux")]
 pub mod instance_linux;
@@ -227,6 +228,7 @@ struct App {
     #[cfg(any(windows, target_os = "linux"))]
     tray: Option<tray::Tray>,
     updates: updates::Panel,
+    logs: logs::Panel,
     client: client_settings::Settings,
     shortcut_key: Option<Key>,
     hosting: hosting::Panel,
@@ -369,6 +371,7 @@ impl App {
             #[cfg(any(windows, target_os = "linux"))]
             tray: tray::Tray::new(cc),
             updates: updates::Panel::new(cc.egui_ctx.clone()),
+            logs: logs::Panel::default(),
             hosting: hosting::Panel::new(cc.egui_ctx.clone()),
             account: account::Panel::new(cc.egui_ctx.clone()),
             files: new_files(cc.egui_ctx.clone(), &client_files_dir),
@@ -1570,7 +1573,7 @@ impl App {
                     } else if matches!(self.page, Page::Settings | Page::ClientSettings | Page::Hosting) {
                         let settings_scroll=egui::ScrollArea::vertical().id_salt("settings-page").auto_shrink([false, false]);
                         // Sections on the left, the chosen section's rows on the right.
-                        let sections: &[&str] = if cfg!(any(windows,target_os="linux")) { &["Streaming", "This computer", "Account", "About"] } else { &["Streaming", "Account", "About"] };
+                        let sections: &[&str] = if cfg!(any(windows,target_os="linux")) { &["Streaming", "This computer", "General"] } else { &["Streaming", "General"] };
                         let key = egui::Id::new("settings-section");
                         let first = if self.page == Page::Hosting || std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p| p.contains("host")) { 1 } else { 0 };
                         let mut section: usize = ctx.data(|d| d.get_temp(key)).unwrap_or(first).min(sections.len() - 1);
@@ -1584,8 +1587,14 @@ impl App {
                                 match sections[section] {
                                     "Streaming" => { if self.client.ui(ui) { self.options=self.client.options(); self.client.save(); } }
                                     "This computer" => self.hosting.inline_ui(ui, ctx, &mut self.account),
-                                    "Account" => self.account.account_ui(ui),
-                                    _ => self.updates.about_ui(ui),
+                                    // Account, About and Logs together: each alone left most of the page empty.
+                                    _ => {
+                                        self.account.account_ui(ui);
+                                        ui.add_space(8.);
+                                        self.updates.about_ui(ui);
+                                        ui.add_space(8.);
+                                        self.logs.ui(ui);
+                                    }
                                 }
                             });
                         });

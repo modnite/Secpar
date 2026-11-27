@@ -315,6 +315,12 @@ pub async fn dispatch(app: Arc<App>, cmd: String, args: Value) -> Result<Value, 
         }
         "check_update" => to_value(check_update().await?),
         // The window's silent update: this server runs as SYSTEM, so it installs without a prompt.
+        // Settings, General, Save logs: the window cannot read the service's folder itself.
+        "host_log" => {
+            let dir = crate::data_dir();
+            let read = |name: &str| std::fs::read(dir.join(name)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            to_value(format!("{}{}", read("host.old.log"), read("host.log")))
+        }
         "install_update" => to_value(crate::update::install_tag(&crate::data_dir(), &arg::<String>(&args, "tag")?).await?),
         _ => Err(format!("unknown command {cmd}")),
     }
