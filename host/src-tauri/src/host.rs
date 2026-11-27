@@ -337,9 +337,17 @@ impl Session for HostSession {
                     // the phone relays: relay too, so both ends talk relay-to-relay (carrier NATs)
                     let (sh, store, out) = (s.shared(), self.store.clone(), self.out.clone());
                     std::thread::spawn(move || {
-                        let Some((server, user, pass)) = crate::remote::turn_server(&store) else { return };
-                        if let Some(r) = sh.start_turn(server, user, pass) {
-                            out.send(ServerMsg::StreamCand { c: r.to_string() });
+                        // Each step is logged: when the device's relay gets no answer, this says why.
+                        let Some((server, user, pass)) = crate::remote::turn_server(&store) else {
+                            crate::log::line("stream: no relay credentials for this PC");
+                            return;
+                        };
+                        match sh.start_turn(server, user, pass) {
+                            Some(r) => {
+                                crate::log::line(&format!("stream: relayed at {r}, sent to the device"));
+                                out.send(ServerMsg::StreamCand { c: r.to_string() });
+                            }
+                            None => crate::log::line(&format!("stream: no relay allocation from {server} (UDP to the relay blocked?)")),
                         }
                     });
                 }
