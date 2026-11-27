@@ -105,6 +105,9 @@ pub struct Hardware {
     ctx: ID3D11DeviceContext,
     manager: IMFDXGIDeviceManager,
     staging: Option<Staging>,
+    /// Pictures stay on the graphics card when the window can draw them from there (gpu.rs).
+    pub gpu_out: bool,
+    splitter: Option<super::dxgl::Splitter>,
     mft: Option<Mft>,
     pub adapter: String,
     /// Tests: make the next N frames fail as if the data were undecodable.
@@ -148,7 +151,7 @@ impl Hardware {
             MFCreateDXGIDeviceManager(&mut token, &mut manager).map_err(|_| ())?;
             let manager = manager.ok_or(())?;
             manager.ResetDevice(&dev, token).map_err(|_| ())?;
-            Ok(Hardware { dev, ctx, manager, staging: None, mft: None, adapter: name, #[cfg(test)] inject_invalid: 0, _mf: mf })
+            Ok(Hardware { dev, ctx, manager, staging: None, gpu_out: false, splitter: None, mft: None, adapter: name, #[cfg(test)] inject_invalid: 0, _mf: mf })
         }
     }
 
@@ -390,6 +393,19 @@ impl Hardware {
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             texture.GetDesc(&mut desc);
             let (x, y, w, h) = fit_area(visible, (desc.Width, desc.Height));
+            if self.gpu_out && crate::gpu::interop_usable() {
+                let (surface, area) = ((desc.Width, desc.Height), (x, y, w, h));
+                if self.splitter.as_ref().is_none_or(|s| !s.fits(surface, area)) {
+                    self.splitter = super::dxgl::Splitter::new(&self.dev, surface, area).ok();
+                    if self.splitter.is_none() {
+                        eprintln!("video_decoder gpu_frames=unavailable");
+                        self.gpu_out = false;
+                    }
+                }
+                if let Some(frame) = self.splitter.as_ref().and_then(|s| s.split(&self.ctx, &texture, index)) {
+                    return Ok(Picture::on_gpu([w as usize, h as usize], frame));
+                }
+            }
             if self.staging.as_ref().is_none_or(|s| s.size != (desc.Width, desc.Height)) {
                 let d = D3D11_TEXTURE2D_DESC {
                     Width: desc.Width,

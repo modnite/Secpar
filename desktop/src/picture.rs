@@ -20,6 +20,9 @@ pub struct Picture {
     pub y: Vec<u8>,
     /// `ceil(w/2) * 2 * ceil(h/2)` bytes, U then V per chroma sample.
     pub uv: Vec<u8>,
+    /// Windows hardware decoding: the planes stay on the graphics card and `y`/`uv` are empty.
+    #[cfg(windows)]
+    pub gpu: Option<crate::video::dxgl::GpuFrame>,
 }
 
 fn chroma(size: [usize; 2]) -> [usize; 2] {
@@ -58,7 +61,7 @@ impl Picture {
                 uv.push(vr[x]);
             }
         }
-        Some(Self { size, y: luma, uv, packed: false })
+        Some(Self { size, y: luma, uv, packed: false, #[cfg(windows)] gpu: None })
     }
 
     pub fn from_nv12(size: [usize; 2], y: (&[u8], usize), uv: (&[u8], usize)) -> Option<Self> {
@@ -78,7 +81,7 @@ impl Picture {
         for row in 0..ch {
             chroma_plane.extend_from_slice(&uv.0[row * uv.1..row * uv.1 + cw * 2]);
         }
-        Some(Self { size, y: luma, uv: chroma_plane, packed: false })
+        Some(Self { size, y: luma, uv: chroma_plane, packed: false, #[cfg(windows)] gpu: None })
     }
 
     /// Review-only: eight limited-range BT.709 colour bars for checking the shader.
@@ -105,7 +108,13 @@ impl Picture {
                 uv.push(v.round() as u8);
             }
         }
-        Self { size: [w, h], y, uv, packed: false }
+        Self { size: [w, h], y, uv, packed: false, #[cfg(windows)] gpu: None }
+    }
+
+    /// A picture that stays on the graphics card (see video/dxgl.rs).
+    #[cfg(windows)]
+    pub fn on_gpu(size: [usize; 2], frame: crate::video::dxgl::GpuFrame) -> Self {
+        Self { size, y: Vec::new(), uv: Vec::new(), packed: false, gpu: Some(frame) }
     }
 
     pub fn chroma_size(&self) -> [usize; 2] {
@@ -139,6 +148,10 @@ impl Picture {
 
     pub fn to_color_image(&self, matrix: Matrix) -> ColorImage {
         let [w, h] = self.shown_size();
+        // A picture on the graphics card has no planes here; only the shader can draw it.
+        if self.y.len() < self.size[0] * self.size[1] {
+            return ColorImage::new([w.max(1), h.max(1)], vec![eframe::egui::Color32::BLACK; w.max(1) * h.max(1)]);
+        }
         let mut rgb = Vec::with_capacity(w * h * 3);
         for y in 0..h {
             for x in 0..w {
@@ -174,7 +187,7 @@ mod tests {
                 uv[(r * (w / 2) + x / 2) * 2 + (x & 1)] = cr;
             }
         }
-        let p = Picture { size: [w, h * 2], y, uv, packed: true };
+        let p = Picture { size: [w, h * 2], y, uv, packed: true, #[cfg(windows)] gpu: None };
         assert_eq!(p.shown_size(), [w, h]);
         let red = p.rgb_at(2, 1, Matrix::Bt709);
         let blue = p.rgb_at(3, 1, Matrix::Bt709);

@@ -6,9 +6,20 @@ use eframe::{
     egui_glow::{self, ShaderVersion},
     glow::{self, HasContext},
 };
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub type Handle = Arc<Mutex<Shared>>;
+
+/// The shader works in this window.
+static SHADER: AtomicBool = AtomicBool::new(false);
+/// Drawing decoded frames straight from Direct3D textures: 0 not tried yet, 1 works, 2 does not.
+static INTEROP: AtomicU8 = AtomicU8::new(0);
+
+/// Whether the decoder may leave pictures on the graphics card (video/dxgl.rs).
+pub fn interop_usable() -> bool {
+    SHADER.load(Ordering::Relaxed) && INTEROP.load(Ordering::Relaxed) != 2
+}
 
 #[derive(Default)]
 pub struct Shared {
@@ -26,13 +37,18 @@ struct Resources {
     luma: glow::Texture,
     chroma: glow::Texture,
     size: [usize; 2],
+    /// The frame on screen when it came straight from the decoder; held so it is not overwritten.
+    #[cfg(windows)]
+    shown_gpu: Option<crate::video::dxgl::GpuFrame>,
+    #[cfg(windows)]
+    interop: Option<interop::Interop>,
 }
 
 /// None when the context is too old for the shader; the caller then converts on the CPU.
 pub fn new(gl: &Arc<glow::Context>) -> Option<Handle> {
-    ShaderVersion::get(gl)
-        .is_new_shader_interface()
-        .then(Handle::default)
+    let ok = ShaderVersion::get(gl).is_new_shader_interface();
+    SHADER.store(ok, Ordering::Relaxed);
+    ok.then(Handle::default)
 }
 
 pub fn submit(handle: &Handle, picture: Picture) {
@@ -55,6 +71,7 @@ pub fn callback(handle: Handle, rect: egui::Rect) -> egui::PaintCallback {
                 // Logged once: the picture is then converted on the CPU, which costs far more.
                 eprintln!("secpar: video shader failed, using the CPU instead: {error}");
                 shared.failed = true;
+                SHADER.store(false, Ordering::Relaxed);
             }
 
         })),
@@ -117,6 +134,23 @@ fn draw(shared: &mut Shared, gl: &Arc<glow::Context>) -> Result<(), String> {
         let resources = shared.gl.as_mut().unwrap();
         if let Some(picture) = shared.pending.take() {
             let began=secpar_stream::timing::begin();
+            #[cfg(windows)]
+            if let Some(frame) = picture.gpu.clone() {
+                // Registered once per ring; a failure means the decoder copies frames back from now on.
+                if interop::prepare(gl, resources, &frame).is_err() {
+                    INTEROP.store(2, Ordering::Relaxed);
+                    eprintln!("secpar: OpenGL cannot read Direct3D textures here; frames are copied back");
+                    return Ok(());
+                }
+                INTEROP.store(1, Ordering::Relaxed);
+                resources.shown_gpu = Some(frame);
+                resources.size = picture.size;
+                resources.full_colour = picture.packed;
+            } else {
+                resources.shown_gpu = None;
+                upload(gl, resources, &picture);
+            }
+            #[cfg(not(windows))]
             upload(gl, resources, &picture);
             secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Upload,began);
             secpar_stream::timing::mark(secpar_stream::timing::Stage::Draw);
@@ -130,14 +164,31 @@ fn draw(shared: &mut Shared, gl: &Arc<glow::Context>) -> Result<(), String> {
         gl.uniform_1_i32(resources.packed.as_ref(), resources.full_colour as i32);
         let [w, h] = resources.size;
         gl.uniform_2_i32(resources.shown.as_ref(), w as i32, if resources.full_colour { h as i32 / 2 } else { h as i32 });
+        #[cfg(windows)]
+        let locked = match (&resources.shown_gpu, &resources.interop) {
+            (Some(frame), Some(interop)) => Some(interop.lock(frame.index).ok_or("could not lock the decoded frame")?),
+            _ => None,
+        };
+        #[cfg(not(windows))]
+        let locked: Option<(glow::Texture, glow::Texture)> = None;
+        let (luma, chroma) = match &locked {
+            #[cfg(windows)]
+            Some(l) => (l.luma, l.chroma),
+            #[cfg(not(windows))]
+            Some(l) => *l,
+            None => (resources.luma, resources.chroma),
+        };
         gl.active_texture(glow::TEXTURE0);
-        gl.bind_texture(glow::TEXTURE_2D, Some(resources.luma));
+        gl.bind_texture(glow::TEXTURE_2D, Some(luma));
         gl.active_texture(glow::TEXTURE1);
-        gl.bind_texture(glow::TEXTURE_2D, Some(resources.chroma));
+        gl.bind_texture(glow::TEXTURE_2D, Some(chroma));
         gl.bind_vertex_array(Some(resources.vao));
         gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(None);
+        gl.bind_texture(glow::TEXTURE_2D, None);
         gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        drop(locked);
     }
     Ok(())
 }
@@ -168,19 +219,7 @@ unsafe fn create(gl: &glow::Context, version: ShaderVersion) -> Result<Resources
     gl.use_program(Some(program));
     gl.uniform_1_i32(gl.get_uniform_location(program, "luma").as_ref(), 0);
     gl.uniform_1_i32(gl.get_uniform_location(program, "chroma").as_ref(), 1);
-    let texture = || -> Result<glow::Texture, String> {
-        let texture = gl.create_texture()?;
-        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-        for (name, value) in [
-            (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
-            (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
-            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
-        ] {
-            gl.tex_parameter_i32(glow::TEXTURE_2D, name, value as i32);
-        }
-        Ok(texture)
-    };
+    let texture = || filtered_texture(gl);
     Ok(Resources {
         packed: gl.get_uniform_location(program, "full_colour"),
         shown: gl.get_uniform_location(program, "shown"),
@@ -190,7 +229,161 @@ unsafe fn create(gl: &glow::Context, version: ShaderVersion) -> Result<Resources
         luma: texture()?,
         chroma: texture()?,
         size: [0, 0],
+        #[cfg(windows)]
+        shown_gpu: None,
+        #[cfg(windows)]
+        interop: None,
     })
+}
+
+unsafe fn filtered_texture(gl: &glow::Context) -> Result<glow::Texture, String> {
+    let texture = gl.create_texture()?;
+    gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+    for (name, value) in [
+        (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+        (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+        (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+        (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+    ] {
+        gl.tex_parameter_i32(glow::TEXTURE_2D, name, value as i32);
+    }
+    Ok(texture)
+}
+
+/// OpenGL reading the decoder's Direct3D 11 textures through WGL_NV_DX_interop2, which Intel,
+/// NVIDIA and AMD drivers provide on Windows.
+#[cfg(windows)]
+mod interop {
+    use super::Resources;
+    use crate::video::dxgl::{GpuFrame, Ring};
+    use eframe::glow::{self, HasContext};
+    use std::ffi::c_void;
+    use std::sync::Arc;
+    use windows::core::{Interface, PCSTR};
+    use windows::Win32::Graphics::OpenGL::wglGetProcAddress;
+
+    type Open = unsafe extern "system" fn(*mut c_void) -> *mut c_void;
+    type Close = unsafe extern "system" fn(*mut c_void) -> i32;
+    type Register = unsafe extern "system" fn(*mut c_void, *mut c_void, u32, u32, u32) -> *mut c_void;
+    type Unregister = unsafe extern "system" fn(*mut c_void, *mut c_void) -> i32;
+    type Lock = unsafe extern "system" fn(*mut c_void, i32, *mut *mut c_void) -> i32;
+
+    const READ_ONLY: u32 = 0;
+
+    struct Calls {
+        open: Open,
+        close: Close,
+        register: Register,
+        unregister: Unregister,
+        lock: Lock,
+        unlock: Lock,
+    }
+
+    unsafe fn load() -> Option<Calls> {
+        unsafe fn get<T>(name: &str) -> Option<T> {
+            let name = std::ffi::CString::new(name).ok()?;
+            let f = wglGetProcAddress(PCSTR(name.as_ptr().cast()))?;
+            Some(std::mem::transmute_copy(&f))
+        }
+        Some(Calls {
+            open: get("wglDXOpenDeviceNV")?,
+            close: get("wglDXCloseDeviceNV")?,
+            register: get("wglDXRegisterObjectNV")?,
+            unregister: get("wglDXUnregisterObjectNV")?,
+            lock: get("wglDXLockObjectsNV")?,
+            unlock: get("wglDXUnlockObjectsNV")?,
+        })
+    }
+
+    pub struct Interop {
+        calls: Calls,
+        device: *mut c_void,
+        ring: Arc<Ring>,
+        gl: Arc<glow::Context>,
+        /// Per slot: the OpenGL textures and their interop handles.
+        slots: Vec<(glow::Texture, glow::Texture, [*mut c_void; 2])>,
+    }
+
+    /// Both textures of one slot, readable by OpenGL until this is dropped.
+    pub struct Locked<'a> {
+        interop: &'a Interop,
+        handles: [*mut c_void; 2],
+        pub luma: glow::Texture,
+        pub chroma: glow::Texture,
+    }
+    impl Drop for Locked<'_> {
+        fn drop(&mut self) {
+            let mut handles = self.handles;
+            // SAFETY: the handles were locked by `Interop::lock` on this context.
+            unsafe { (self.interop.calls.unlock)(self.interop.device, 2, handles.as_mut_ptr()) };
+        }
+    }
+
+    // SAFETY: used only inside eframe's paint callback, on the thread that owns the OpenGL context.
+    unsafe impl Send for Interop {}
+    unsafe impl Sync for Interop {}
+
+    impl Interop {
+        pub fn lock(&self, index: usize) -> Option<Locked<'_>> {
+            let (luma, chroma, mut handles) = *self.slots.get(index)?;
+            // SAFETY: registered handles on this device.
+            let ok = unsafe { (self.calls.lock)(self.device, 2, handles.as_mut_ptr()) } != 0;
+            ok.then_some(Locked { interop: self, handles, luma, chroma })
+        }
+    }
+
+    impl Drop for Interop {
+        fn drop(&mut self) {
+            // SAFETY: everything here was registered or opened by this value on the same context.
+            unsafe {
+                for (luma, chroma, handles) in self.slots.drain(..) {
+                    for h in handles {
+                        (self.calls.unregister)(self.device, h);
+                    }
+                    self.gl.delete_texture(luma);
+                    self.gl.delete_texture(chroma);
+                }
+                (self.calls.close)(self.device);
+            }
+        }
+    }
+
+    /// Makes sure the ring `frame` belongs to is registered with OpenGL.
+    pub unsafe fn prepare(gl: &Arc<glow::Context>, resources: &mut Resources, frame: &GpuFrame) -> Result<(), ()> {
+        if resources.interop.as_ref().is_some_and(|i| i.ring.id == frame.ring.id) {
+            return Ok(());
+        }
+        // The old ring's textures are let go before the new ones are registered.
+        resources.shown_gpu = None;
+        resources.interop = None;
+        let calls = load().ok_or(())?;
+        let device = (calls.open)(frame.ring.device.as_raw());
+        if device.is_null() {
+            return Err(());
+        }
+        let mut interop = Interop { calls, device, ring: frame.ring.clone(), gl: gl.clone(), slots: Vec::new() };
+        for slot in &frame.ring.slots {
+            let luma = super::filtered_texture(gl).map_err(|_| ())?;
+            let chroma = super::filtered_texture(gl).map_err(|_| ())?;
+            let l = (interop.calls.register)(device, slot.luma.as_raw(), luma.0.get(), glow::TEXTURE_2D, READ_ONLY);
+            let c = (interop.calls.register)(device, slot.chroma.as_raw(), chroma.0.get(), glow::TEXTURE_2D, READ_ONLY);
+            interop.slots.push((luma, chroma, [l, c]));
+            if l.is_null() || c.is_null() {
+                return Err(());
+            }
+        }
+        // The filters set on the textures before registering are kept; set them again to be sure.
+        for (luma, chroma, _) in &interop.slots {
+            for t in [*luma, *chroma] {
+                gl.bind_texture(glow::TEXTURE_2D, Some(t));
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            }
+        }
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        resources.interop = Some(interop);
+        Ok(())
+    }
 }
 
 unsafe fn upload(gl: &glow::Context, resources: &mut Resources, picture: &Picture) {
