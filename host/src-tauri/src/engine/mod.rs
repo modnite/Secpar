@@ -2,7 +2,7 @@
 //! Nothing here runs until a phone sends `stream.start`.
 
 pub mod audio;
-pub mod bitrate;
+pub use secpar_host_core::bitrate;
 pub mod capture;
 pub mod convert;
 pub mod convert_ps;

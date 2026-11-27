@@ -91,6 +91,15 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
 - Android stats now match the desktop (decoded and drawn fps, 4:4:4) and both refresh
   every half second, with "Ping (RTT)" as the label. Not released yet.
 
+- 4.2.0-r8 (2026-11-27): held keys repeat on the host (Windows does not repeat injected keys;
+  Linux hosts drop the extra downs because the compositor repeats). Windows builds carry FFmpeg
+  (`-Features 'ffmpeg,gpu-isolation'`, `SECPAR_FFMPEG_DIR`), so hosts offer Quick Sync and AMF and
+  no longer Media Foundation. Unconfirmed by the owner.
+- Open from the owner's T480 (Windows 11 client) report, 2026-11-26: no keyboard reaches the host
+  and Win opens the local Start menu; choppy picture and sound with macroblock pulses to NIGG10
+  (NVENC host, so client or network side); about one second of delay to Bryan. Bryan's bed PC is
+  unreachable on the LAN since r7; its ufw allows only KDE Connect and 22 (needs 48999/tcp).
+
 ## Account service: self-hosted since 2026-11-21
 
 On 2026-11-21 the Cloudflare account ran out of the free plan's 100,000 Worker requests a day

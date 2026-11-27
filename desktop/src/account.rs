@@ -2438,6 +2438,7 @@ mod tests {
             ("POST /v1/requests ", format!(r#"{{"id":"{id}","state":"pending","expires_in":300,"permissions":["view","audio"]}}"#)),
             (&*Box::leak(format!("GET /v1/requests/{id} ").into_boxed_str()), r#"{"state":"approved","approved":"[\"view\"]"}"#.into()),
             (&*Box::leak(format!("POST /v1/requests/{id}/claim ").into_boxed_str()), r#"{"grant":"g.r.a","expires_at":1,"host":{"pc":"pc-1","relay":"https://relay.example.com","fingerprint":"aa"}}"#.into()),
+            ("POST /v1/devices/relay ", r#"{"server":"turn:turn.example.com:3478","username":"u","credential":"c"}"#.into()),
             (&*Box::leak(format!("POST /v1/requests/{id}/claim ").into_boxed_str()), r#"{"grant":"g.r.a","expires_at":1,"host":{"pc":"pc-1","relay":"http://evil.example.com","fingerprint":"aa"}}"#.into()),
         ]);
         tokio::runtime::Runtime::new().unwrap().block_on(async {
