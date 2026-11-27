@@ -24,6 +24,8 @@ pub struct Link {
     /// Peers whose packets arrived through `turn`: replies go back the same way.
     via_relay: Mutex<HashSet<SocketAddr>>,
     gate: Mutex<Option<Instant>>,
+    /// With TURN over TLS: the loopback address the relay's frames come from on the stream socket.
+    tls_inbox: Mutex<Option<SocketAddr>>,
 }
 
 impl Link {
@@ -70,7 +72,8 @@ impl Link {
     pub fn transmit(&self, sock: &UdpSocket, to: SocketAddr, pkt: &[u8]) -> bool {
         if let (Some(t), SocketAddr::V4(v4)) = (self.turn(), to) {
             if self.is_relayed(&to) {
-                return sock.send_to(&t.wrap(v4, pkt), t.server).is_ok();
+                t.send_raw(sock, &t.wrap(v4, pkt));
+                return true;
             }
         }
         sock.send_to(pkt, to).is_ok()
@@ -80,7 +83,7 @@ impl Link {
     pub fn transmit_punch_copy(&self, sock: &UdpSocket, to: SocketAddr, pkt: &[u8]) {
         if let (Some(t), SocketAddr::V4(v4)) = (self.turn(), to) {
             if turn::is_public(&v4) && !self.is_relayed(&to) {
-                let _ = sock.send_to(&t.wrap(v4, pkt), t.server);
+                t.send_raw(sock, &t.wrap(v4, pkt));
             }
         }
     }
@@ -90,7 +93,7 @@ impl Link {
     /// data from `peer`.
     pub fn unwrap(&self, from: SocketAddr, pkt: &[u8]) -> Option<(SocketAddr, Option<Vec<u8>>)> {
         match self.turn() {
-            Some(t) if from == t.server => {
+            Some(t) if from == t.server || Some(from) == *self.tls_inbox.lock().unwrap() => {
                 let (peer, data) = t.on_packet(pkt)?;
                 Some((SocketAddr::V4(peer), Some(data)))
             }
@@ -105,7 +108,7 @@ impl Link {
     pub fn start_turn(
         self: &Arc<Self>,
         sock: &UdpSocket,
-        stopped: impl Fn() -> bool + Send + 'static,
+        stopped: impl Fn() -> bool + Send + Sync + 'static,
         server: SocketAddr,
         user: String,
         pass: String,
@@ -114,7 +117,76 @@ impl Link {
         if self.turn().is_some() {
             return None;
         }
-        let mut t = Turn::new(server, user, pass);
+        self.allocate_on(sock, Arc::new(stopped), Turn::new(server, user, pass), diagnostics)
+    }
+
+    /// [`Link::start_turn`] over TLS to `host:port`, for networks that block UDP to the relay
+    /// (offices). The relay still reaches the device over UDP; only this host's leg is TCP. Its
+    /// frames are handed to the stream socket from a loopback socket, so the receive loop treats
+    /// them as the server's.
+    #[cfg(feature = "tls")]
+    pub fn start_turn_tls(
+        self: &Arc<Self>,
+        sock: &UdpSocket,
+        stopped: impl Fn() -> bool + Send + Sync + 'static,
+        host: String,
+        port: u16,
+        user: String,
+        pass: String,
+        diagnostics: Option<fn(&str)>,
+    ) -> Option<SocketAddrV4> {
+        if self.turn().is_some() {
+            return None;
+        }
+        let stopped: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(stopped);
+        let target = SocketAddr::from(([127, 0, 0, 1], sock.local_addr().ok()?.port()));
+        let inject = UdpSocket::bind("127.0.0.1:0").ok()?;
+        let inbox = inject.local_addr().ok()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let keep = stopped.clone();
+        std::thread::spawn(move || {
+            let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+                let _ = tx.send(None);
+                return;
+            };
+            rt.block_on(async move {
+                let deliver = move |b: &[u8]| {
+                    let _ = inject.send_to(b, target);
+                };
+                match crate::turn_tls::connect(&host, port, deliver).await {
+                    Ok((link, addr)) => {
+                        let _ = tx.send(Some((link.clone(), addr)));
+                        // The connection lives as long as the stream.
+                        while !keep() {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                        drop(link);
+                    }
+                    Err(e) => {
+                        if let Some(d) = diagnostics {
+                            d(&format!("turn: no TLS connection to the relay: {e}"));
+                        }
+                        let _ = tx.send(None);
+                    }
+                }
+            });
+        });
+        let (link, server) = rx.recv_timeout(Duration::from_secs(10)).ok()??;
+        *self.tls_inbox.lock().unwrap() = Some(inbox);
+        let relayed = self.allocate_on(sock, stopped, Turn::new(server, user, pass).with_link(link), diagnostics);
+        if relayed.is_none() {
+            *self.tls_inbox.lock().unwrap() = None;
+        }
+        relayed
+    }
+
+    fn allocate_on(
+        self: &Arc<Self>,
+        sock: &UdpSocket,
+        stopped: Arc<dyn Fn() -> bool + Send + Sync>,
+        mut t: Turn,
+        diagnostics: Option<fn(&str)>,
+    ) -> Option<SocketAddrV4> {
         if let Some(d) = diagnostics {
             t = t.with_diagnostics(d);
         }

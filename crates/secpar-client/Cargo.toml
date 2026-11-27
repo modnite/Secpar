@@ -6,7 +6,7 @@ license = "GPL-3.0"
 publish = false
 
 [dependencies]
-secpar-network = { path = "../secpar-network" }
+secpar-network = { path = "../secpar-network", features = ["tls"] }
 secpar-stream = { path = "../secpar-stream" }
 base64 = "0.23.1"
 futures-util = { version = "0.3.34", features = ["sink"] }

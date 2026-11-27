@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 secpar-host-core = { path = "../secpar-host-core" }
 secpar-stream = { path = "../secpar-stream" }
-secpar-network = { path = "../secpar-network" }
+secpar-network = { path = "../secpar-network", features = ["tls"] }
 secpar-clipboard = { path = "../secpar-clipboard" }
 base64 = "0.23.1"
 ring = "0.17.14"

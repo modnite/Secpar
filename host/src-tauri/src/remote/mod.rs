@@ -16,7 +16,7 @@ pub fn host_sig(relay_key: &[u8], pc: &str, ts: u64) -> String {
 
 /// Fetches this host's TURN credentials from the Worker (`/v1/turn?role=host`) and returns the
 /// first UDP TURN server. Blocking; call off the async runtime's worker threads.
-pub fn turn_server(store: &std::sync::Mutex<crate::store::Store>) -> Option<(std::net::SocketAddr, String, String)> {
+pub fn turn_server(store: &std::sync::Mutex<crate::store::Store>) -> Option<secpar_host_core::relay::TurnServer> {
     let base = url()?;
     let (key, pc) = {
         let s = store.lock().unwrap();
@@ -25,7 +25,7 @@ pub fn turn_server(store: &std::sync::Mutex<crate::store::Store>) -> Option<(std
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
     let url = secpar_host_core::relay::turn_url(base, &pc, ts, &host_sig(&key, &pc, ts));
     match secpar_host_core::relay::fetch_turn_blocking(&url) {
-        Ok(s) => Some((s.addr, s.user, s.pass)),
+        Ok(s) => Some(s),
         Err(e) => {
             crate::log::line(&format!("turn: {e}"));
             None

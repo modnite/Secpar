@@ -10,6 +10,8 @@ pub struct TurnServer {
     pub addr: SocketAddr,
     pub user: String,
     pub pass: String,
+    /// The same relay over TLS (host name and port), for networks that block UDP to it.
+    pub tls: Option<(String, u16)>,
 }
 
 impl std::fmt::Debug for TurnServer {
@@ -33,6 +35,25 @@ pub fn turn_url(base: &str, pc: &str, ts: u64, sig_hex: &str) -> String {
 pub fn parse_turn_reply(body: &serde_json::Value) -> Option<TurnServer> {
     let ice = &body["iceServers"];
     let servers: Vec<&serde_json::Value> = ice.as_array().map(|a| a.iter().collect()).unwrap_or_else(|| vec![ice]);
+    let urls_of = |s: &serde_json::Value| -> Vec<String> {
+        match &s["urls"] {
+            serde_json::Value::Array(a) => a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect(),
+            u => u.as_str().map(str::to_string).into_iter().collect(),
+        }
+    };
+    // `turns:host:port`, preferring 443 (the port offices leave open); else the UDP server's name on 443.
+    let mut tls: Option<(String, u16)> = None;
+    for u in servers.iter().flat_map(|s| urls_of(s)) {
+        let Some(rest) = u.strip_prefix("turns:") else { continue };
+        let hp = rest.split('?').next().unwrap_or_default();
+        let (host, port) = match hp.rsplit_once(':') {
+            Some((h, p)) => (h.to_string(), p.parse().unwrap_or(443)),
+            None => (hp.to_string(), 443),
+        };
+        if !host.is_empty() && (tls.is_none() || port == 443) {
+            tls = Some((host, port));
+        }
+    }
     for s in servers {
         let (Some(user), Some(pass)) = (s["username"].as_str(), s["credential"].as_str()) else { continue };
         let urls: Vec<&str> = match &s["urls"] {
@@ -44,9 +65,11 @@ pub fn parse_turn_reply(body: &serde_json::Value) -> Option<TurnServer> {
                 continue;
             }
             let hp = u.trim_start_matches("turn:").split('?').next()?;
+            let name = hp.split(':').next().unwrap_or_default();
             let hp = if hp.contains(':') { hp.to_string() } else { format!("{hp}:3478") };
             if let Some(addr) = hp.to_socket_addrs().ok()?.find(|a| a.is_ipv4()) {
-                return Some(TurnServer { addr, user: user.to_string(), pass: pass.to_string() });
+                let tls = tls.or_else(|| (name.parse::<std::net::IpAddr>().is_err() && !name.is_empty()).then(|| (name.to_string(), 443)));
+                return Some(TurnServer { addr, user: user.to_string(), pass: pass.to_string(), tls });
             }
         }
     }
@@ -90,6 +113,8 @@ mod tests {
         assert_eq!((s.addr, s.user.as_str(), s.pass.as_str()), ("127.0.0.1:53".parse().unwrap(), "u", "c"));
         assert_eq!(format!("{s:?}"), "TurnServer(127.0.0.1:53)", "Debug never shows credentials");
         // a single object instead of a list, and the default port
+        let cloudflare = json!({"iceServers":[{"urls":["turn:127.0.0.1:3478?transport=udp","turns:turn.cloudflare.com:5349?transport=tcp","turns:turn.cloudflare.com:443?transport=tcp"],"username":"u","credential":"c"}]});
+        assert_eq!(parse_turn_reply(&cloudflare).unwrap().tls, Some(("turn.cloudflare.com".to_string(), 443)), "TLS on 443 for offices");
         let single = json!({"iceServers":{"urls":"turn:127.0.0.1","username":"u","credential":"c"}});
         assert_eq!(parse_turn_reply(&single).unwrap().addr, "127.0.0.1:3478".parse().unwrap());
         assert!(parse_turn_reply(&json!({"iceServers":[{"urls":["stun:x:1"],"username":"u","credential":"c"}]})).is_none());

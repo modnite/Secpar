@@ -2,7 +2,7 @@
 //! ChannelData are framed by their own lengths, ChannelData padded to four bytes. The relay
 //! still reaches the computer over UDP; only this side's path to the relay is TCP.
 
-use secpar_network::turn::Link;
+use crate::turn::Link;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -31,7 +31,9 @@ pub async fn connect(host: &str, port: u16, deliver: impl Fn(&[u8]) + Send + 'st
     let tcp = tokio::time::timeout(std::time::Duration::from_secs(5), tokio::net::TcpStream::connect(addr)).await.map_err(|_| "timed out")?.map_err(|e| e.to_string())?;
     let _ = tcp.set_nodelay(true);
     let roots = RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-    let config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    // The ring provider by name: a process may hold none or several, and hosts install none.
+    let provider = Arc::new(tokio_rustls::rustls::crypto::ring::default_provider());
+    let config = ClientConfig::builder_with_provider(provider).with_safe_default_protocol_versions().map_err(|e| e.to_string())?.with_root_certificates(roots).with_no_client_auth();
     let name = ServerName::try_from(host.to_string()).map_err(|e| e.to_string())?;
     let tls = tokio_rustls::TlsConnector::from(Arc::new(config)).connect(name, tcp).await.map_err(|e| e.to_string())?;
     let (mut read, mut write) = tokio::io::split(tls);
@@ -69,10 +71,10 @@ mod tests {
         let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         let (link, _) = super::connect("turn.cloudflare.com", 443, move |b| { let _ = tx.send(b.to_vec()); }).await.unwrap();
-        let m = secpar_network::turn::Msg::new(0x0003).add(0x0019, [17u8, 0, 0, 0]).encode(None);
-        secpar_network::turn::Link::send(&*link, &m);
+        let m = crate::turn::Msg::new(0x0003).add(0x0019, [17u8, 0, 0, 0]).encode(None);
+        crate::turn::Link::send(&*link, &m);
         let answer = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
-        let reply = secpar_network::turn::Msg::decode(&answer).unwrap();
+        let reply = crate::turn::Msg::decode(&answer).unwrap();
         let code = reply.get(0x0009).map(|e| e[2] as u16 * 100 + e[3] as u16);
         assert_eq!(code, Some(401));
     }

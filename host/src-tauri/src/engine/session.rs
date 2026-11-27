@@ -157,6 +157,14 @@ impl Shared {
         Some(relayed)
     }
 
+    /// [`Shared::start_turn`] over TLS, for networks that block UDP to the relay.
+    pub fn start_turn_tls(self: &Arc<Self>, host: String, port: u16, user: String, pass: String) -> Option<std::net::SocketAddrV4> {
+        let weak = Arc::downgrade(self);
+        let relayed = self.link.start_turn_tls(&self.sock, move || weak.upgrade().is_none_or(|sh| sh.stopped()), host, port, user, pass, Some(crate::log::line))?;
+        self.punch(std::iter::empty());
+        Some(relayed)
+    }
+
     /// A new phone candidate: punch to it, and permit it on our relay if we have one.
     pub fn add_cand(self: &Arc<Self>, a: SocketAddr) {
         self.punch([a]);
