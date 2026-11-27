@@ -151,7 +151,12 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   4.2.0-r18: pool of 1 again, and the one hardware frame is taken once and sent for every picture
   (Sunshine's way), so QSV's held reference no longer blocks the next frame. Loopback test passed on
   NIGG10 with ffmpeg-nvenc (same bridge code). Owner rejects Media Foundation as an encoder, even as
-  a fallback. Not yet tried on the T480.
+  a fallback. Owner confirmed r18 streams from the T480 (NIGG10 client, LAN).
+- r18 T480 stream: occasional black flicker; host log shows no encode failures, but the client
+  reports 12-29% loss on the LAN (rtt 2-16 ms). Cause of the flicker not found yet.
+- 4.2.0-r19: stream menu on desktop and Android: Mute audio at the top (desktop: under the window
+  toggle), Share clipboard only in Settings, Stream stats opens a page with Show stats bar and the
+  audio details (the old Audio page). Desktop: closing the window during a stream disconnects it.
 
 ## Account service: self-hosted since 2026-11-21
 
