@@ -3,6 +3,7 @@ pub mod agent;
 pub mod account;
 pub mod account_link;
 pub mod audio;
+pub mod bitrate;
 pub mod files;
 pub mod guest_grant;
 pub mod guest_policy;

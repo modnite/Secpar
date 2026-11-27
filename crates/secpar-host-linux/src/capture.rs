@@ -419,6 +419,21 @@ impl Capture {
             }
         }
     }
+    /// Changes the encoder's bitrate while it runs, and for any chain built after a size change.
+    pub fn set_bitrate(&mut self, kbps: u32) {
+        self.options.kbps = kbps;
+        let Some(encoder) = self.pipeline.by_name("encoder") else { return };
+        let Some(spec) = encoder.find_property("bitrate") else { return };
+        // openh264enc counts bits a second; the other encoders count kilobits.
+        let value = if self.encoder_name == "openh264enc" { kbps.saturating_mul(1000) } else { kbps };
+        let value = match spec.value_type() {
+            t if t == u32::static_type() => value.to_value(),
+            t if t == i32::static_type() => (value.min(i32::MAX as u32) as i32).to_value(),
+            t if t == u64::static_type() => (value as u64).to_value(),
+            _ => return,
+        };
+        encoder.set_property_from_value("bitrate", &value);
+    }
     pub fn request_keyframe(&self) {
         let event = gstreamer_video::UpstreamForceKeyUnitEvent::builder()
             .all_headers(true)

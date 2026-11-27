@@ -10,6 +10,7 @@ use crate::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use secpar_host_core::{
     agent::Outbox,
+    bitrate::Bitrate,
     proto::{ClientMsg, ServerMsg},
     Display,
 };
@@ -29,6 +30,10 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+/// REPORT plaintext: (lossPermille, rttMs), as the Windows host reads it.
+fn parse_report(p: &[u8]) -> Option<(u16, u16)> {
+    (p.len() >= 16).then(|| (u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[10], p[11]])))
+}
 fn header(typ: Type, frame_id: u32) -> Header {
     Header {
         typ,
@@ -47,6 +52,8 @@ struct Shared {
     seq: AtomicU32,
     stop: AtomicBool,
     idr: AtomicBool,
+    /// Bitrate the client's reports allow, kbps; the video thread applies it to the encoder.
+    kbps: AtomicU32,
     /// Phone candidates, punching window and our TURN allocation (shared with every host).
     link: Arc<Link>,
 }
@@ -222,11 +229,14 @@ impl Stream {
     ) -> Result<(Self, ServerMsg), String> {
         let (displays, current_display) = (options.displays.clone(), options.display.clone());
         let p = portal.clone();
+        // Starts below the client's cap and follows its reports, like the Windows host: a fixed rate
+        // above the path's upload queues up in the router and the picture falls seconds behind.
+        let bitrate = Bitrate::new(options.kbps, 0);
         let video_options = VideoOptions {
             width: options.width,
             height: options.height,
             fps: options.fps,
-            kbps: options.kbps,
+            kbps: bitrate.target().kbps,
             codecs: options.codecs,
             encoder: options.encoder,
             preset: options.preset,
@@ -260,6 +270,7 @@ impl Stream {
             seq: AtomicU32::new(0),
             stop: AtomicBool::new(false),
             idr: AtomicBool::new(true),
+            kbps: AtomicU32::new(bitrate.target().kbps),
             link: Arc::new(Link::new()),
         });
         // Before the receive thread starts: STUN reads its answer from this socket. The router
@@ -313,6 +324,7 @@ impl Stream {
         });
         let rx_shared = shared.clone();
         let rx_input = input.clone();
+        let mut bitrate = bitrate;
         std::thread::spawn(move || {
             let mut buf = [0u8; 2048];
             let mut seen = None::<u64>;
@@ -372,6 +384,13 @@ impl Stream {
                     Type::Idr => {
                         rx_shared.idr.store(true, Ordering::Relaxed);
                     }
+                    Type::Report => {
+                        if let Some((loss, rtt)) = parse_report(&p) {
+                            if let Some(t) = bitrate.on_report(begun.elapsed(), loss, rtt) {
+                                rx_shared.kbps.store(t.kbps, Ordering::Relaxed);
+                            }
+                        }
+                    }
                     Type::Bye => break,
                     _ => {}
                 }
@@ -410,6 +429,7 @@ impl Stream {
             // session open with a picture that never moves.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                 let mut id = 0u32;
+                let mut kbps = video_shared.kbps.load(Ordering::Relaxed);
                 while !video_shared.stop.load(Ordering::Relaxed) {
                     if video_gate.as_ref().is_some_and(|g| !g.view()) {
                         break;
@@ -426,6 +446,12 @@ impl Stream {
                             video_out.send(ServerMsg::StreamReady { chroma: capture.packed().then(|| "444".into()), codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
                             video_shared.idr.store(true, Ordering::Relaxed);
                         }
+                    }
+                    let wanted = video_shared.kbps.load(Ordering::Relaxed);
+                    if wanted != kbps {
+                        kbps = wanted;
+                        capture.set_bitrate(kbps);
+                        eprintln!("secpar: bitrate {kbps} kbps");
                     }
                     if video_shared.idr.swap(false, Ordering::Relaxed) {
                         capture.request_keyframe();
@@ -772,7 +798,7 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), ["plug 1", "update 1 4096 255", "unplug 1"], "id 9 is out of range and ignored");
     }
     fn synthetic_shared()->Arc<Shared> {
-        Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false),link:Arc::new(Link::new())})
+        Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false),kbps:AtomicU32::new(12_000),link:Arc::new(Link::new())})
     }
     /// The receive loop's job for a relay: the TURN server's answers go to the link.
     fn serve_relay_answers(shared: &Arc<Shared>) {

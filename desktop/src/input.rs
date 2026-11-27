@@ -111,7 +111,7 @@ impl Input {
         if !self.enabled {
             return vec![];
         }
-        if self.hooked && matches!(event, Event::Copy | Event::Cut | Event::Paste(_) | Event::Key { .. }) {
+        if self.hooked && matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
             return vec![];
         }
         match event {
@@ -128,6 +128,11 @@ impl Input {
                 let Some(vk) = vk(physical_key.unwrap_or(*key)) else {
                     return vec![];
                 };
+                // Keys the hook takes never reach the window. One that does while the hook is up was let
+                // through by it (it was tripping), and still belongs to the host unless it is a local one.
+                if self.hooked && u16::try_from(vk).is_ok_and(|vk| crate::keys::route(vk) == crate::keys::Route::Local) {
+                    return vec![];
+                }
                 // A held key repeats on the host as it does here (Windows hosts do not repeat injected keys).
                 if *repeat {
                     return if *pressed && self.held.contains(&vk) { vec![json!({"t":"key","vk":vk,"down":true})] } else { vec![] };
@@ -385,7 +390,8 @@ mod tests {
         assert_eq!(handed.len(),1);
         assert_eq!(handed[0]["down"],false,"window-path keys are lifted when the hook takes over");
         let key=Event::Key{key:Key::A,physical_key:Some(Key::A),pressed:true,repeat:false,modifiers:Modifiers::default()};
-        assert!(input.event(&key).is_empty());
+        // The hook swallows what it takes, so a key that still reaches the window was let through by it.
+        assert_eq!(input.event(&key).len(),1,"a key the hook let through still goes to the host");
         assert!(input.event(&Event::Copy).is_empty());
         assert!(input.modifiers(Modifiers{ctrl:true,..Default::default()}).is_empty());
         let click=Event::PointerButton{pos:eframe::egui::pos2(1.,1.),button:PointerButton::Primary,pressed:true,modifiers:Modifiers::default()};

@@ -785,7 +785,10 @@ impl App {
             for outcome in hook.take_outcomes() {
                 match outcome {
                     keyhook::Outcome::Escape(action) => self.escape(ctx, action),
-                    keyhook::Outcome::Stalled | keyhook::Outcome::FocusLost => remove = true,
+                    keyhook::Outcome::Stalled | keyhook::Outcome::FocusLost => {
+                        secpar_client::connlog::note("keys", "keys", &format!("hook {outcome:?}"), 0);
+                        remove = true
+                    }
                 }
             }
             if remove || !self.stream_active() {
