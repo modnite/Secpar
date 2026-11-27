@@ -4007,6 +4007,9 @@ version = "0.1.0"
 dependencies = [
  "log",
  "ring",
+ "tokio",
+ "tokio-rustls",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
