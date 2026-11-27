@@ -147,6 +147,11 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   stopped the receive loop: no relay answers, 0 TLS frames). 4.2.0-r17: QSV pool of 4; encode
   errors are logged and the encoder reopened (stream ends after 4 in a row, logged); the chosen
   encoder is logged at each open. Not yet tried on the T480.
+- r17 on the T480: "FFmpeg: Unknown error occurred (-1313558101)" at connect: QSV refuses a pool of 4.
+  4.2.0-r18: pool of 1 again, and the one hardware frame is taken once and sent for every picture
+  (Sunshine's way), so QSV's held reference no longer blocks the next frame. Loopback test passed on
+  NIGG10 with ffmpeg-nvenc (same bridge code). Owner rejects Media Foundation as an encoder, even as
+  a fallback. Not yet tried on the T480.
 
 ## Account service: self-hosted since 2026-11-21
 

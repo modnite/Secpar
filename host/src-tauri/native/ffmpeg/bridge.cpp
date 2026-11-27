@@ -24,10 +24,13 @@ struct Encoder {
     AVBufferRef* device = nullptr;
     AVPacket* packet = nullptr;
     ComPtr<ID3D11DeviceContext> context;
+    // The one hardware frame, taken from the pool once and sent again for every picture.
+    AVFrame* frame = nullptr;
+    AVFrame* mapped = nullptr;
     bool qsv = false;
     bool relaxed_rate_control = false;
     unsigned fps = 0;
-    ~Encoder() { av_packet_free(&packet); avcodec_free_context(&codec); av_buffer_unref(&device); }
+    ~Encoder() { av_frame_free(&mapped); av_frame_free(&frame); av_packet_free(&packet); avcodec_free_context(&codec); av_buffer_unref(&device); }
     int open(ID3D11Device* dev, const char* backend, unsigned format, unsigned w,
              unsigned h, unsigned rate, unsigned kbps, unsigned quality, bool fallback = false) {
         if (!dev || !backend || !w || !h || !rate || !kbps || format > 2 ||
@@ -79,11 +82,10 @@ struct Encoder {
         auto* frames = reinterpret_cast<AVHWFramesContext*>(codec->hw_frames_ctx->data);
         frames->format = codec->pix_fmt; frames->sw_format = AV_PIX_FMT_NV12;
         frames->width = w; frames->height = h;
-        // D3D11: a single render-target texture backs the hardware frames (NV12 array textures
-        // without decoder binding are rejected by D3D11 drivers). QSV keeps each input surface
-        // until the next frame is sent, so one surface leaves nothing for that next frame: its
-        // pool is a decoder-bound array with room to spare.
-        frames->initial_pool_size = qsv ? 4 : 1;
+        // A single render-target texture backs the hardware frames.
+        // NV12 array textures without decoder binding are rejected by D3D11 drivers, and QSV
+        // refuses a larger pool. The one frame is taken once and reused (see `send`).
+        frames->initial_pool_size = 1;
         if (!qsv) {
             auto* textures=static_cast<AVD3D11VAFramesContext*>(frames->hwctx);
             textures->BindFlags=D3D11_BIND_RENDER_TARGET;
@@ -123,20 +125,25 @@ struct Encoder {
     }
     int send(ID3D11Texture2D* texture, uint64_t stamp, bool key) {
         if (!texture || stamp > INT64_MAX) return AVERROR(EINVAL);
-        AVFrame* frame = av_frame_alloc();
-        AVFrame* mapped = nullptr;
-        if (!frame) return AVERROR(ENOMEM);
-        int status = av_hwframe_get_buffer(codec->hw_frames_ctx,frame,0);
-        AVFrame* gpu = frame;
-        if (status >= 0 && qsv) {
-            mapped = av_frame_alloc();
-            if (!mapped) status = AVERROR(ENOMEM);
-            else {
-                mapped->format = AV_PIX_FMT_D3D11;
-                status = av_hwframe_map(mapped,frame,AV_HWFRAME_MAP_WRITE | AV_HWFRAME_MAP_OVERWRITE);
-                gpu = mapped;
+        // QSV keeps a reference to each input frame until the next one is sent, so taking a new
+        // frame from the one-surface pool every time failed on the second picture. Like
+        // Sunshine, take the frame once and send it again for every picture.
+        int status = 0;
+        if (!frame) {
+            frame = av_frame_alloc();
+            if (!frame) return AVERROR(ENOMEM);
+            status = av_hwframe_get_buffer(codec->hw_frames_ctx,frame,0);
+            if (status >= 0 && qsv) {
+                mapped = av_frame_alloc();
+                if (!mapped) status = AVERROR(ENOMEM);
+                else {
+                    mapped->format = AV_PIX_FMT_D3D11;
+                    status = av_hwframe_map(mapped,frame,AV_HWFRAME_MAP_WRITE | AV_HWFRAME_MAP_OVERWRITE);
+                }
             }
+            if (status < 0) { av_frame_free(&mapped); av_frame_free(&frame); return status; }
         }
+        AVFrame* gpu = qsv ? mapped : frame;
         if (status >= 0) {
             auto* destination = reinterpret_cast<ID3D11Texture2D*>(gpu->data[0]);
             if (!destination) status = AVERROR(EINVAL);
@@ -149,7 +156,6 @@ struct Encoder {
                 status = avcodec_send_frame(codec,frame);
             }
         }
-        av_frame_free(&mapped); av_frame_free(&frame);
         return status;
     }
 };
