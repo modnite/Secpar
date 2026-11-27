@@ -113,6 +113,14 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   revision, so the app opened the interactive installer; fixed (hosts on r9 or older still get it
   once). Hardware decode falls back only after two slow seconds (T480 4:4:4 1080p60 fell to software
   at 6-14 fps). Android's input is the standard for all clients (owner).
+- 4.2.0-r11: the Windows client draws D3D11-decoded frames from the GPU (video/dxgl.rs splits NV12
+  into R8/RG8 textures; gpu.rs samples them through WGL_NV_DX_interop2; copy-back stays as fallback).
+  Seen working on NIGG10 (NVIDIA) streaming the T480 at 1080p 4:4:4: stats read "drawn from the
+  GPU". Not yet tried on the T480's Intel graphics. Found: NIGG10 streaming the T480 at work drops
+  after about 2 s of direct video; the client allocates a relay and sends stream.cand, but the
+  T480's host never answers with its relayed address, so the stream ends after 15 s. r11's Windows
+  host logs each relay step; read the T480's host log next. The Windows host has no TURN-over-TLS
+  fallback (the client and Linux host only try UDP to the relay too on the host side).
 
 ## Account service: self-hosted since 2026-11-21
 
