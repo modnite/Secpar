@@ -129,6 +129,17 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   the office blocks UDP to the relay. 4.2.0-r14: Windows and Linux hosts fall back to the same relay
   over TLS (turns: entry, port 443); the TLS link moved to secpar-network (feature "tls"), frames reach
   the stream socket through loopback. Checked against Cloudflare over TLS; not yet tried at the office.
+- r14 on the T480 at the office: "trying TLS" then "turn: allocation failed" within a second, no
+  request error, so no answer reached the request through the loopback hand-off (works on NIGG10).
+  4.2.0-r15: the relay's answers go straight to the waiting request (client's way); only relayed
+  stream packets use loopback. Logs "TLS connected to", and "N frames came back over TLS" on failure.
+- r15 on the T480: "TLS connected", then 0 frames. A PowerShell probe on the T480 at the office got
+  answers from the relay over UDP 3478, TCP 3478 and TLS 443/5349: the office blocks nothing. Real
+  cause: the device's first PROBE arrived directly, then its direct path died; the host ends a stream
+  after 5 s of silence once the peer is known, and the device's relay candidate arrives about 3 s in,
+  so the host's relay setup ran into the shutdown (and the stopped stream dropped the TLS link).
+  4.2.0-r16: `Link::searching()` (a candidate inside the punch window, or a relay setup running) keeps
+  the Windows and Linux receive loops open. Not yet tried at the office.
 
 ## Account service: self-hosted since 2026-11-21
 

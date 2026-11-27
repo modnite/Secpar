@@ -26,6 +26,24 @@ pub struct Link {
     gate: Mutex<Option<Instant>>,
     /// With TURN over TLS: the loopback address the relay's frames come from on the stream socket.
     tls_inbox: Mutex<Option<SocketAddr>>,
+    /// Relay setups in progress (UDP or TLS): the stream must outlive them.
+    setting_up: std::sync::atomic::AtomicUsize,
+}
+
+/// Counts a relay setup in progress for as long as it lives.
+struct SettingUp<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> SettingUp<'a> {
+    fn new(n: &'a std::sync::atomic::AtomicUsize) -> Self {
+        n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        SettingUp(n)
+    }
+}
+
+impl Drop for SettingUp<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl Link {
@@ -49,6 +67,13 @@ impl Link {
     /// Still looking for the phone: no authenticated PROBE yet (`peer_known` false) and inside the window.
     pub fn punching(&self, peer_known: bool) -> bool {
         !peer_known && self.punch_until.lock().unwrap().is_some_and(|t| Instant::now() < t)
+    }
+
+    /// The device is still offering ways in (a candidate inside the window, even after the first
+    /// PROBE) or a relay is being set up: a host must not end the stream for silence yet. A device
+    /// whose direct path dies after one PROBE offers its relay a few seconds later.
+    pub fn searching(&self) -> bool {
+        self.setting_up.load(std::sync::atomic::Ordering::SeqCst) > 0 || self.punch_until.lock().unwrap().is_some_and(|t| Instant::now() < t)
     }
 
     pub fn cands(&self) -> Vec<SocketAddr> {
@@ -117,6 +142,7 @@ impl Link {
         if self.turn().is_some() {
             return None;
         }
+        let _busy = SettingUp::new(&self.setting_up);
         self.allocate_on(sock, Arc::new(stopped), Turn::new(server, user, pass), diagnostics, None)
     }
 
@@ -138,6 +164,7 @@ impl Link {
         if self.turn().is_some() {
             return None;
         }
+        let _busy = SettingUp::new(&self.setting_up);
         let stopped: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(stopped);
         let target = SocketAddr::from(([127, 0, 0, 1], sock.local_addr().ok()?.port()));
         let inject = UdpSocket::bind("127.0.0.1:0").ok()?;
@@ -347,8 +374,14 @@ mod tests {
         assert_eq!(l.cands().len(), 1, "deduplicated");
         assert!(l.punching(false));
         assert!(!l.punching(true), "stops at the first authenticated PROBE");
+        assert!(l.searching(), "but a stream stays open while the device offers candidates");
         std::thread::sleep(Duration::from_millis(120));
         assert!(!l.punching(false), "window over");
+        assert!(!l.searching());
+        let busy = SettingUp::new(&l.setting_up);
+        assert!(l.searching(), "a relay being set up");
+        drop(busy);
+        assert!(!l.searching());
         l.punch((1..40).map(|p| sa(&format!("203.0.113.9:{p}"))), Duration::from_secs(1));
         assert_eq!(l.cands().len(), MAX_CANDS);
         assert!(l.punching(false), "a new candidate restarts the window");

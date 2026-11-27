@@ -343,6 +343,7 @@ impl Stream {
                 if begun.elapsed() > Duration::from_secs(10)
                     && last_rx.elapsed() > Duration::from_secs(5)
                     && !punching
+                    && !rx_shared.link.searching()
                 {
                     break;
                 }

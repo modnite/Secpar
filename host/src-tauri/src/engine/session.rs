@@ -264,7 +264,8 @@ fn probe(echo: u64) -> [u8; 16] {
     p
 }
 
-/// The receive loop: runs until BYE, `timeout` of silence (punching extends it), or `stop`.
+/// The receive loop: runs until BYE, `timeout` of silence (new candidates and relay setup extend
+/// it), or `stop`.
 pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, timeout: Duration) {
     let start = Instant::now();
     let (mut wait, mut next_punch) = (Duration::ZERO, start);
@@ -274,7 +275,7 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
     let mut buf = [0u8; 2048];
     loop {
         let punching = sh.punching();
-        if sh.stopped() || (last_rx.elapsed() >= timeout && !punching) {
+        if sh.stopped() || (last_rx.elapsed() >= timeout && !punching && !sh.link.searching()) {
             break;
         }
         let now = Instant::now();
