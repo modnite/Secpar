@@ -161,6 +161,15 @@ impl Tray {
     pub fn take_disconnect(&self) -> bool {
         self.disconnect_asked.swap(false, Ordering::Relaxed)
     }
+    /// The window's close button (not Quit): keeps the window and reports it, without hiding.
+    pub fn cancel_close(&self, ctx: &Context) -> bool {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting.load(Ordering::Relaxed) {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            true
+        } else {
+            false
+        }
+    }
     pub fn hide_on_close(&self, ctx: &Context) -> bool {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting.load(Ordering::Relaxed) {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);

@@ -1274,8 +1274,13 @@ impl App {
         }
         self.updates.tick(ctx);
         self.updates.window(ctx, self.command.is_some());
+        // Closing the window during a stream ends the stream; the window stays. Otherwise it goes to the tray.
         #[cfg(any(windows, target_os = "linux"))]
-        if self
+        if self.command.is_some() && self.tray.as_ref().is_some_and(|tray| tray.cancel_close(ctx)) {
+            self.capture(ctx, false);
+            self.send(Command::Stop);
+            self.stream_menu_open = false;
+        } else if self
             .tray
             .as_ref()
             .is_some_and(|tray| tray.hide_on_close(ctx))
