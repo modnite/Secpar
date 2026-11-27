@@ -1,6 +1,6 @@
 [package]
 name = "secpar-host"
-version = "4.2.0-r14"
+version = "4.2.0-r15"
 description = "Secpar Host"
 edition = "2021"
 license = "GPL-3.0"

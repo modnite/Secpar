@@ -117,7 +117,7 @@ impl Link {
         if self.turn().is_some() {
             return None;
         }
-        self.allocate_on(sock, Arc::new(stopped), Turn::new(server, user, pass), diagnostics)
+        self.allocate_on(sock, Arc::new(stopped), Turn::new(server, user, pass), diagnostics, None)
     }
 
     /// [`Link::start_turn`] over TLS to `host:port`, for networks that block UDP to the relay
@@ -144,6 +144,11 @@ impl Link {
         let inbox = inject.local_addr().ok()?;
         let (tx, rx) = std::sync::mpsc::channel();
         let keep = stopped.clone();
+        // The relay's answers go straight to the waiting request; only relayed stream packets go
+        // through the stream socket's receive loop.
+        let slot: Arc<Mutex<Option<Arc<Turn>>>> = Arc::default();
+        let frames = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (slot_in, frames_in) = (slot.clone(), frames.clone());
         std::thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
                 let _ = tx.send(None);
@@ -151,7 +156,11 @@ impl Link {
             };
             rt.block_on(async move {
                 let deliver = move |b: &[u8]| {
-                    let _ = inject.send_to(b, target);
+                    frames_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let turn = slot_in.lock().unwrap().clone();
+                    if turn.is_some_and(|t| t.on_packet(b).is_some()) {
+                        let _ = inject.send_to(b, target);
+                    }
                 };
                 match crate::turn_tls::connect(&host, port, deliver).await {
                     Ok((link, addr)) => {
@@ -171,11 +180,22 @@ impl Link {
                 }
             });
         });
-        let (link, server) = rx.recv_timeout(Duration::from_secs(10)).ok()??;
+        let Ok(Some((link, server))) = rx.recv_timeout(Duration::from_secs(10)) else {
+            if let Some(d) = diagnostics {
+                d("turn: no TLS connection to the relay within 10 s");
+            }
+            return None;
+        };
+        if let Some(d) = diagnostics {
+            d(&format!("turn: TLS connected to {server}"));
+        }
         *self.tls_inbox.lock().unwrap() = Some(inbox);
-        let relayed = self.allocate_on(sock, stopped, Turn::new(server, user, pass).with_link(link), diagnostics);
+        let relayed = self.allocate_on(sock, stopped, Turn::new(server, user, pass).with_link(link), diagnostics, Some(slot));
         if relayed.is_none() {
             *self.tls_inbox.lock().unwrap() = None;
+            if let Some(d) = diagnostics {
+                d(&format!("turn: {} frames came back over TLS", frames.load(std::sync::atomic::Ordering::Relaxed)));
+            }
         }
         relayed
     }
@@ -186,11 +206,15 @@ impl Link {
         stopped: Arc<dyn Fn() -> bool + Send + Sync>,
         mut t: Turn,
         diagnostics: Option<fn(&str)>,
+        tls_slot: Option<Arc<Mutex<Option<Arc<Turn>>>>>,
     ) -> Option<SocketAddrV4> {
         if let Some(d) = diagnostics {
             t = t.with_diagnostics(d);
         }
         let t = Arc::new(t);
+        if let Some(slot) = tls_slot {
+            *slot.lock().unwrap() = Some(t.clone());
+        }
         *self.turn.lock().unwrap() = Some(t.clone()); // the receive loop now routes the server's answers to it
         let Some(relayed) = t.allocate(sock) else {
             *self.turn.lock().unwrap() = None;
@@ -285,6 +309,21 @@ mod tests {
 
     fn sa(s: &str) -> SocketAddr {
         s.parse().unwrap()
+    }
+
+    /// Network: over TLS, the relay answers the allocation (made-up credentials: refused).
+    #[cfg(feature = "tls")]
+    #[test]
+    #[ignore]
+    fn tls_relay_answers_the_allocation() {
+        static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let sock = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let link = Arc::new(Link::new());
+        let relayed = link.start_turn_tls(&sock, || false, "turn.cloudflare.com".into(), 443, "nobody".into(), "wrong".into(), Some(|m| SEEN.lock().unwrap().push(m.to_string())));
+        let seen = SEEN.lock().unwrap().clone();
+        assert!(relayed.is_none(), "made-up credentials");
+        assert!(seen.iter().any(|m| m.starts_with("turn: TLS connected")), "{seen:?}");
+        assert!(seen.iter().any(|m| m.starts_with("turn: request 0003 failed")), "the relay answered: {seen:?}");
     }
 
     #[test]
