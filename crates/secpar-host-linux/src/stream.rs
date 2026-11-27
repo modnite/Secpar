@@ -562,12 +562,20 @@ impl Stream {
             let Some(server) = relay() else { eprintln!("secpar: turn: the relay gave no credentials"); return };
             let weak = Arc::downgrade(&shared);
             let stopped = move || weak.upgrade().is_none_or(|s| s.stop.load(Ordering::Relaxed));
-            if let Some(relayed) = shared.link.start_turn(&shared.socket, stopped, server.addr, server.user, server.pass, None) {
+            let mut relayed = shared.link.start_turn(&shared.socket, stopped.clone(), server.addr, server.user.clone(), server.pass.clone(), None);
+            if relayed.is_none() {
+                // Offices often block UDP to the relay but leave TLS on 443 open.
+                eprintln!("secpar: turn: no allocation from {} over UDP; trying TLS", server.addr);
+                if let Some((host, port)) = server.tls.clone() {
+                    relayed = shared.link.start_turn_tls(&shared.socket, stopped, host, port, server.user, server.pass, None);
+                }
+            }
+            if let Some(relayed) = relayed {
                 eprintln!("secpar: turn: relayed at {relayed}, sent to the device");
                 shared.link.punch([], PUNCH_FOR);
                 out.send(ServerMsg::StreamCand { c: relayed.to_string() });
             } else {
-                eprintln!("secpar: turn: no allocation from {} (UDP to the relay blocked?)", server.addr);
+                eprintln!("secpar: turn: no allocation over UDP or TLS");
             }
         });
     }

@@ -8,7 +8,12 @@ publish = false
 [dependencies]
 ring = "0.17.14"
 log = "0.4"
+tokio = { version = "1.53.3", features = ["rt", "net", "io-util", "sync", "time", "macros"], optional = true }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 [features]
 # FakeServer for hosts testing their transport
 testing = []
+# TURN over TLS on 443, for networks that block UDP to the relay
+tls = ["dep:tokio", "dep:tokio-rustls", "dep:webpki-roots"]

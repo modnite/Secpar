@@ -338,16 +338,24 @@ impl Session for HostSession {
                     let (sh, store, out) = (s.shared(), self.store.clone(), self.out.clone());
                     std::thread::spawn(move || {
                         // Each step is logged: when the device's relay gets no answer, this says why.
-                        let Some((server, user, pass)) = crate::remote::turn_server(&store) else {
+                        let Some(server) = crate::remote::turn_server(&store) else {
                             crate::log::line("stream: no relay credentials for this PC");
                             return;
                         };
-                        match sh.start_turn(server, user, pass) {
+                        let mut relayed = sh.start_turn(server.addr, server.user.clone(), server.pass.clone());
+                        if relayed.is_none() {
+                            // Offices often block UDP to the relay but leave TLS on 443 open.
+                            crate::log::line(&format!("stream: no relay allocation from {} over UDP; trying TLS", server.addr));
+                            if let Some((host, port)) = server.tls.clone() {
+                                relayed = sh.start_turn_tls(host, port, server.user, server.pass);
+                            }
+                        }
+                        match relayed {
                             Some(r) => {
                                 crate::log::line(&format!("stream: relayed at {r}, sent to the device"));
                                 out.send(ServerMsg::StreamCand { c: r.to_string() });
                             }
-                            None => crate::log::line(&format!("stream: no relay allocation from {server} (UDP to the relay blocked?)")),
+                            None => crate::log::line("stream: no relay allocation over UDP or TLS"),
                         }
                     });
                 }

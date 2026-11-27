@@ -3889,7 +3889,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-desktop"
-version = "4.2.0-r13"
+version = "4.2.0-r14"
 dependencies = [
  "base64",
  "cpal",
@@ -3933,7 +3933,7 @@ dependencies = [
 
 [[package]]
 name = "secpar-host"
-version = "4.2.0-r13"
+version = "4.2.0-r14"
 dependencies = [
  "base64",
  "cc",
@@ -4007,6 +4007,9 @@ version = "0.1.0"
 dependencies = [
  "log",
  "ring",
+ "tokio",
+ "tokio-rustls",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

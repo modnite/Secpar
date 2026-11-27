@@ -121,6 +121,10 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   T480's host never answers with its relayed address, so the stream ends after 15 s. r11's Windows
   host logs each relay step; read the T480's host log next. The Windows host has no TURN-over-TLS
   fallback (the client and Linux host only try UDP to the relay too on the host side).
+- 4.2.0-r12/r13: Settings has one General tab (Account, About, Logs). Save logs copies connect.log and
+  the hosting log (Windows: service command `host_log`, newest 360 KB; Linux: Secpar lines from the
+  user journal) into "Secpar logs <time> UTC" in Downloads. Owner used it on NIGG10. Next: the same
+  from the T480 after a stream from NIGG10 dies.
 
 ## Account service: self-hosted since 2026-11-21
 

@@ -3,6 +3,8 @@ pub mod link;
 pub mod reach;
 pub mod stun;
 pub mod turn;
+#[cfg(feature = "tls")]
+pub mod turn_tls;
 pub mod upnp;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
