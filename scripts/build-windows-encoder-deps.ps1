@@ -28,10 +28,17 @@ $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/v
 $vs=& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if(!$vs){throw 'Visual Studio C++ build tools are required'}
 $environmentFile=Join-Path $CacheRoot 'msvc-env.cmd'
-[IO.File]::WriteAllText($environmentFile,('@echo off'+"`r`n"+'call "'+$vs+'\Common7\Tools\VsDevCmd.bat" -no_logo -arch=x64'+"`r`n"+'if errorlevel 1 exit /b %errorlevel%'+"`r`n"+'set'+"`r`n"))
+# VsDevCmd.bat calls vswhere.exe through PATH; its folder goes in under the short name, without brackets.
+$installer=(New-Object -ComObject Scripting.FileSystemObject).GetFolder((Split-Path $vswhere)).ShortPath
+# A clean PATH: an entry with quotes or brackets (common on a dev PC) breaks VsDevCmd.bat with
+# "\Microsoft was unexpected at this time".
+[IO.File]::WriteAllText($environmentFile,('@echo off'+"`r`n"+'set "PATH=%SystemRoot%\system32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell1.0\;'+$installer+'"'+"`r`n"+'call "'+$vs+'\Common7\Tools\VsDevCmd.bat" -no_logo -arch=x64'+"`r`n"+'if errorlevel 1 exit /b %errorlevel%'+"`r`n"+'set'+"`r`n"))
 $environmentLines=& cmd.exe /d /c $environmentFile
 if($LASTEXITCODE){throw 'Visual Studio environment setup failed'}
+$toolPath=$env:PATH
 foreach($line in $environmentLines){$pair=$line.Split('=',2);if($pair.Length -eq 2 -and $pair[0]){[Environment]::SetEnvironmentVariable($pair[0],$pair[1],'Process')}}
+# Visual Studio's tools first, then this shell's own (git, MSYS2) that the clean PATH left out.
+$env:PATH=$env:PATH+';'+$toolPath
 $env:MSYS2_PATH_TYPE='inherit'
 $prefix=Join-Path $CacheRoot 'ffmpeg-win-full'
 & cmake -S (Join-Path $CacheRoot 'libvpl') -B (Join-Path $CacheRoot 'vpl-build') -G Ninja -DCMAKE_BUILD_TYPE=MinSizeRel "-DCMAKE_INSTALL_PREFIX=$prefix" -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF -DUSE_MSVC_STATIC_RUNTIME=ON -DCMAKE_POLICY_DEFAULT_CMP0091=NEW '-DCMAKE_CXX_FLAGS_MINSIZEREL=/O1 /Ob1 /DNDEBUG' '-DCMAKE_C_FLAGS_MINSIZEREL=/O1 /Ob1 /DNDEBUG'
