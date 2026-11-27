@@ -59,16 +59,24 @@ enum Backend {
 /// is unusable (GPU removed, MFT fell back to system memory), so switch to software.
 #[derive(Debug,PartialEq)]
 enum DecodeError { Invalid, Dimensions, Device, Backpressure }
-struct DecodeBudget { limit:Duration, slow:u8 }
+/// Hardware decoding gives way to software only when it is slow for most of two seconds. Three slow
+/// frames in a row used to be enough: a laptop's GPU clocking up under the first large keyframes
+/// tripped it, and software then managed a fraction of the frames (6 to 14 of 60 on a ThinkPad T480).
+struct DecodeBudget { limit:Duration, recent:VecDeque<bool>, window:usize, warmup:u32 }
 impl DecodeBudget {
-    fn new(fps:u32)->Self {Self {limit:Duration::from_secs_f64(1.5/fps.clamp(1,240) as f64),slow:0}}
+    fn new(fps:u32)->Self {
+        let fps=fps.clamp(1,240);
+        Self {limit:Duration::from_secs_f64(1.5/fps as f64),recent:VecDeque::new(),window:(fps as usize*2).max(10),warmup:fps}
+    }
     fn set_rate(&mut self,fps:u32) {
-        let limit=Self::new(fps).limit;
-        if self.limit!=limit {self.limit=limit;self.slow=0;}
+        let fresh=Self::new(fps);
+        if self.limit!=fresh.limit {*self=Self {warmup:0,..fresh};}
     }
     fn exceeded(&mut self,elapsed:Duration)->bool {
-        self.slow=if elapsed>self.limit {self.slow.saturating_add(1)}else{0};
-        self.slow>=3
+        if self.warmup>0 {self.warmup-=1;return false;}
+        self.recent.push_back(elapsed>self.limit);
+        if self.recent.len()>self.window {self.recent.pop_front();}
+        self.recent.len()==self.window && self.recent.iter().filter(|s|**s).count()*4>=self.window*3
     }
 }
 impl Backend {
@@ -397,23 +405,23 @@ mod tests {
     #[test]
     fn rate_negotiation_changes_the_budget_without_preserving_an_old_slow_run() {
         let mut budget=DecodeBudget::new(60);
-        for _ in 0..2 {assert!(!budget.exceeded(Duration::from_millis(35)));}
+        for _ in 0..200 {assert!(!budget.exceeded(Duration::from_millis(5)));}
+        for _ in 0..100 {budget.exceeded(Duration::from_millis(35));}
         budget.set_rate(30);
-        for _ in 0..10 {assert!(!budget.exceeded(Duration::from_millis(35)));}
+        for _ in 0..59 {assert!(!budget.exceeded(Duration::from_millis(35)),"35 ms fits 30 fps");}
         budget.set_rate(60);
-        for _ in 0..2 {assert!(!budget.exceeded(Duration::from_millis(35)));}
+        for _ in 0..119 {assert!(!budget.exceeded(Duration::from_millis(35)),"a new rate starts a new window");}
         assert!(budget.exceeded(Duration::from_millis(35)));
     }
     #[test]
-    fn hardware_budget_ignores_a_single_spike_but_rejects_sustained_slow_decode() {
+    fn hardware_budget_rides_out_a_slow_start_but_rejects_sustained_slow_decode() {
         let mut budget=DecodeBudget::new(60);
-        assert!(!budget.exceeded(Duration::from_millis(500)));
-        assert!(!budget.exceeded(Duration::from_millis(5)));
-        assert!(!budget.exceeded(Duration::from_millis(100)));
-        assert!(!budget.exceeded(Duration::from_millis(100)));
-        assert!(budget.exceeded(Duration::from_millis(100)));
-        let mut lower_rate=DecodeBudget::new(30);
-        for _ in 0..10 {assert!(!lower_rate.exceeded(Duration::from_millis(30)));}
+        // The first second, and then short slow spells, never switch the decoder.
+        for _ in 0..60 {assert!(!budget.exceeded(Duration::from_millis(100)));}
+        for i in 0..600 {assert!(!budget.exceeded(Duration::from_millis(if i%4==0 {100} else {5})));}
+        let mut slow=DecodeBudget::new(60);
+        let switched=(0..400).position(|_|slow.exceeded(Duration::from_millis(40)));
+        assert_eq!(switched,Some(60+119),"two seconds of slow decoding after the first");
     }
     fn frame(id:u32,key:bool) -> VideoFrame {
         VideoFrame { id, header:FrameHeader {len:1,capture_us:0,keyframe:key,codec:Codec::H264},data:vec![0] }

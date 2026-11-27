@@ -213,6 +213,7 @@ mod tests {
 
     #[test]
     fn vets_a_newer_stable_release() {
+        assert!(vet(&feed("v4.2.0-r10"), "v4.2.0-r10", "4.2.0-r9").is_ok(), "a revision installs silently");
         let got = vet(&feed("v3.16.1"), "v3.16.1", "3.16.0").unwrap();
         assert_eq!(got.sha256, "ab".repeat(32));
         assert_eq!(got.url, "https://github.com/modnite/Secpar/releases/download/v3.16.1/Secpar-Windows-x64-setup.exe");

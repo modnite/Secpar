@@ -31,8 +31,21 @@ pub fn rank_ips(mut ips: Vec<(Ipv4Addr, bool)>) -> Vec<String> {
     ips.into_iter().filter(|(ip, _)| seen.insert(*ip)).map(|(ip, _)| ip.to_string()).take(MAX_ADDRESSES).collect()
 }
 
-fn version(v: &str) -> Option<Vec<u64>> {
-    v.trim_start_matches('v').split('.').map(|p| p.parse().ok()).collect()
+/// `4.2.0-r9` is revision 9 of 4.2.0: after 4.2.0 and every earlier revision, before 4.2.1. Read as
+/// plain dotted numbers it did not parse, so the service refused every revision as "not newer" and
+/// the app fell back to the interactive installer, which a remote user cannot get through.
+fn version(v: &str) -> Option<(Vec<u64>, u64)> {
+    let v = v.trim_start_matches('v');
+    let (base, revision) = match v.split_once("-r") {
+        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => (base, n.parse().ok()?),
+        _ => (v, 0),
+    };
+    let mut parts: Vec<u64> = base.split('.').map(|p| p.parse().ok()).collect::<Option<_>>()?;
+    // 2.0 and 2.0.0 are the same release.
+    while parts.len() < 3 {
+        parts.push(0);
+    }
+    Some((parts, revision))
 }
 
 pub fn is_newer(latest: &str, current: &str) -> bool {
@@ -412,5 +425,12 @@ mod tests {
         assert!(!is_newer("v1.0.0", "1.0.0"));
         assert!(!is_newer("0.9.0", "1.0.0"));
         assert!(!is_newer("garbage", "1.0.0"));
+        assert!(is_newer("v4.2.0-r9", "4.2.0-r8"));
+        assert!(is_newer("v4.2.0-r10", "4.2.0-r9"));
+        assert!(is_newer("v4.2.0-r1", "4.2.0"));
+        assert!(is_newer("v4.2.1", "4.2.0-r9"));
+        assert!(!is_newer("v4.2.0-r8", "4.2.0-r9"));
+        assert!(!is_newer("v4.2.0", "4.2.0-r1"));
+        assert!(!is_newer("v4.2.0-rc", "4.2.0"));
     }
 }

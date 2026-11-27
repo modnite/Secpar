@@ -15,8 +15,6 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-/// What the Windows host puts in `dwExtraInfo` of the keys it injects (host/src-tauri/src/input.rs).
-const INJECTED_BY_SECPAR: usize = 0x5EC9_A400;
 /// Without a heartbeat for this long the hook lets every key through.
 pub const STALL: Duration = Duration::from_secs(2);
 /// How often the window thread must beat while the hook is up.
@@ -94,9 +92,19 @@ impl Active {
 fn key(vk: u16, down: bool) -> Value {
     json!({"t":"key","vk":vk,"down":down})
 }
+/// Whether the keyboard is still this app's. Any window of this process counts: comparing with the
+/// one window handle tripped the hook on a T480 at every key, which then reached the window path
+/// without Shift or Ctrl.
 fn is_foreground(hwnd: usize) -> bool {
-    // SAFETY: plain query.
-    unsafe { GetForegroundWindow() as usize == hwnd }
+    // SAFETY: plain queries.
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg as usize == hwnd {
+            return true;
+        }
+        let mut pid = 0u32;
+        !fg.is_null() && GetWindowThreadProcessId(fg, &mut pid) != 0 && pid == std::process::id()
+    }
 }
 
 static HOOK: Mutex<Option<Active>> = Mutex::new(None);
@@ -117,11 +125,9 @@ fn handle(message: u32, info: &KBDLLHOOKSTRUCT) -> bool {
     if !down && !matches!(message, WM_KEYUP | WM_SYSKEYUP) {
         return false;
     }
-    // Keys injected by other software count as typing here: some laptops' keyboard and hotkey drivers
-    // re-inject every key, as do remapping tools and on-screen keyboards. Left alone, they reached the
-    // window, which drops keys while the hook is up, so nothing got to the host and Win opened Start.
-    // Only keys a Secpar host on this computer injected for its own remote user pass by.
-    if info.flags & LLKHF_INJECTED != 0 && info.dwExtraInfo == INJECTED_BY_SECPAR || info.vkCode > 0xFF {
+    // Input injected by other software stays here: a laptop's Fn functions (brightness, airplane mode,
+    // settings) arrive as injected keys, as do on-screen keyboards and remote tools.
+    if info.flags & LLKHF_INJECTED != 0 || info.vkCode > 0xFF {
         return false;
     }
     // Never wait for the window thread: a held lock means pass the key through.
@@ -335,9 +341,6 @@ mod tests {
     fn info(vk: u32, flags: u32) -> KBDLLHOOKSTRUCT {
         KBDLLHOOKSTRUCT { vkCode: vk, scanCode: 0, flags, time: 0, dwExtraInfo: 0 }
     }
-    fn from_secpar(vk: u32) -> KBDLLHOOKSTRUCT {
-        KBDLLHOOKSTRUCT { vkCode: vk, scanCode: 0, flags: 0x10, time: 0, dwExtraInfo: INJECTED_BY_SECPAR }
-    }
 
     /// Installs the real hook, then drives the callback body with synthetic events. The
     /// system callback is never called with them, so no other hook in the chain and no
@@ -365,13 +368,11 @@ mod tests {
         assert!(handle(WM_SYSKEYDOWN, &info(0x09, 0x20)), "Alt+Tab swallowed");
         assert!(handle(WM_SYSKEYUP, &info(0x09, 0xA0)));
         assert!(handle(WM_KEYDOWN, &info(0x5B, 1)), "Win swallowed");
-        assert!(!handle(WM_KEYDOWN, &from_secpar(0x42)), "a Secpar host's own injected key is left alone");
-        assert!(handle(WM_KEYDOWN, &info(0x41, 0x10)), "a key a driver re-injected goes to the host");
-        assert!(handle(WM_KEYUP, &info(0x41, 0x90)));
+        assert!(!handle(WM_KEYDOWN, &info(0x41, 0x10)), "injected input (a laptop's Fn functions) stays here");
         assert!(!handle(WM_KEYDOWN, &info(0xAF, 0)), "volume stays local");
         assert!(!handle(WM_KEYDOWN, &info(0x100, 0)));
         assert!(!handle(WM_CHAR, &info(0x41, 0)));
-        assert_eq!(pairs(&log), vec![(0xA4, true), (0x09, true), (0x09, false), (0x5B, true), (0x41, true), (0x41, false)]);
+        assert_eq!(pairs(&log), vec![(0xA4, true), (0x09, true), (0x09, false), (0x5B, true)]);
 
         heartbeat();
         drop(hook);

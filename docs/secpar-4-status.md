@@ -99,6 +99,13 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   and Win opens the local Start menu; choppy picture and sound with macroblock pulses to NIGG10
   (NVENC host, so client or network side); about one second of delay to Bryan. Bryan's bed PC is
   unreachable on the LAN since r7; its ufw allows only KDE Connect and 22 (needs 48999/tcp).
+- 4.2.0-r9 (2026-11-27), untried: the Windows client's hook now takes keys injected by other
+  software (only keys a Secpar host marks with dwExtraInfo 0x5EC9A400 pass), and the window path
+  forwards keys the hook let through; hook trips log a `keys` line. Linux hosts follow the client's
+  REPORTs with the Windows host's controller (now `secpar-host-core::bitrate`). The owner clarified:
+  the one-second delay was to Bryan's Windows desktop, Bryan's ufw is off, and bryan-bed-pc has not
+  connected at all since r7 (control connects, no stream packets, no `turn:` lines). Next: the T480's
+  stream stats (decoder, decoded/drawn fps, ping, loss, bitrate) to NIGG10.
 
 ## Account service: self-hosted since 2026-11-21
 
