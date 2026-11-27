@@ -106,6 +106,13 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   the one-second delay was to Bryan's Windows desktop, Bryan's ufw is off, and bryan-bed-pc has not
   connected at all since r7 (control connects, no stream packets, no `turn:` lines). Next: the T480's
   stream stats (decoder, decoded/drawn fps, ping, loss, bitrate) to NIGG10.
+- r9 on the T480 (owner, 2026-11-27): letters type, Shift and combinations did not, and Fn functions
+  went to the host. So the hook was tripping, not meeting injected keys. 4.2.0-r10: the hook's focus
+  check accepts any window of this process; the window path sends modifiers and copy/paste too;
+  injected keys stay local again. The service read `-rN` versions as unparsable and refused every
+  revision, so the app opened the interactive installer; fixed (hosts on r9 or older still get it
+  once). Hardware decode falls back only after two slow seconds (T480 4:4:4 1080p60 fell to software
+  at 6-14 fps). Android's input is the standard for all clients (owner).
 
 ## Account service: self-hosted since 2026-11-21
 
