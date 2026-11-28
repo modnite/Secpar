@@ -11,8 +11,13 @@ fn row(ui:&mut egui::Ui,kind:Icon,label:&str,value:&str,arrow:bool,checked:bool,
     if response.hovered() || response.has_focus(){ui.painter().rect_filled(rect,3.,Color32::from_white_alpha(12));}
     let color=if danger {RED}else{TEXT};
     icon(ui,kind,Rect::from_min_size(rect.min+egui::vec2(9.,7.),egui::vec2(20.,20.)),color);
-    ui.painter().text(Pos2::new(rect.left()+39.,rect.center().y),Align2::LEFT_CENTER,label,FontId::proportional(14.),color);
     let right=rect.right()-12.;
+    let value_width=if value.is_empty(){0.}else{ui.painter().layout_no_wrap(value.to_string(),FontId::proportional(12.),MUTED).size().x+8.};
+    let end=right-value_width-if arrow||checked {24.}else{0.};
+    let mut job=egui::text::LayoutJob::simple_singleline(label.to_string(),FontId::proportional(14.),color);
+    job.wrap=egui::text::TextWrapping::truncate_at_width((end-rect.left()-39.).max(20.));
+    let galley=ui.painter().layout_job(job);
+    ui.painter().galley(Pos2::new(rect.left()+39.,rect.center().y-galley.size().y/2.),galley,color);
     if checked || arrow {
         icon(ui,if checked {Icon::Check}else{Icon::Chevron},Rect::from_center_size(
             egui::pos2(right-6.,rect.center().y),egui::vec2(18.,18.)),if checked {design::ACCENT}else{MUTED});
@@ -99,6 +104,8 @@ impl App {
             .fixed_pos(egui::pos2(60.,if strip {34.}else{12.})).show(ctx,|ui|{
                 egui::Frame::new().fill(Color32::from_rgba_unmultiplied(25,27,29,246)).corner_radius(5).inner_margin(6).show(ui,|ui|{
                     ui.set_width(250.);ui.spacing_mut().item_spacing.y=0.;
+                    // Scroll bars beside the rows, not over them.
+                    ui.spacing_mut().scroll=egui::style::ScrollStyle::solid();
                     if self.menu_page==0 {
                         if row(ui,if self.fs.on {Icon::Windowed}else{Icon::Window},if self.fs.on {"Window"}else{"Fullscreen"},&self.client.escape.chord(keys::Escape::Fullscreen),false,false,false).clicked(){self.set_fullscreen(ctx,!self.fs.on);}
                         if self.client.audio {

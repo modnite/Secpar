@@ -465,6 +465,11 @@ impl App {
             app.show_stream_stats=std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("stats"));
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("resolution")) {app.menu_page=4;}
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("audio")) {app.menu_page=3;}
+            if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("displays")) {
+                app.menu_page=2;
+                app.displays=(1..=4).map(|i|(i.to_string(),format!("Screen {i} (1366×768)"))).chain([("portal".into(),"Another screen (choose it on this computer)".into())]).collect();
+                app.computer=Some(secpar_client::control::Computer{id:"review".into(),name:"Review".into(),hosts:vec![],port:0,fingerprint:[0;32],token:String::new(),relay:None});
+            }
             if std::env::var("SECPAR_REVIEW_PAGE").is_ok_and(|p|p.contains("waiting")) {app.stream_stats=None;}
             if let Some(path)=std::env::var_os("SECPAR_REVIEW_STREAM") {
                 // Recorded host frames through the real decode worker, GL shader and stats strip.
