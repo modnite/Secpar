@@ -102,7 +102,7 @@ pub struct Stream {
     portal: Arc<Portal>,
     out: Outbox,
     relay: Option<RelayProvider>,
-    mapped: Option<secpar_network::upnp::Mapped>,
+    mapped: Option<secpar_network::reach::Mapped>,
     /// A size the client asked for (`stream.size`), picked up by the video thread.
     resize: Arc<Mutex<Option<(u32, u32)>>>,
 }

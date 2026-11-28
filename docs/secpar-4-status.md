@@ -180,6 +180,15 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   at or above 25 ms count as congestion (cut x0.85, as for queueing RTT) and a report above the line
   holds off raises. Hosts log it in the bitrate line. Stream menu labels elide and its scroll bar
   sits beside the rows (the Displays page overflowed in a 375x400 window on the X250 host).
+- 4.2.0-r23 (item 3, first half): NAT-PMP (`secpar_network::natpmp`, RFC 6886) when no UPnP
+  router answers: Windows host maps its agent and stream ports through it (renewed hourly, 2 h
+  lifetime), per-stream hosts (Linux, `reach::gather`) map the stream port (4 h, removed at the
+  end). Gateway from GetBestRoute / /proc/net/route. NIGG10's router (192.168.100.1) does not speak
+  NAT-PMP, so only the fake-router test covers the mapping. Still to do: time direct vs relay and
+  keep the faster path (item 3b), Direct3D drawing (item 4), NIGG10 black flicker.
+- Known failing test, not caused by recent work: secpar-network
+  `link::tests::relayed_peers_get_wrapped_replies_and_the_rate_gate` fails on NIGG10 at r16 too
+  (the reply after the permit never reaches the fake server within 100 ms).
 
 ## Account service: self-hosted since 2026-11-21
 
