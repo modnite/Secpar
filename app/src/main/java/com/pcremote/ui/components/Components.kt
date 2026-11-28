@@ -12,8 +12,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -77,10 +79,16 @@ private val ButtonMinWidth = 144.dp
 private fun ButtonFace(text: String, onClick: () -> Unit, modifier: Modifier, enabled: Boolean, @DrawableRes icon: Int?,
     fill: Color, content: Color, border: Color?, compact: Boolean = false) {
     val shape = MidnightShapes.control
+    val c = LocalMidnight.current
+    val interaction = remember { MutableInteractionSource() }
+    // A remote or keyboard needs a visible focus: a ring in the accent, or in the text colour on the
+    // accent-filled button, where the accent ring and the default overlay both disappear (Chromecast).
+    val focused by interaction.collectIsFocusedAsState()
+    val ring = if (focused) (if (fill == c.accent) c.text else c.accent) else border
     Row(
         modifier.minimumInteractiveComponentSize().defaultMinSize(minWidth = if (compact) 0.dp else ButtonMinWidth, minHeight = ButtonHeight)
-            .clip(shape).background(fill).then(if (border != null) Modifier.border(1.dp, border, shape) else Modifier)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .clip(shape).background(fill).then(if (ring != null) Modifier.border(if (focused) 2.dp else 1.dp, ring, shape) else Modifier)
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically,
     ) {

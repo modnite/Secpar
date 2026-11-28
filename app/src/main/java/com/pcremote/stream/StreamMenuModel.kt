@@ -1,7 +1,7 @@
 package com.pcremote.stream
 
 /** Pages of the stream menu. */
-enum class MenuPage { MAIN, KEYS, MEDIA, DISPLAYS, RESOLUTION, STATS }
+enum class MenuPage { MAIN, DISPLAYS, RESOLUTION, STATS }
 
 /** Rows of the main page, in the order they are shown. */
 enum class MenuRow(val label: String) {
@@ -12,7 +12,6 @@ enum class MenuRow(val label: String) {
     RESOLUTION("Resolution"),
     SWITCH_DISPLAY("Switch display"),
     STREAM_STATS("Stream stats"),
-    MORE_KEYS("More keys"),
     HELP("Help"),
     DISCONNECT("Disconnect"),
 }
@@ -38,7 +37,6 @@ object StreamMenuModel {
         add(MenuRow.RESOLUTION)
         if (displayCount > 1) add(MenuRow.SWITCH_DISPLAY)
         add(MenuRow.STREAM_STATS)
-        add(MenuRow.MORE_KEYS)
         add(MenuRow.HELP)
         add(MenuRow.DISCONNECT)
     }
@@ -46,15 +44,13 @@ object StreamMenuModel {
     /** The back row repeats the label of the row that opened the page. */
     fun backTitle(page: MenuPage): String = when (page) {
         MenuPage.MAIN -> ""
-        MenuPage.KEYS -> MenuRow.MORE_KEYS.label
-        MenuPage.MEDIA -> "Media keys"
         MenuPage.DISPLAYS -> MenuRow.SWITCH_DISPLAY.label
         MenuPage.RESOLUTION -> MenuRow.RESOLUTION.label
         MenuPage.STATS -> MenuRow.STREAM_STATS.label
     }
 
     /** Where Back goes. */
-    fun backTarget(page: MenuPage): MenuPage = if (page == MenuPage.MEDIA) MenuPage.KEYS else MenuPage.MAIN
+    fun backTarget(page: MenuPage): MenuPage = MenuPage.MAIN
 
     /** Picking a size or a display returns to the main page and keeps the menu open. */
     fun pageAfterPick(): MenuPage = MenuPage.MAIN

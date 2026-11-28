@@ -11,7 +11,7 @@ class StreamMenuModelTest {
     @Test fun `main page order with every optional row`() {
         assertEquals(
             listOf("Mute audio", "Keyboard", "Trackpad", "Picture in picture", "Resolution", "Switch display",
-                "Stream stats", "More keys", "Help", "Disconnect"),
+                "Stream stats", "Help", "Disconnect"),
             StreamMenuModel.mainRows(canPip = true, displayCount = 2).map { it.label })
     }
 
@@ -30,16 +30,13 @@ class StreamMenuModelTest {
     }
 
     @Test fun `back row title is the label of the row that opened the page`() {
-        assertEquals("More keys", StreamMenuModel.backTitle(MenuPage.KEYS))
         assertEquals("Switch display", StreamMenuModel.backTitle(MenuPage.DISPLAYS))
         assertEquals("Resolution", StreamMenuModel.backTitle(MenuPage.RESOLUTION))
         assertEquals("Stream stats", StreamMenuModel.backTitle(MenuPage.STATS))
-        assertEquals("Media keys", StreamMenuModel.backTitle(MenuPage.MEDIA))
     }
 
     @Test fun `back goes up one level and a pick returns to the main page`() {
-        assertEquals(MenuPage.KEYS, StreamMenuModel.backTarget(MenuPage.MEDIA))
-        for (p in listOf(MenuPage.KEYS, MenuPage.DISPLAYS, MenuPage.RESOLUTION, MenuPage.STATS))
+        for (p in listOf(MenuPage.DISPLAYS, MenuPage.RESOLUTION, MenuPage.STATS))
             assertEquals(MenuPage.MAIN, StreamMenuModel.backTarget(p))
         assertEquals(MenuPage.MAIN, StreamMenuModel.pageAfterPick())
     }
