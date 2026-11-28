@@ -4,7 +4,7 @@ if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITH
 const response = await fetch('https://api.github.com/repos/modnite/Secpar/releases?per_page=100', { headers, signal: AbortSignal.timeout(20000) });
 if (!response.ok) throw Error(`Release lookup failed (${response.status})`);
 const releases = await response.json(), result = {};
-const names = { windows: 'Secpar-Windows-x64-setup.exe', linux: 'Secpar-Linux-x64.AppImage', android: 'Secpar.apk' };
+const names = { windows: 'Secpar-Windows-x64-setup.exe', linux: 'Secpar-Linux-x64.AppImage', arch: 'Secpar-Linux-x64.pkg.tar.zst', android: 'Secpar.apk' };
 for (const [platform, name] of Object.entries(names)) {
   // vX.Y.Z or a revision of it, vX.Y.Z-rN, which follows vX.Y.Z and comes before the next release.
   const part = tag => { const [base, rev] = tag.slice(1).split('-r'); return [...base.split('.').map(Number), Number(rev ?? 0)]; };
