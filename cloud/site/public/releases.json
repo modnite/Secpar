@@ -1,20 +1,20 @@
 {
   "windows": {
-    "version": "4.2.0-r25",
-    "url": "https://github.com/modnite/Secpar/releases/download/v4.2.0-r25/Secpar-Windows-x64-setup.exe",
-    "size": 4354748,
-    "sha256": "739a5f3883b9092f055ddf9224ed3f88d8c3237fc1ac32dc43c0b9411010bf32"
+    "version": "4.2.0-r26",
+    "url": "https://github.com/modnite/Secpar/releases/download/v4.2.0-r26/Secpar-Windows-x64-setup.exe",
+    "size": 4362193,
+    "sha256": "6899c5bbeaaa84cbfcb8953f91197fe44dac8da980cc8dab338d46b3d8acc56c"
   },
   "linux": {
-    "version": "4.2.0-r25",
-    "url": "https://github.com/modnite/Secpar/releases/download/v4.2.0-r25/Secpar-Linux-x64.AppImage",
+    "version": "4.2.0-r26",
+    "url": "https://github.com/modnite/Secpar/releases/download/v4.2.0-r26/Secpar-Linux-x64.AppImage",
     "size": 9906680,
-    "sha256": "afcd43345a6401ffd058e473f29f6fd376b0d7d91e5af5be50d8ec0b3e680895"
+    "sha256": "db538d85179c3e1b46cfe0b5b9999134b85474e1999a89cb3c28c7ab020bba42"
   },
   "android": {
-    "version": "4.2.0-r25",
-    "url": "https://github.com/modnite/Secpar/releases/download/v4.2.0-r25/Secpar.apk",
-    "size": 2007095,
-    "sha256": "bc2b387b03a2fb72b377274a09acbdeba282cff01f6e75e9c4e5e9927e1705c2"
+    "version": "4.2.0-r26",
+    "url": "https://github.com/modnite/Secpar/releases/download/v4.2.0-r26/Secpar.apk",
+    "size": 2002718,
+    "sha256": "3b9563c6272761c52e24d9c9e716244e5f497b7a1400e575b465c48646d26e90"
   }
 }
