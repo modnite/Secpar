@@ -1,5 +1,5 @@
 fetch('/releases.json').then(r => { if (!r.ok) throw Error(); return r.json(); }).then(releases => {
-  for (const platform of ['windows', 'linux', 'android']) {
+  for (const platform of ['windows', 'linux', 'arch', 'android']) {
     const release = releases[platform];
     if (!release || !/^\d+\.\d+\.\d+(-r\d+)?$/.test(release.version)) continue;
     const url = new URL(release.url);
