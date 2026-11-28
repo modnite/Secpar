@@ -193,6 +193,14 @@ impl Peer {
             }
         }
     }
+    /// One packet on one route: `via` true goes through our relay.
+    fn send_on(&self, b: &[u8], addr: SocketAddr, via: bool) {
+        if !via {
+            let _ = self.socket.send_to(b, addr);
+        } else if let (Some(t), SocketAddr::V4(to)) = (self.turn.lock().unwrap().clone(), addr) {
+            t.send_raw(&self.socket, &t.wrap(to, b));
+        }
+    }
     fn permit(&self) {
         if let Some(t) = self.turn.lock().unwrap().clone() {
             let s = self.socket.clone();
@@ -329,6 +337,66 @@ fn emit(receiver: &mut Receiver, peer: &Peer, typ: Type, body: &[u8]) -> Result<
     peer.send(&packet);
     Ok(())
 }
+/// Round trips on the current path and on the other one (direct or relay), five each.
+#[derive(Default)]
+struct PathTimes {
+    current: std::collections::VecDeque<u16>,
+    other: std::collections::VecDeque<u16>,
+}
+impl PathTimes {
+    fn push(v: &mut std::collections::VecDeque<u16>, ms: u16) {
+        if v.len() == 5 {
+            v.pop_front();
+        }
+        v.push_back(ms);
+    }
+    fn current(&mut self, ms: u16) {
+        Self::push(&mut self.current, ms);
+    }
+    fn other(&mut self, ms: u16) {
+        Self::push(&mut self.other, ms);
+    }
+    fn median(v: &std::collections::VecDeque<u16>) -> u16 {
+        let mut s: Vec<u16> = v.iter().copied().collect();
+        s.sort_unstable();
+        s[s.len() / 2]
+    }
+    /// The other path is clearly quicker: five samples each, 30 % and 20 ms faster by the median.
+    fn other_faster(&self) -> bool {
+        if self.current.len() < 5 || self.other.len() < 5 {
+            return false;
+        }
+        let (cur, other) = (Self::median(&self.current) as u32, Self::median(&self.other) as u32);
+        other * 10 < cur * 7 && cur >= other + 20
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::PathTimes;
+    #[test]
+    fn switches_only_for_a_clearly_faster_path() {
+        let mut p = PathTimes::default();
+        for _ in 0..5 {
+            p.current(200);
+            p.other(60);
+        }
+        assert!(p.other_faster());
+        let mut q = PathTimes::default();
+        for _ in 0..5 {
+            q.current(40);
+            q.other(25);
+        }
+        assert!(!q.other_faster(), "15 ms is not worth a switch");
+        let mut r = PathTimes::default();
+        for _ in 0..4 {
+            r.current(300);
+            r.other(30);
+        }
+        assert!(!r.other_faster(), "needs five samples each");
+    }
+}
+
 /// Runs a paired control connection and its PRS stream until Stop, disconnect or UI closure.
 /// UI state is bounded/coalesced; a stalled UI cannot stop network keepalives.
 pub async fn run(
@@ -390,6 +458,14 @@ pub async fn run(
     let mut last_packet = Instant::now();
     let mut received_authenticated=false;
     let mut turn_started = false;
+    // Timing the other path (direct or relay) against the current one; hosts listing `pathprobe`
+    // answer test probes without moving the stream.
+    let path_test = conn.caps.iter().any(|c| c == "pathprobe");
+    let (mut relay_for_test, mut relay_ready) = (false, false);
+    let mut paths = PathTimes::default();
+    let mut test_at = Instant::now();
+    // After a switch, packets still on their way on the old path must not switch back.
+    let mut switched_at: Option<Instant> = None;
     let (turn_tx, mut turn_rx) = mpsc::channel::<Option<SocketAddrV4>>(1);
     let mut inputs = std::collections::VecDeque::new();
     let mut rumble=[(0u8,0u8);4];
@@ -469,7 +545,8 @@ pub async fn run(
                 let Some(r)=receiver.as_mut()else{continue;};let Some((h,plain))=r.open(&packet.data)else{continue;};
                 stats_bytes=stats_bytes.saturating_add(packet.data.len() as u64);
                 let route=Some((packet.from,packet.relayed));
-                if peer.confirmed!=route {peer.confirmed=route;crate::connlog::note(&crate::connlog::short_label(&conn.computer.id),"stream",if packet.relayed{"relay"}else{"direct"},start.elapsed().as_millis() as u64);events.emit(Event::Status(if packet.relayed{"Relay"}else{"Direct"}.into()))?;}
+                let test_reply=h.typ==Type::Probe && h.flags & secpar_stream::header::PATH_TEST!=0;
+                if !test_reply && peer.confirmed!=route && switched_at.is_none_or(|t|t.elapsed()>Duration::from_secs(2)) {peer.confirmed=route;crate::connlog::note(&crate::connlog::short_label(&conn.computer.id),"stream",if packet.relayed{"relay"}else{"direct"},start.elapsed().as_millis() as u64);events.emit(Event::Status(if packet.relayed{"Relay"}else{"Direct"}.into()))?;}
                 last_packet=Instant::now();received_authenticated=true;
                 if high_seq.is_none() && matches!(h.typ,Type::Video|Type::Fec){report_base=h.seq;high_seq=Some(h.seq);}
                 if let Some(high)=high_seq.as_mut(){*high=(*high).max(h.seq);received=received.saturating_add(1);}
@@ -488,13 +565,14 @@ pub async fn run(
                         if let Some(sink)=&options.audio_sink{sink(packet);}
                         else{events.emit(Event::Audio{packet,received_at:Instant::now()})?;}
                     },
-                    Type::Probe if plain.len()>=16=>{peer_t=u64::from_be_bytes(plain[..8].try_into().unwrap());let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{rtt=((now-echo)/1000).min(u16::MAX as u64) as u16;rtt_known=true;r.assembler.rtt=Duration::from_millis(rtt as u64);}},
+                    Type::Probe if plain.len()>=16 && test_reply=>{let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{paths.other(((now-echo)/1000).min(u16::MAX as u64) as u16);}},
+                    Type::Probe if plain.len()>=16=>{peer_t=u64::from_be_bytes(plain[..8].try_into().unwrap());let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{rtt=((now-echo)/1000).min(u16::MAX as u64) as u16;rtt_known=true;r.assembler.rtt=Duration::from_millis(rtt as u64);paths.current(rtt);}},
                     Type::Cursor if plain.len()>=5=>events.emit(Event::Cursor{x:i16::from_be_bytes(plain[..2].try_into().unwrap()),y:i16::from_be_bytes(plain[2..4].try_into().unwrap()),visible:plain[4]!=0})?,
                     Type::Bye=>return Err("Host ended the stream".into()),
                     _=>{},
                 }
             },
-            Some(relayed)=turn_rx.recv()=>if let Some(c)=relayed{control::send(&mut conn.socket,json!({"t":"stream.cand","c":c.to_string()})).await?;},
+            Some(relayed)=turn_rx.recv()=>if relay_for_test {relay_ready=relayed.is_some();} else if let Some(c)=relayed{control::send(&mut conn.socket,json!({"t":"stream.cand","c":c.to_string()})).await?;},
             _=tick.tick()=>{
                 events.flush()?;
                 if stats_at.elapsed()>=Duration::from_millis(500) {
@@ -519,9 +597,26 @@ pub async fn run(
                     if report_at.elapsed()>Duration::from_millis(100){report_at=Instant::now();let expected=high_seq.map(|h|h.saturating_sub(report_base)).unwrap_or(0);let loss=if expected==0{0}else{expected.saturating_sub(received).saturating_mul(1000)/expected};let mut body=[0;16];body[..4].copy_from_slice(&last_frame.to_be_bytes());body[4..6].copy_from_slice(&(loss.min(1000) as u16).to_be_bytes());body[10..12].copy_from_slice(&rtt.to_be_bytes());body[12..14].copy_from_slice(&queue.take_ms().to_be_bytes());emit(r,&peer,Type::Report,&body)?;report_base=high_seq.unwrap_or(0);received=0;}
                     if (r.assembler.needs_keyframe() || events.needs_keyframe()) && idr_at.elapsed()>Duration::from_millis(250){idr_at=Instant::now();emit(r,&peer,Type::Idr,&[])?;}
                 }
+                if let (Some(r),Some((addr,via)))=(receiver.as_mut(),peer.confirmed) {
+                    // the other path: our relay when direct; direct when relayed through ours
+                    let other_ok=if via {true} else {relay_ready};
+                    if path_test && other_ok && test_at.elapsed()>Duration::from_secs(1) && switched_at.is_none_or(|t|t.elapsed()>Duration::from_secs(10)) {
+                        test_at=Instant::now();
+                        let mut body=(start.elapsed().as_micros() as u64).to_be_bytes().to_vec();body.extend(peer_t.to_be_bytes());
+                        if let Some(pkt)=r.seal_flags(Type::Probe,secpar_stream::header::PATH_TEST,&body){peer.send_on(&pkt,addr,!via);}
+                        if paths.other_faster() {
+                            peer.confirmed=Some((addr,!via));switched_at=Some(Instant::now());paths=PathTimes::default();
+                            crate::connlog::note(&crate::connlog::short_label(&conn.computer.id),"stream",if via{"switched_direct"}else{"switched_relay"},start.elapsed().as_millis() as u64);
+                            events.emit(Event::Status(if via{"Direct"}else{"Relay"}.into()))?;
+                            // a normal probe on the new path moves the host's stream there
+                            let mut body=(start.elapsed().as_micros() as u64).to_be_bytes().to_vec();body.extend(peer_t.to_be_bytes());emit(r,&peer,Type::Probe,&body)?;
+                        }
+                    }
+                }
                 if ping_at.elapsed()>Duration::from_secs(10){ping_at=Instant::now();control::send(&mut conn.socket,json!({"t":"ping"})).await?;}
-                if !turn_started && peer.confirmed.is_none() && start.elapsed()>Duration::from_secs(3) && (conn.computer.relay.is_some() || options.turn.is_some()){
-                    turn_started=true;let computer=conn.computer.clone();let guest_turn=options.turn.clone();let socket=peer.socket.clone();let slot=peer.turn.clone();let peers:Vec<_>=peer.targets.iter().filter_map(|a|if let SocketAddr::V4(a)=a{Some(*a)}else{None}).collect();let tx=turn_tx.clone();let live=peer.live.clone();
+                let test_relay=path_test && peer.confirmed.is_some_and(|c|!c.1) && start.elapsed()>Duration::from_secs(8);
+                if !turn_started && (peer.confirmed.is_none() || test_relay) && start.elapsed()>Duration::from_secs(3) && (conn.computer.relay.is_some() || options.turn.is_some()){
+                    turn_started=true;relay_for_test=peer.confirmed.is_some();let computer=conn.computer.clone();let guest_turn=options.turn.clone();let socket=peer.socket.clone();let slot=peer.turn.clone();let peers:Vec<_>=peer.targets.iter().filter_map(|a|if let SocketAddr::V4(a)=a{Some(*a)}else{None}).collect();let tx=turn_tx.clone();let live=peer.live.clone();
                     let packets=peer.packets.clone();
                     tokio::spawn(async move{
                         let mut allocated=None;

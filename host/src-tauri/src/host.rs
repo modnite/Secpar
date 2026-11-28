@@ -86,7 +86,7 @@ impl Handlers for Host {
     }
 
     fn caps(&self) -> Vec<String> {
-        let mut c: Vec<String> = ["input", "power", "media", "files", "clip", "thumb", "net", "stream", "unlock", "fsbrowse", "fsbatch"].map(String::from).to_vec();
+        let mut c: Vec<String> = ["input", "power", "media", "files", "clip", "thumb", "net", "stream", "unlock", "fsbrowse", "fsbatch", "pathprobe"].map(String::from).to_vec();
         if self.bus().is_some() {
             c.push("pad".into());
         }
