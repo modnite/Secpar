@@ -13,3 +13,4 @@ export SECPAR_APPIMAGETOOL="$tools/appimagetool.AppImage" SECPAR_APPIMAGE_RUNTIM
 export CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_STRIP=symbols
 cargo build --release --locked --manifest-path desktop/Cargo.toml
 python3 desktop/packaging/appimage.py
+python3 desktop/packaging/archpkg.py
