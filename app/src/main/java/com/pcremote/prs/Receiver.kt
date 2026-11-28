@@ -42,7 +42,7 @@ class Receiver(
     private val sendLock = Any()
     private var seq = 0
     private val input = InputSender()
-    private val assembler = FrameAssembler(::delivered, ::requestIdr)
+    private val assembler = FrameAssembler(::delivered, ::requestIdr, ::requestResend)
 
     private val _cursor = MutableStateFlow(Cursor(0, 0, false))
     val cursor: StateFlow<Cursor> = _cursor
@@ -112,6 +112,15 @@ class Receiver(
 
     fun requestIdr() = later { send(Header(Prs.IDR), ByteArray(0)) }
 
+    /** Asks the host for lost video packets again (hosts before 4.2.0-r21 ignore it). */
+    private fun requestResend(frameId: Int, frags: IntArray) {
+        val n = minOf(frags.size, 400)
+        val b = java.nio.ByteBuffer.allocate(4 + 2 * n).putInt(frameId)
+        for (i in 0 until n) b.putShort(frags[i].toShort())
+        val payload = b.array()
+        later { send(Header(Prs.NACK), payload) }
+    }
+
     fun sendInput(m: Msg) {
         val payload = input.payload(m) // ids assigned in call order
         later { send(Header(Prs.INPUT), payload) }
@@ -153,6 +162,7 @@ class Receiver(
                 val echo = b.getLong(8)
                 if (echo != 0L && nowUs - echo in 0..10_000_000) {
                     rttUs = nowUs - echo
+                    assembler.rttUs = rttUs
                     // A lifetime minimum freezes the clock estimate after an
                     // unusually fast probe. Host/phone clock drift and changed
                     // routes must not make live audio permanently look stale.

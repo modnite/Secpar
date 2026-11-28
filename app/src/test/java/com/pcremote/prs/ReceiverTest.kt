@@ -34,30 +34,45 @@ fun packetize(frameId: Int, keyframe: Boolean, body: ByteArray, p: Int = 15, cap
 class FrameAssemblerTest {
     private val frames = ArrayList<Frame>()
     private var idrs = 0
-    private val a = FrameAssembler({ frames += it }, { idrs++ })
+    private val nacks = ArrayList<Pair<Int, List<Int>>>()
+    private val a = FrameAssembler({ frames += it }, { idrs++ }, { id, frags -> nacks += id to frags.toList() })
 
     @Test fun dropsIncompleteFrameAndRequestsIdrOnce() {
         val f1 = packetize(1, true, ByteArray(5000) { it.toByte() }) // k=5, m=1
         f1.drop(2).forEach { (h, d) -> a.onShard(h, d, 0) } // two missing, one parity: not recoverable
-        a.tick(40_000); assertEquals(0, idrs)
-        a.tick(60_000); assertEquals(1, idrs); assertEquals(1, a.dropped)
-        a.tick(200_000); assertEquals("one IDR per 250 ms", 1, idrs)
+        a.tick(100_000); assertEquals("still inside the repair window", 0, idrs)
+        assertEquals("the missing shards were asked for", listOf(0, 1), nacks.first().second)
+        a.tick(141_000); assertEquals(1, idrs); assertEquals(1, a.dropped)
+        a.tick(300_000); assertEquals("one IDR per 250 ms", 1, idrs)
         // a P-frame after the loss would smear: held back
-        packetize(2, false, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 210_000) }
+        packetize(2, false, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 310_000) }
         assertTrue(frames.isEmpty())
-        a.tick(320_000); assertEquals("asks again while still waiting", 2, idrs)
-        packetize(3, true, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 330_000) }
+        a.tick(400_000); assertEquals("asks again while still waiting", 2, idrs)
+        packetize(3, true, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 410_000) }
         assertEquals(listOf(3), frames.map { it.id })
-        a.tick(700_000); assertEquals(2, idrs)
+        a.tick(800_000); assertEquals(2, idrs)
         // late shards of old frames are ignored
-        f1.take(2).forEach { (h, d) -> a.onShard(h, d, 710_000) }
+        f1.take(2).forEach { (h, d) -> a.onShard(h, d, 810_000) }
         assertEquals(1, frames.size)
     }
 
-    @Test fun laterFrameOvertakesIncompleteOne() {
+    @Test fun laterFrameWaitsForResentShards() {
+        packetize(1, true, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 0) }
+        val f2 = packetize(2, false, ByteArray(3000))
+        f2.take(1).forEach { (h, d) -> a.onShard(h, d, 1000) }
+        packetize(3, false, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 5000) }
+        assertEquals("frame 3 waits behind frame 2", listOf(1), frames.map { it.id })
+        assertEquals(2, nacks.single().first)
+        f2.drop(1).forEach { (h, d) -> a.onShard(h, d, 30_000) }
+        assertEquals(listOf(1, 2, 3), frames.map { it.id })
+        assertEquals(0, a.dropped); assertEquals(0, idrs)
+    }
+
+    @Test fun laterFrameOvertakesWhenRepairFails() {
         packetize(1, true, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 0) }
         packetize(2, false, ByteArray(3000)).take(1).forEach { (h, d) -> a.onShard(h, d, 1000) }
         packetize(3, false, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 2000) }
+        a.tick(200_000)
         assertEquals(listOf(1), frames.map { it.id })
         assertEquals(1, a.dropped); assertEquals(1, idrs)
     }

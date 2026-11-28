@@ -473,13 +473,21 @@ pub async fn run(
                 if high_seq.is_none() && matches!(h.typ,Type::Video|Type::Fec){report_base=h.seq;high_seq=Some(h.seq);}
                 if let Some(high)=high_seq.as_mut(){*high=(*high).max(h.seq);received=received.saturating_add(1);}
                 match h.typ{
-                    Type::Video|Type::Fec=>if let Some(frame)=r.assembler.push(h,plain,Instant::now()){last_frame=frame.id;stats_frames+=1;secpar_stream::timing::mark(secpar_stream::timing::Stage::Arrive);if let Some(sink)=&options.video_sink {sink(frame);}else{events.emit(Event::Video(frame))?;}},
+                    Type::Video|Type::Fec=>{
+                        let now=Instant::now();
+                        // One packet can complete several frames: a resent one releases those waiting behind it.
+                        let first=r.assembler.push(h,plain,now);
+                        let mut frames:Vec<_>=first.into_iter().collect();
+                        while let Some(f)=r.assembler.pop(){frames.push(f);}
+                        for frame in frames {last_frame=frame.id;stats_frames+=1;secpar_stream::timing::mark(secpar_stream::timing::Stage::Arrive);if let Some(sink)=&options.video_sink {sink(frame);}else{events.emit(Event::Video(frame))?;}}
+                        for (id,frags) in r.assembler.nacks(now){emit(r,&peer,Type::Nack,&secpar_stream::nack::encode(id,&frags))?;}
+                    },
                     Type::Audio if plain.len()>8 => {
                         let packet=plain[8..].to_vec();
                         if let Some(sink)=&options.audio_sink{sink(packet);}
                         else{events.emit(Event::Audio{packet,received_at:Instant::now()})?;}
                     },
-                    Type::Probe if plain.len()>=16=>{peer_t=u64::from_be_bytes(plain[..8].try_into().unwrap());let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{rtt=((now-echo)/1000).min(u16::MAX as u64) as u16;rtt_known=true;}},
+                    Type::Probe if plain.len()>=16=>{peer_t=u64::from_be_bytes(plain[..8].try_into().unwrap());let echo=u64::from_be_bytes(plain[8..16].try_into().unwrap());let now=start.elapsed().as_micros() as u64;if echo>0 && now>=echo{rtt=((now-echo)/1000).min(u16::MAX as u64) as u16;rtt_known=true;r.assembler.rtt=Duration::from_millis(rtt as u64);}},
                     Type::Cursor if plain.len()>=5=>events.emit(Event::Cursor{x:i16::from_be_bytes(plain[..2].try_into().unwrap()),y:i16::from_be_bytes(plain[2..4].try_into().unwrap()),visible:plain[4]!=0})?,
                     Type::Bye=>return Err("Host ended the stream".into()),
                     _=>{},
@@ -501,7 +509,10 @@ pub async fn run(
                     events.emit(Event::Status("Reconnecting stream route".into()))?;
                 }
                 if let Some(r)=receiver.as_mut(){
-                    r.assembler.tick(Instant::now());
+                    let now=Instant::now();
+                    r.assembler.tick(now);
+                    while let Some(frame)=r.assembler.pop(){last_frame=frame.id;stats_frames+=1;if let Some(sink)=&options.video_sink {sink(frame);}else{events.emit(Event::Video(frame))?;}}
+                    for (id,frags) in r.assembler.nacks(now){emit(r,&peer,Type::Nack,&secpar_stream::nack::encode(id,&frags))?;}
                     if probe_at.elapsed()>Duration::from_millis(if peer.confirmed.is_some(){500}else{200}){probe_at=Instant::now();let mut body=(start.elapsed().as_micros() as u64).to_be_bytes().to_vec();body.extend(peer_t.to_be_bytes());emit(r,&peer,Type::Probe,&body)?;}
                     if report_at.elapsed()>Duration::from_millis(100){report_at=Instant::now();let expected=high_seq.map(|h|h.saturating_sub(report_base)).unwrap_or(0);let loss=if expected==0{0}else{expected.saturating_sub(received).saturating_mul(1000)/expected};let mut body=[0;16];body[..4].copy_from_slice(&last_frame.to_be_bytes());body[4..6].copy_from_slice(&(loss.min(1000) as u16).to_be_bytes());body[10..12].copy_from_slice(&rtt.to_be_bytes());emit(r,&peer,Type::Report,&body)?;report_base=high_seq.unwrap_or(0);received=0;}
                     if (r.assembler.needs_keyframe() || events.needs_keyframe()) && idr_at.elapsed()>Duration::from_millis(250){idr_at=Instant::now();emit(r,&peer,Type::Idr,&[])?;}

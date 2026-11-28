@@ -56,6 +56,8 @@ struct Shared {
     kbps: AtomicU32,
     /// Phone candidates, punching window and our TURN allocation (shared with every host).
     link: Arc<Link>,
+    /// Sealed video packets of the last frames, sent again when the client asks (`Type::Nack`).
+    history: Mutex<secpar_stream::nack::History>,
 }
 /// How long a new candidate keeps the punching going (docs/remote-protocol.md).
 const PUNCH_FOR: Duration = Duration::from_secs(10);
@@ -67,7 +69,18 @@ impl Shared {
         if let Some(peer) = peer {
             h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
             let pkt = self.crypt.seal(Dir::HostToPhone, &h, plain);
+            if matches!(h.typ, Type::Video | Type::Fec) {
+                self.history.lock().unwrap().record(h.frame_id, h.frag, h.count, &pkt);
+            }
             // through a relay at most RELAY_PPS packets a second, like every host
+            self.link.throttle(&peer);
+            self.link.transmit(&self.socket, peer, &pkt);
+        }
+    }
+    /// Sends the packets a client lost again, as they were sealed the first time.
+    fn resend(&self, frame_id: u32, frags: &[u16]) {
+        let Some(peer) = *self.peer.lock().unwrap() else { return };
+        for pkt in self.history.lock().unwrap().take(frame_id, frags) {
             self.link.throttle(&peer);
             self.link.transmit(&self.socket, peer, &pkt);
         }
@@ -272,6 +285,7 @@ impl Stream {
             idr: AtomicBool::new(true),
             kbps: AtomicU32::new(bitrate.target().kbps),
             link: Arc::new(Link::new()),
+            history: Mutex::default(),
         });
         // Before the receive thread starts: STUN reads its answer from this socket. The router
         // mapping and the reflexive address are found at once.
@@ -390,6 +404,11 @@ impl Stream {
                             if let Some(t) = bitrate.on_report(begun.elapsed(), loss, rtt) {
                                 rx_shared.kbps.store(t.kbps, Ordering::Relaxed);
                             }
+                        }
+                    }
+                    Type::Nack => {
+                        if let Some((frame_id, frags)) = secpar_stream::nack::decode(&p) {
+                            rx_shared.resend(frame_id, &frags);
                         }
                     }
                     Type::Bye => break,
@@ -807,7 +826,7 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), ["plug 1", "update 1 4096 255", "unplug 1"], "id 9 is out of range and ignored");
     }
     fn synthetic_shared()->Arc<Shared> {
-        Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false),kbps:AtomicU32::new(12_000),link:Arc::new(Link::new())})
+        Arc::new(Shared {socket:UdpSocket::bind("127.0.0.1:0").unwrap(),crypt:Crypt::new(&[7;32],9),peer:Mutex::new(None),seq:AtomicU32::new(0),stop:AtomicBool::new(false),idr:AtomicBool::new(false),kbps:AtomicU32::new(12_000),link:Arc::new(Link::new()),history:Mutex::default()})
     }
     /// The receive loop's job for a relay: the TURN server's answers go to the link.
     fn serve_relay_answers(shared: &Arc<Shared>) {

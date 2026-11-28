@@ -84,6 +84,8 @@ pub struct Shared {
     switch: Mutex<Option<String>>,
     /// A size the client asked for (`stream.size`), picked up by the video thread.
     resize: Mutex<Option<(u32, u32)>>,
+    /// Sealed video packets of the last frames, sent again when the client asks (`Type::Nack`).
+    history: Mutex<secpar_stream::nack::History>,
 }
 
 fn hdr(typ: Type, frame_id: u32) -> Header {
@@ -106,6 +108,7 @@ impl Shared {
             link: Arc::new(Link::new()),
             switch: Mutex::default(),
             resize: Mutex::default(),
+            history: Mutex::default(),
         }
     }
 
@@ -135,7 +138,21 @@ impl Shared {
     fn send_to(&self, to: SocketAddr, mut h: Header, plain: &[u8]) -> bool {
         h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
         let pkt = self.crypt.seal(Dir::HostToPhone, &h, plain);
+        if matches!(h.typ, Type::Video | Type::Fec) {
+            self.history.lock().unwrap().record(h.frame_id, h.frag, h.count, &pkt);
+        }
         self.link.transmit(&self.sock, to, &pkt)
+    }
+
+    /// Sends the packets a client lost again, as they were sealed the first time.
+    fn resend(&self, frame_id: u32, frags: &[u16]) -> usize {
+        let Some(to) = self.peer() else { return 0 };
+        let pkts = self.history.lock().unwrap().take(frame_id, frags);
+        for pkt in &pkts {
+            self.link.throttle(&to);
+            self.link.transmit(&self.sock, to, pkt);
+        }
+        pkts.len()
     }
 
     /// Punching PROBE to one candidate: direct, and through our relay when we have one.
@@ -272,6 +289,7 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
     let (mut last_rx, mut last_idr, mut probe_seq) = (Instant::now(), None::<Instant>, None::<u32>);
     let mut dedup = Dedup::default();
     let (mut input_pkts, mut input_log) = (0u64, Instant::now());
+    let (mut resent, mut resent_log) = (0u64, Instant::now());
     let mut buf = [0u8; 2048];
     loop {
         let punching = sh.punching();
@@ -339,6 +357,16 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
                 last_idr = Some(Instant::now());
                 sh.idr.store(true, Ordering::Relaxed);
                 if secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_request");}
+            }
+            Type::Nack => {
+                if let Some((frame_id, frags)) = secpar_stream::nack::decode(&p) {
+                    let sent = sh.resend(frame_id, &frags);
+                    resent += sent as u64;
+                    if resent_log.elapsed() >= Duration::from_secs(10) && resent > 0 {
+                        crate::log::line(&format!("stream: resent {resent} lost packets in the last 10 s"));
+                        (resent, resent_log) = (0, Instant::now());
+                    }
+                }
             }
             Type::Bye => break,
             _ => {}

@@ -14,6 +14,8 @@ object Prs {
 
     const val VIDEO = 1; const val FEC = 2; const val AUDIO = 3; const val INPUT = 4; const val REPORT = 5
     const val IDR = 6; const val CURSOR = 7; const val PROBE = 8; const val BYE = 9
+    /** Client asks for lost video packets again: frame id (u32), then fragment indices (u16 each). */
+    const val NACK = 10
 
     /** `(kb, mb)` per FEC block for a frame of `k` data shards at FEC percentage `p`. */
     fun layout(k: Int, p: Int): List<Pair<Int, Int>> {
