@@ -186,6 +186,16 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   end). Gateway from GetBestRoute / /proc/net/route. NIGG10's router (192.168.100.1) does not speak
   NAT-PMP, so only the fake-router test covers the mapping. Still to do: time direct vs relay and
   keep the faster path (item 3b), Direct3D drawing (item 4), NIGG10 black flicker.
+- T480 log, r23, Android client (Hevc 4:4:4 packed, encoder 1280x1440 QSV): resent 37 packets in
+  10 s, media streaming mode on, no bitrate cuts; still 20-40 fps received and drawn, so the T480
+  produces too few frames. 4.2.0-r24 logs every 10 s per stream: captured/sent/repeats per second
+  and convert/encode avg and max ms (`Pace` in host session.rs). Next: read that line from the T480.
+- 4.2.0-r24 (item 3b): `PATH_TEST` PROBE flag (header.rs) and `pathprobe` cap on both hosts (guest
+  filter passes it with view): hosts answer a test probe to its sender without moving the stream.
+  The desktop client, against such hosts, starts its relay 8 s into a direct stream without
+  announcing it, sends a test probe on the other path every second, and switches when five
+  samples each show the other path 30 % and 20 ms faster (`PathTimes`); after a switch it ignores
+  the old path for 2 s and tests again after 10 s. Android has no path tests yet. Not tried live.
 - Known failing test, not caused by recent work: secpar-network
   `link::tests::relayed_peers_get_wrapped_replies_and_the_rate_gate` fails on NIGG10 at r16 too
   (the reply after the permit never reaches the fake server within 100 ms).
