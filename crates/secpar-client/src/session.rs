@@ -378,6 +378,7 @@ pub async fn run(
     let mut peer_t = 0u64;
     let start = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_millis(5));
+    let mut queue = crate::receiver::QueueDelay::new(start);
     let (mut probe_at, mut report_at, mut ping_at, mut idr_at) = (
         Instant::now() - Duration::from_secs(1),
         Instant::now(),
@@ -513,8 +514,9 @@ pub async fn run(
                     r.assembler.tick(now);
                     while let Some(frame)=r.assembler.pop(){last_frame=frame.id;stats_frames+=1;if let Some(sink)=&options.video_sink {sink(frame);}else{events.emit(Event::Video(frame))?;}}
                     for (id,frags) in r.assembler.nacks(now){emit(r,&peer,Type::Nack,&secpar_stream::nack::encode(id,&frags))?;}
+                    for (capture_us,arrived) in r.assembler.arrivals.drain(..){queue.add(capture_us,arrived);}
                     if probe_at.elapsed()>Duration::from_millis(if peer.confirmed.is_some(){500}else{200}){probe_at=Instant::now();let mut body=(start.elapsed().as_micros() as u64).to_be_bytes().to_vec();body.extend(peer_t.to_be_bytes());emit(r,&peer,Type::Probe,&body)?;}
-                    if report_at.elapsed()>Duration::from_millis(100){report_at=Instant::now();let expected=high_seq.map(|h|h.saturating_sub(report_base)).unwrap_or(0);let loss=if expected==0{0}else{expected.saturating_sub(received).saturating_mul(1000)/expected};let mut body=[0;16];body[..4].copy_from_slice(&last_frame.to_be_bytes());body[4..6].copy_from_slice(&(loss.min(1000) as u16).to_be_bytes());body[10..12].copy_from_slice(&rtt.to_be_bytes());emit(r,&peer,Type::Report,&body)?;report_base=high_seq.unwrap_or(0);received=0;}
+                    if report_at.elapsed()>Duration::from_millis(100){report_at=Instant::now();let expected=high_seq.map(|h|h.saturating_sub(report_base)).unwrap_or(0);let loss=if expected==0{0}else{expected.saturating_sub(received).saturating_mul(1000)/expected};let mut body=[0;16];body[..4].copy_from_slice(&last_frame.to_be_bytes());body[4..6].copy_from_slice(&(loss.min(1000) as u16).to_be_bytes());body[10..12].copy_from_slice(&rtt.to_be_bytes());body[12..14].copy_from_slice(&queue.take_ms().to_be_bytes());emit(r,&peer,Type::Report,&body)?;report_base=high_seq.unwrap_or(0);received=0;}
                     if (r.assembler.needs_keyframe() || events.needs_keyframe()) && idr_at.elapsed()>Duration::from_millis(250){idr_at=Instant::now();emit(r,&peer,Type::Idr,&[])?;}
                 }
                 if ping_at.elapsed()>Duration::from_secs(10){ping_at=Instant::now();control::send(&mut conn.socket,json!({"t":"ping"})).await?;}

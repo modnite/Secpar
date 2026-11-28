@@ -43,6 +43,7 @@ class Receiver(
     private var seq = 0
     private val input = InputSender()
     private val assembler = FrameAssembler(::delivered, ::requestIdr, ::requestResend)
+    private val queue = QueueDelay()
 
     private val _cursor = MutableStateFlow(Cursor(0, 0, false))
     val cursor: StateFlow<Cursor> = _cursor
@@ -204,7 +205,7 @@ class Receiver(
             lossPermille = if (expected <= 0) 0 else ((expected - periodReceived).coerceAtLeast(0) * 1000L / expected).toInt().coerceAtMost(1000)
             periodStartSeq = maxSeq; periodReceived = 0
         }
-        send(Header(Prs.REPORT), reportBytes(lastFrameId, lossPermille, (jitterUs / 1000).toInt(), decodeMs, (rttUs / 1000).toInt()))
+        send(Header(Prs.REPORT), reportBytes(lastFrameId, lossPermille, (jitterUs / 1000).toInt(), decodeMs, (rttUs / 1000).toInt(), queue.takeMs()))
     }
 
     private fun delivered(f: Frame) {
@@ -214,6 +215,7 @@ class Receiver(
             jitterUs += (kotlin.math.abs(d) - jitterUs) / 16
         }
         prevArrival = f.receivedUs; prevCapture = f.header.captureUs
+        queue.add(f.header.captureUs, f.firstUs)
         lastFrameId = f.id; statFrames++
         listener.onFrame(f)
     }
@@ -223,9 +225,10 @@ class Receiver(
     }
 
     companion object {
-        fun reportBytes(lastFrame: Int, lossPermille: Int, jitterMs: Int, decodeMs: Int, rttMs: Int): ByteArray =
+        /** Bytes 12-13: frame queueing delay, ms ([QueueDelay]); hosts before 4.2.0-r22 ignore it. */
+        fun reportBytes(lastFrame: Int, lossPermille: Int, jitterMs: Int, decodeMs: Int, rttMs: Int, queueMs: Int = 0): ByteArray =
             ByteBuffer.allocate(16).putInt(lastFrame).putShort(lossPermille.toShort())
                 .putShort(jitterMs.coerceIn(0, 65535).toShort()).putShort(decodeMs.coerceIn(0, 65535).toShort())
-                .putShort(rttMs.coerceIn(0, 65535).toShort()).putInt(0).array()
+                .putShort(rttMs.coerceIn(0, 65535).toShort()).putShort(queueMs.coerceIn(0, 65535).toShort()).putShort(0).array()
     }
 }

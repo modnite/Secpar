@@ -31,8 +31,9 @@ use std::{
 use tokio::sync::mpsc;
 
 /// REPORT plaintext: (lossPermille, rttMs), as the Windows host reads it.
-fn parse_report(p: &[u8]) -> Option<(u16, u16)> {
-    (p.len() >= 16).then(|| (u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[10], p[11]])))
+/// (loss ‰, RTT ms, frame queueing delay ms: bytes 12-13, zero from clients before 4.2.0-r22).
+fn parse_report(p: &[u8]) -> Option<(u16, u16, u16)> {
+    (p.len() >= 16).then(|| (u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[10], p[11]]), u16::from_be_bytes([p[12], p[13]])))
 }
 fn header(typ: Type, frame_id: u32) -> Header {
     Header {
@@ -400,8 +401,8 @@ impl Stream {
                         rx_shared.idr.store(true, Ordering::Relaxed);
                     }
                     Type::Report => {
-                        if let Some((loss, rtt)) = parse_report(&p) {
-                            if let Some(t) = bitrate.on_report(begun.elapsed(), loss, rtt) {
+                        if let Some((loss, rtt, queue)) = parse_report(&p) {
+                            if let Some(t) = bitrate.on_report_queue(begun.elapsed(), loss, rtt, queue) {
                                 rx_shared.kbps.store(t.kbps, Ordering::Relaxed);
                             }
                         }
