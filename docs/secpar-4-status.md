@@ -196,6 +196,13 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   announcing it, sends a test probe on the other path every second, and switches when five
   samples each show the other path 30 % and 20 ms faster (`PathTimes`); after a switch it ignores
   the old path for 2 s and tests again after 10 s. Android has no path tests yet. Not tried live.
+- r24 Pace lines: T480 (UHD 620, QSV Hevc 4:4:4 packed 1280x1440): encode 30 ms avg, so ~30 fps;
+  at notch 1 (960x1080) 18 ms and ~48 fps. Convert <0.5 ms. NIGG10 (NVENC): encode ~6 ms, but
+  DXGI delivers only 0-35 new frames/s (repeats fill to 60) with 25-37 ms convert/encode spikes:
+  NIGG10 itself is loaded (OpenCode desktop since 2026-11-14, ~30 processes, ~56% CPU; old
+  esbuild watchers), outside Secpar. 4.2.0-r25: QSV reports whether it opened in low-power
+  (VDENC) mode; a host skips a client codec the GPU can only run in its slow mode when a later
+  one opens fast (HEVC on pre-Ice-Lake Intel), and logs "(no low-power mode on this GPU)".
 - Known failing test, not caused by recent work: secpar-network
   `link::tests::relayed_peers_get_wrapped_replies_and_the_rate_gate` fails on NIGG10 at r16 too
   (the reply after the permit never reaches the fake server within 100 ms).

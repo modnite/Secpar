@@ -8,6 +8,7 @@ unsafe extern "C" {
     fn secpar_avcodec_receive(enc:*mut c_void,data:*mut *const u8,size:*mut u32,stamp:*mut u64,key:*mut bool)->i32;
     fn secpar_avcodec_bitrate(enc:*mut c_void,kbps:u32)->i32;
     fn secpar_avcodec_error(status:i32,text:*mut c_char,size:u32);
+    fn secpar_avcodec_fast(enc:*mut c_void)->bool;
     fn secpar_avcodec_close(enc:*mut c_void);
 }
 fn checked(status:i32)->windows::core::Result<()> {
@@ -35,6 +36,11 @@ impl Encoder {
         self.kbps.set(kbps);Ok(())
     }
     pub fn bitrate(&self)->u32 {self.kbps.get()}
+    /// False for Quick Sync that could not open in its low-power (fixed-function) mode.
+    pub fn fast(&self)->bool {
+        // SAFETY: a live encoder owned by this wrapper.
+        unsafe {secpar_avcodec_fast(self.raw.as_ptr())}
+    }
     pub fn encode(&mut self,texture:&ID3D11Texture2D,stamp:u64,key:bool)->windows::core::Result<Vec<Encoded>> {
         // SAFETY: GPU resource remains live until the bridge enqueues its copy.
         checked(unsafe {secpar_avcodec_send(self.raw.as_ptr(),texture.as_raw(),stamp,key)})?;
