@@ -2,6 +2,10 @@
 
 pub const VERSION: u8 = 1;
 
+/// PROBE flag: a client timing another path. The host answers to the sender and keeps sending the
+/// stream where it was (hosts that list the `pathprobe` capability).
+pub const PATH_TEST: u8 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Type {

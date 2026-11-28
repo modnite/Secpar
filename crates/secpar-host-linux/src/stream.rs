@@ -86,6 +86,17 @@ impl Shared {
             self.link.transmit(&self.socket, peer, &pkt);
         }
     }
+    /// A path-test PROBE's answer, to where it came from and marked the same way.
+    fn probe_reply_to(&self, to: SocketAddr, echo: &[u8]) {
+        let mut h = header(Type::Probe, 0);
+        h.flags = secpar_stream::header::PATH_TEST;
+        h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        let mut reply = [0u8; 16];
+        reply[..8].copy_from_slice(&now_us().to_be_bytes());
+        reply[8..].copy_from_slice(echo);
+        let pkt = self.crypt.seal(Dir::HostToPhone, &h, &reply);
+        self.link.transmit(&self.socket, to, &pkt);
+    }
     fn probe_to(&self, peer: SocketAddr) {
         let mut h = header(Type::Probe, 0);
         h.seq = self.seq.fetch_add(1, Ordering::Relaxed);
@@ -382,6 +393,10 @@ impl Stream {
                 }
                 last_rx = Instant::now();
                 match h.typ {
+                    Type::Probe if p.len() >= 16 && h.flags & secpar_stream::header::PATH_TEST != 0 => {
+                        // A client timing another path: answer there, the stream stays put.
+                        rx_shared.probe_reply_to(from, &p[..8]);
+                    }
                     Type::Probe if p.len() >= 16 => {
                         *rx_shared.peer.lock().unwrap() = Some(from);
                         let mut reply = [0u8; 16];

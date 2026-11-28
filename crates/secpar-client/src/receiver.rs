@@ -347,6 +347,9 @@ impl Receiver {
         self.replay.accept(h.seq).then_some((h, p))
     }
     pub fn seal(&mut self, typ: Type, plain: &[u8]) -> Option<Vec<u8>> {
+        self.seal_flags(typ, 0, plain)
+    }
+    pub fn seal_flags(&mut self, typ: Type, flags: u8, plain: &[u8]) -> Option<Vec<u8>> {
         if self.exhausted || plain.len() > secpar_stream::MAX_PLAIN {
             return None;
         }
@@ -360,7 +363,7 @@ impl Receiver {
             Dir::PhoneToHost,
             &Header {
                 typ,
-                flags: 0,
+                flags,
                 k: 0,
                 seq,
                 frame_id: 0,

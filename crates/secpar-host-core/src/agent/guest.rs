@@ -285,6 +285,8 @@ pub(crate) fn caps(all: &[String], gate: &Gate) -> Vec<String> {
             "fsbrowse" => gate.has("browse") && gate.has("files"),
             "pad" => gate.has("gamepad"),
             "thumb" => gate.view(),
+            // Path-test probes: part of streaming, so with view.
+            "pathprobe" => gate.view(),
             _ => false,
         })
         .cloned()

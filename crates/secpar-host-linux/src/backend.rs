@@ -385,7 +385,7 @@ impl Handlers for Backend {
         Box::pin(async move { pc })
     }
     fn caps(&self) -> Vec<String> {
-        let mut caps: Vec<String> = ["stream", "input", "clip", "media", "files", "fsbrowse", "fsbatch", "power"].map(String::from).to_vec();
+        let mut caps: Vec<String> = ["stream", "input", "clip", "media", "files", "fsbrowse", "fsbatch", "power", "pathprobe"].map(String::from).to_vec();
         if thumb::available() {
             caps.push("thumb".into());
         }
