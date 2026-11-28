@@ -157,6 +157,14 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
 - 4.2.0-r19: stream menu on desktop and Android: Mute audio at the top (desktop: under the window
   toggle), Share clipboard only in Settings, Stream stats opens a page with Show stats bar and the
   audio details (the old Audio page). Desktop: closing the window during a stream disconnects it.
+- T480 is on Wi-Fi; NIGG10 and Android both receive about 30 fps from it, with 12-29% loss. NIGG10
+  shows a black flicker, Android does not (so the NIGG10 client's GPU draw path is the suspect).
+- 4.2.0-r20: Windows host and client hold Wi-Fi media streaming mode during a stream (no background
+  scans; `secpar_network::wlan`), Android holds a low-latency Wi-Fi lock on the stream screen. Linux
+  needs root to change Wi-Fi power save, so nothing there. Not yet measured on the T480.
+- Next, owner asked (2026-11-27), from the Pulsar comparison: (1) NACK retransmission and recovery
+  from an earlier frame instead of a full keyframe; (2) delay-based bitrate cuts before loss;
+  (3) pick the faster of direct and relay, NAT-PMP port mapping; (4) Direct3D drawing on Windows.
 
 ## Account service: self-hosted since 2026-11-21
 

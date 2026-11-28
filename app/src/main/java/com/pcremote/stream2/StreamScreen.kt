@@ -94,6 +94,7 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
 
     Immersive()
     KeepScreenOn()
+    com.pcremote.modes.LowLatencyWifi()
     BackHandler(onBack = onBack)
 
     var surface by remember { mutableStateOf<SurfaceHolder?>(null) }

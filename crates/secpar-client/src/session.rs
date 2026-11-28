@@ -338,6 +338,8 @@ pub async fn run(
     events: mpsc::Sender<Event>,
 ) -> Result<(), String> {
     let mut events=UiEvents::new(events);
+    // Windows: keeps the Wi-Fi card on its channel for the whole session (no-op elsewhere).
+    let _wlan = secpar_network::wlan::hold(None);
     events.emit(Event::Paired(conn.computer.clone()))?;
     if !conn.caps.is_empty(){events.emit(Event::Caps(conn.caps.clone()))?;events.emit(Event::PadSupport(conn.caps.iter().any(|c|c=="pad")))?;}
     events.emit(Event::Status("Finding a stream route".into()))?;

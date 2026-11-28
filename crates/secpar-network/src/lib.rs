@@ -6,6 +6,7 @@ pub mod turn;
 #[cfg(feature = "tls")]
 pub mod turn_tls;
 pub mod upnp;
+pub mod wlan;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod relay_auth;
