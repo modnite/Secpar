@@ -244,7 +244,14 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   Installed in a clean archlinux container: dependencies resolve, all libraries load, pipewiresrc,
   pulsesrc, x264enc and openh264enc present (va and nvcodec register only with matching GPUs).
   An install under /usr updates from that package: it quits, `pkexec pacman -U`, and reopens.
-  Not yet installed on a real Arch desktop.
+  Not yet installed on a real Arch desktop. Released in r29 with an Arch Linux row on the site;
+  the site's downloads come from `cloud/site/generate-downloads.mjs`, which now lists it.
+- Smearing that builds up and clears after a while (owner, 2026-11-28, T480 streaming NIGG10, on
+  every client): the clients only waited for frames they had seen a packet of. A frame that sent
+  nothing (lost whole, or skipped by the shared encoder when a viewer's send queue was full) went
+  unnoticed and the next frame decoded against it until a key frame. Next release: desktop and
+  Android wait 30 ms for such a frame, then count it lost, hold later frames back and ask for a
+  key frame. Unit-tested; not yet seen on devices.
 
 ## Account service: self-hosted since 2026-11-21
 

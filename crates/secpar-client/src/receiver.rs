@@ -90,6 +90,8 @@ impl Default for Assembler {
         }
     }
 }
+/// How long a frame waits for one before it that sent no packet at all, in case it is only late.
+const GAP_WAIT: Duration = Duration::from_millis(30);
 fn newer(a: u32, b: u32) -> bool {
     (a.wrapping_sub(b) as i32) > 0
 }
@@ -111,7 +113,7 @@ impl Assembler {
             self.pending.remove(&id);
             self.drop_frame(id);
         }
-        self.release();
+        self.release(now);
     }
     fn drop_frame(&mut self, id: u32) {
         if self.last.is_none_or(|last| newer(id, last)) {
@@ -153,11 +155,23 @@ impl Assembler {
         out
     }
     /// Moves complete frames that no older incomplete frame blocks into `ready`, in order.
-    fn release(&mut self) {
+    fn release(&mut self, now: Instant) {
         self.held.sort_by(|a, b| oldest_first(&a.0.id, &b.0.id));
-        while let Some((first, _)) = self.held.first() {
+        while let Some((first, arrived)) = self.held.first() {
             if self.pending.keys().any(|id| newer(first.id, *id)) {
                 break;
+            }
+            // A frame between the last one handed out and this one sent no packet at all: lost
+            // whole (a small frame is one or two packets), or skipped by a host whose sending to
+            // this device fell behind. This one would decode against a picture never received and
+            // smear until the next key frame. Wait a moment for it, then count it lost.
+            let (id, key, arrived) = (first.id, first.header.keyframe, *arrived);
+            if let Some(last) = self.last.filter(|last| newer(id, last.wrapping_add(1))) {
+                if !self.need_key && !key && now.saturating_duration_since(arrived) < GAP_WAIT {
+                    break;
+                }
+                self.need_key = true;
+                self.dropped += u64::from(id.wrapping_sub(last).wrapping_sub(1));
             }
             let (f, arrived) = self.held.remove(0);
             if self.arrivals.len() < 1024 {
@@ -201,7 +215,7 @@ impl Assembler {
             if let Some(id) = oldest {
                 self.pending.remove(&id);
                 self.drop_frame(id);
-                self.release();
+                self.release(now);
             }
             if self.last.is_some_and(|last| !newer(h.frame_id, last)) {
                 return self.pop();
@@ -231,7 +245,7 @@ impl Assembler {
             Some((header, data)) => self.held.push((VideoFrame { id: h.frame_id, header, data }, f.first)),
             None => self.drop_frame(h.frame_id),
         }
-        self.release();
+        self.release(now);
         self.pop()
     }
 }
@@ -408,6 +422,25 @@ mod tests {
         }
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].data, vec![37; 5000]);
+    }
+    #[test]
+    fn a_frame_that_never_arrived_holds_back_later_ones_until_a_key_frame() {
+        let mut a = Assembler::default();
+        let now = Instant::now();
+        let whole = |a: &mut Assembler, id, key, at| packets(id, key).into_iter().filter_map(|(h, b)| a.push(h, b, at)).map(|f| f.id).collect::<Vec<_>>();
+        assert_eq!(whole(&mut a, 1, true, now), vec![1]);
+        // Frame 2 sends nothing; frame 3 waits for it a moment, then is held back.
+        assert!(whole(&mut a, 3, false, now).is_empty(), "frame 3 must wait for frame 2");
+        assert!(!a.needs_keyframe());
+        a.tick(now + GAP_WAIT + Duration::from_millis(1));
+        assert!(a.pop().is_none(), "frame 3 would decode into smears");
+        assert!(a.needs_keyframe());
+        assert!(whole(&mut a, 4, false, now + Duration::from_millis(40)).is_empty());
+        assert_eq!(whole(&mut a, 5, true, now + Duration::from_millis(50)), vec![5]);
+        assert!(!a.needs_keyframe());
+        // A late frame that does arrive within the wait is handed out in order.
+        assert!(whole(&mut a, 7, false, now + Duration::from_millis(60)).is_empty());
+        assert_eq!(whole(&mut a, 6, false, now + Duration::from_millis(70)), vec![6, 7]);
     }
     #[test]
     fn timeout_requires_keyframe_and_bounds_pending_memory() {
