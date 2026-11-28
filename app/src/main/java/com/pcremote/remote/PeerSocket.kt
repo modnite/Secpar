@@ -21,12 +21,17 @@ import java.util.concurrent.TimeUnit
  */
 class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport {
     private val sock = DatagramSocket().apply { receiveBufferSize = 4 shl 20; sendBufferSize = 1 shl 20 }
-    private val prs = ArrayBlockingQueue<Pair<ByteArray, InetSocketAddress>>(1024)
+    private val prs = ArrayBlockingQueue<Triple<ByteArray, InetSocketAddress, Boolean>>(1024)
     private val discarded = java.util.concurrent.atomic.AtomicInteger()
     private val pending = ConcurrentHashMap<String, CompletableFuture<StunMsg>>()
     @Volatile private var targets: List<InetSocketAddress> = emptyList()
     @Volatile private var peer: InetSocketAddress? = null
     @Volatile private var lastFrom: InetSocketAddress? = null
+    @Volatile private var lastRelayed = false
+    /** The peer's packets come through our TURN relay, so ours go back that way. */
+    @Volatile var viaRelay = false; private set
+    /** After a path switch, packets still arriving on the old path don't move the peer back. */
+    @Volatile private var holdUntilNs = 0L
     @Volatile var turn: TurnClient? = null; private set
     @Volatile private var closed = false
     /** TURN over TLS, when UDP to the relay is blocked. Its address stands for the relay in [rawSend]. */
@@ -52,17 +57,18 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
     private fun dispatch(buf: ByteArray, n: Int, from: InetSocketAddress) {
             val first = buf[0].toInt() and 0xFF
             when {
-                first in 0x40..0x7F && from == turn?.server -> turn?.unwrap(buf, n)?.let { (data, peerAddr) -> offer(data, peerAddr) }
+                first in 0x40..0x7F && from == turn?.server -> turn?.unwrap(buf, n)?.let { (data, peerAddr) -> offer(data, peerAddr, true) }
                 first <= 0x03 -> StunMsg.decode(buf, n)?.let { m ->
                     val relayed = if (from == turn?.server) turn?.onIndication(m) else null
-                    if (relayed != null) offer(relayed.first, relayed.second) else pending.remove(key(m.txid))?.complete(m)
+                    if (relayed != null) offer(relayed.first, relayed.second, true) else pending.remove(key(m.txid))?.complete(m)
                 }
-                else -> offer(buf.copyOf(n), from)
+                else -> offer(buf.copyOf(n), from, false)
             }
     }
 
-    private fun offer(b: ByteArray, from: InetSocketAddress) {
-        if (!prs.offer(b to from)) { if (prs.poll() != null) discarded.incrementAndGet(); prs.offer(b to from) }
+    private fun offer(b: ByteArray, from: InetSocketAddress, relayed: Boolean) {
+        val item = Triple(b, from, relayed)
+        if (!prs.offer(item)) { if (prs.poll() != null) discarded.incrementAndGet(); prs.offer(item) }
     }
     override fun backlog() = prs.size
     override fun droppedPackets() = discarded.get()
@@ -131,7 +137,7 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
         val t = turn
         val p = peer
         when {
-            p != null && t != null && t.isRelayed(p) -> t.send(b, p)
+            p != null && t != null && viaRelay -> t.send(b, p)
             p != null -> rawSend(b, p)
             else -> {
                 for (a in targets) rawSend(b, a)
@@ -141,8 +147,9 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
     }
 
     override fun receive(buf: ByteArray, timeoutMs: Int): Int {
-        val (b, from) = prs.poll(timeoutMs.toLong(), TimeUnit.MILLISECONDS) ?: return -1
+        val (b, from, relayed) = prs.poll(timeoutMs.toLong(), TimeUnit.MILLISECONDS) ?: return -1
         lastFrom = from
+        lastRelayed = relayed
         b.copyInto(buf)
         return b.size
     }
@@ -150,8 +157,24 @@ class PeerSocket(private val stunServer: InetSocketAddress? = null) : Transport 
     /** The last packet authenticated: talk only to where it came from (follows address changes too). */
     override fun confirm() {
         val f = lastFrom ?: return
-        _route.value = if (turn?.isRelayed(f) == true) "Relay" else "Direct"
-        if (f != peer) { Log.i(TAG, "peer ${if (peer == null) "found" else "moved"}: $f${if (turn?.isRelayed(f) == true) " (relay)" else ""}"); peer = f }
+        if (peer != null && System.nanoTime() < holdUntilNs) return
+        val relayed = lastRelayed
+        _route.value = if (relayed) "Relay" else "Direct"
+        if (f != peer || relayed != viaRelay) { Log.i(TAG, "peer ${if (peer == null) "found" else "moved"}: $f${if (relayed) " (relay)" else ""}"); peer = f; viaRelay = relayed }
+    }
+
+    override fun otherPathReady() = peer != null && (viaRelay || turn != null)
+
+    override fun sendOther(b: ByteArray) {
+        val p = peer ?: return
+        if (viaRelay) rawSend(b, p) else turn?.send(b, p)
+    }
+
+    override fun switchPath() {
+        viaRelay = !viaRelay
+        holdUntilNs = System.nanoTime() + 2_000_000_000L
+        _route.value = if (viaRelay) "Relay" else "Direct"
+        Log.i(TAG, "switched to the ${if (viaRelay) "relay" else "direct path"}: it answered faster")
     }
 
     override fun close() {

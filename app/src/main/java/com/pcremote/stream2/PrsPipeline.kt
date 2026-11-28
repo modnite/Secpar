@@ -40,6 +40,8 @@ class PrsPipeline(
     private val onFullColourTooSlow: () -> Unit = {},
     /** A friend's computer has no relay key: the account's TURN credentials instead. */
     guestTurn: com.pcremote.remote.TurnServer? = null,
+    /** The host answers path-test probes: a direct stream also opens the relay, unannounced, to time it. */
+    pathProbe: Boolean = false,
 ) : Pipeline {
     private val audio: AudioPlayer
     @Volatile private lateinit var decoder: VideoDecoder
@@ -62,6 +64,7 @@ class PrsPipeline(
             }
         }
         receiver = Receiver(sock, Crypt(Base64.decode(ready.key, Base64.DEFAULT), ready.session.toInt()), listener)
+        receiver.pathTest = pathProbe
         audio = AudioPlayer(receiver::audioCaptureToLocalUs)
         decoder = newDecoder(ready)
         thread(name = "pcr-rx", priority = Thread.MAX_PRIORITY) {
@@ -70,13 +73,22 @@ class PrsPipeline(
         }
         if (relay != null || guestTurn != null) thread(name = "pcr-turn-start") {
             Thread.sleep(2_500)
-            if (closed || sock.confirmed()) return@thread
+            // Direct already: with a host that answers test probes, open the relay later anyway so
+            // the two paths can be timed, without telling the host (the stream stays direct).
+            val forTest = sock.confirmed()
+            if (forTest) {
+                if (!pathProbe) return@thread
+                Thread.sleep(5_500)
+                if (closed || sock.viaRelay) return@thread
+            }
+            if (closed) return@thread
             val t = guestTurn ?: relay?.let { TurnCreds.fetch(it) } ?: run { Log.i(TAG, "no direct path and no TURN relay configured"); return@thread }
             val server = runCatching { InetSocketAddress(t.host, t.port) }.getOrNull()
             // UDP first; networks that block it (many offices) still allow TLS on 443.
             val relayed = server?.let { sock.useTurn(it, t.user, t.pass) }
                 ?: t.tlsHost?.takeIf { !closed }?.let { host -> sock.openTls(host, t.tlsPort)?.let { sock.useTurn(it, t.user, t.pass) } }
                 ?: run { Log.w(TAG, "TURN allocation failed"); return@thread }
+            if (forTest) { Log.i(TAG, "relay open for path timing"); return@thread }
             StunMsg.hostPort(relayed)?.let { if (!closed) { Log.i(TAG, "relaying via TURN at $it"); sendAgent(Msg.StreamCand(it)) } }
         }
     }

@@ -413,6 +413,9 @@ impl Panel {
             crate::design::row(ui, "Updates", |ui| {
                 if ui.add(egui::Button::new(label).min_size(egui::vec2(140., crate::design::CONTROL))).clicked() { self.open = true; self.start_check(ui.ctx()); }
             });
+            crate::design::row(ui, "Help", |ui| {
+                if ui.add(egui::Button::new("Open help").min_size(egui::vec2(140., crate::design::CONTROL))).clicked() { let _ = open::that("https://secpar.win/help/"); }
+            });
         });
     }
     pub fn button(&mut self, ui: &mut egui::Ui) {

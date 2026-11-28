@@ -120,7 +120,8 @@ fun StreamScreen(pcId: String, onBack: () -> Unit) {
                     if (dropFullColour.get()?.invoke() == true) android.widget.Toast.makeText(ctx,
                         "Full colour is off for this stream: this device can't show it at full speed at this size.", android.widget.Toast.LENGTH_LONG).show()
                 } },
-                guestTurn = com.pcremote.guest.GuestSessions.find(session.pc.id)?.turn)
+                guestTurn = com.pcremote.guest.GuestSessions.find(session.pc.id)?.turn,
+                pathProbe = (agent as? com.pcremote.agent.AgentState.Online)?.caps?.contains("pathprobe") == true)
             created.setMuted(toolbar.muted)
             pipe = created
             moving.set(false)

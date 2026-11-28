@@ -39,6 +39,9 @@ pub struct Incoming {
     pub computer_name: Option<String>,
     pub requested: String,
     pub state: String,
+    /// A friend's app watching the computer's card thumbnail (1), not using the computer.
+    #[serde(default)]
+    pub preview: u8,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Answer { AllowConnection, DenyConnection, AcceptFriend, DeclineFriend }
@@ -1436,11 +1439,18 @@ impl Api {
     }
     /// Ask a friend for access. Answers the request id, its state and the permissions the service kept.
     pub(crate) async fn request_access(&self, computer: &str, permissions: &[String]) -> Result<(String, String, u64, Vec<String>), (StatusCode, String)> {
+        self.request(computer, permissions, false).await
+    }
+    /// A view-only request for a computer's card thumbnail, which the owner's apps don't announce.
+    pub(crate) async fn request_preview(&self, computer: &str) -> Result<(String, String, u64, Vec<String>), (StatusCode, String)> {
+        self.request(computer, &["view".to_string()], true).await
+    }
+    async fn request(&self, computer: &str, permissions: &[String], preview: bool) -> Result<(String, String, u64, Vec<String>), (StatusCode, String)> {
         let computer = path_id(computer).map_err(|note| (StatusCode::BAD_REQUEST, note))?;
         if permissions.is_empty() || permissions.iter().any(|p| !PERMISSIONS.contains(&p.as_str())) {
             return Err((StatusCode::BAD_REQUEST, "Choose what you want to do first.".into()));
         }
-        let value = self.call(Method::POST, "/v1/requests", Some(json!({"computer": computer, "permissions": permissions}))).await?;
+        let value = self.call(Method::POST, "/v1/requests", Some(json!({"computer": computer, "permissions": permissions, "preview": preview}))).await?;
         let bad = || (StatusCode::BAD_GATEWAY, "Invalid request response".to_string());
         let id = value["id"].as_str().filter(|id| path_id(id).is_ok()).ok_or_else(bad)?.to_string();
         let state = value["state"].as_str().ok_or_else(bad)?.to_string();
@@ -1803,7 +1813,8 @@ fn new_alerts(me: &str, friends: &[Friend], requests: &[Incoming], seen: &mut Se
 fn new_connections(me: &str, requests: &[Incoming], seen: &mut Seen) -> Vec<String> {
     let mut out = vec![];
     for r in requests.iter().filter(|r| r.owner == me && r.state == "claimed") {
-        if seen.connected.insert(r.id.clone()) && seen.connected_primed {
+        // Thumbnail sessions come again after every reconnect and use nothing.
+        if seen.connected.insert(r.id.clone()) && seen.connected_primed && r.preview == 0 {
             out.push(format!("@{} is using {}.", r.guest_handle, r.computer_name.as_deref().unwrap_or("your computer")));
         }
     }
@@ -2342,12 +2353,18 @@ mod tests {
     fn a_friend_who_connects_is_announced_once_and_not_on_start() {
         let mut seen = Seen::default();
         assert!(new_connections("me", &[incoming("old", "me", "claimed")], &mut seen).is_empty(), "already running at start");
-        let got = new_connections("me", &[incoming("old", "me", "claimed"), incoming("new", "me", "claimed"), incoming("pending", "me", "pending"), incoming("theirs", "other", "claimed")], &mut seen);
+        let mut using = incoming("new", "me", "claimed");
+        using.requested = "[\"view\",\"keyboard\",\"mouse\"]".into();
+        let got = new_connections("me", &[incoming("old", "me", "claimed"), using.clone(), incoming("pending", "me", "pending"), incoming("theirs", "other", "claimed")], &mut seen);
         assert_eq!(got, vec!["@bob is using Studio.".to_string()]);
-        assert!(new_connections("me", &[incoming("new", "me", "claimed")], &mut seen).is_empty(), "only once");
+        assert!(new_connections("me", &[using], &mut seen).is_empty(), "only once");
+        let mut thumbnail = incoming("thumbnail", "me", "claimed");
+        thumbnail.preview = 1;
+        assert!(new_connections("me", &[thumbnail], &mut seen).is_empty(), "a card thumbnail");
+        assert_eq!(new_connections("me", &[incoming("viewer", "me", "claimed")], &mut seen).len(), 1, "a view-only friend is announced");
     }
     fn incoming(id: &str, owner: &str, state: &str) -> Incoming {
-        Incoming { id: id.into(), owner: owner.into(), guest_handle: "bob".into(), computer_name: Some("Studio".into()), requested: "[\"view\"]".into(), state: state.into() }
+        Incoming { id: id.into(), owner: owner.into(), guest_handle: "bob".into(), computer_name: Some("Studio".into()), requested: "[\"view\"]".into(), state: state.into(), preview: 0 }
     }
     #[test]
     fn alerts_fire_once_and_skip_requests_that_were_waiting_at_start() {

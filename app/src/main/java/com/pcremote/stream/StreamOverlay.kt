@@ -171,12 +171,10 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                 MenuRow.RESOLUTION -> StreamMenuRow(R.drawable.lucide_monitor, row.label, value = sizeLabel(state.sizeW, state.sizeH), arrow = true) { page = MenuPage.RESOLUTION }
                 MenuRow.SWITCH_DISPLAY -> StreamMenuRow(R.drawable.lucide_monitor, row.label, arrow = true) { page = MenuPage.DISPLAYS }
                 MenuRow.STREAM_STATS -> StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, row.label, arrow = true) { page = MenuPage.STATS }
-                MenuRow.HELP -> {
-                    StreamMenuRow(R.drawable.lucide_circle_help, row.label) { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse(StreamMenuModel.HELP_URL))) }
+                MenuRow.DISCONNECT -> {
                     MenuDivider()
+                    StreamMenuRow(R.drawable.lucide_log_out, row.label, value = StreamMenuModel.DISCONNECT_HINT, destructive = true) { a.disconnect() }
                 }
-                MenuRow.DISCONNECT -> StreamMenuRow(R.drawable.lucide_log_out, row.label, value = StreamMenuModel.DISCONNECT_HINT, destructive = true) { a.disconnect() }
             }
             Text("Secpar " + com.pcremote.BuildConfig.VERSION_NAME,
                 color = MenuColors.muted,

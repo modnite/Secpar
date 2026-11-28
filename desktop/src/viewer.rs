@@ -47,7 +47,8 @@ pub fn run() -> eframe::Result {
     let Some(request) = std::io::stdin().read_to_string(&mut text).ok().and_then(|_| serde_json::from_str::<Request>(&text).ok()) else {
         return Ok(());
     };
-    let options = eframe::NativeOptions {
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("{} · {}", request.computer.name, request.name))
             .with_app_id("com.secpar.desktop")
@@ -55,6 +56,8 @@ pub fn run() -> eframe::Result {
             .with_min_inner_size([320., 200.]),
         ..Default::default()
     };
+    #[cfg(windows)]
+    gpu::choose_renderer(&mut options);
     eframe::run_native("Secpar display", options, Box::new(|cc| Ok(Box::new(View::new(cc, request)))))
 }
 
@@ -100,7 +103,7 @@ impl View {
         });
         let mut input = input::Input::default();
         input.free();
-        View { commands, events, route, decoder, gpu: cc.gl.as_ref().and_then(gpu::new), texture: None, size: [0, 0], input, status: "Connecting".into(), full_colour: false }
+        View { commands, events, route, decoder, gpu: gpu::new(cc), texture: None, size: [0, 0], input, status: "Connecting".into(), full_colour: false }
     }
 
     fn send(&self, m: serde_json::Value) {

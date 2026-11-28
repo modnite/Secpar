@@ -6,7 +6,7 @@ class AudioPlayoutTest {
         assertEquals(AudioPlayout.Decision(false,false), AudioPlayout.decide(990_000,1_000_000,1440))
     }
     @Test fun aStallCannotShiftTheAudioTimelinePermanently() {
-        assertEquals(AudioPlayout.Decision(true,true),AudioPlayout.decide(800_000,1_000_000,3360))
+        assertEquals(AudioPlayout.Decision(true,true),AudioPlayout.decide(500_000,1_000_000,3360))
         assertEquals(AudioPlayout.Decision(false,false),AudioPlayout.decide(1_000_000,1_005_000,0))
     }
     @Test fun accumulatedOutputDelayIsFlushedEvenWithFreshPackets() {
@@ -17,7 +17,8 @@ class AudioPlayoutTest {
     }
     @Test fun transitDelayDoesNotFlushAHealthyPlaybackReserve() {
         assertEquals(AudioPlayout.Decision(false,false),AudioPlayout.decide(950_000,1_000_000,1920))
-        assertEquals(AudioPlayout.Decision(true,true),AudioPlayout.decide(839_000,1_000_000,0))
+        assertEquals(AudioPlayout.Decision(false,false),AudioPlayout.decide(700_000,1_000_000,0))
+        assertEquals(AudioPlayout.Decision(true,true),AudioPlayout.decide(599_000,1_000_000,0))
     }
     @Test fun unsynchronizedHostClockDoesNotInvalidateEveryPacket() {
         assertFalse(AudioPlayout.decide(null,1_000_000,1440).discard)

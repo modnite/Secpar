@@ -10,6 +10,8 @@ mod linux;
 #[cfg(windows)]
 mod dxva;
 #[cfg(windows)]
+pub use dxva::adapter_ids;
+#[cfg(windows)]
 pub mod dxgl;
 mod nal;
 use secpar_stream::frame::Codec;

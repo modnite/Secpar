@@ -210,14 +210,28 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   at the lowest bitrate and the largest step-down any viewer needs; a joining viewer gets frames
   from the next key frame; each viewer's packets are paced out on its own thread. A viewer that
   switches display leaves for that display's pipeline; size requests wait until a viewer has the
-  pipeline alone. Linux hosts still encode per viewer.
-- Open: Android and Chromecast audio drops out for 1-2 s at times (desktop clients don't). Android
-  discards audio older than 160 ms and restarts its decoder with a back-off of up to 1 s; the
-  desktop client only caps its buffer at 200 ms. Needs the Stream stats audio counters after a
-  dropout to tell which.
-- Known failing test, not caused by recent work: secpar-network
-  `link::tests::relayed_peers_get_wrapped_replies_and_the_rate_gate` fails on NIGG10 at r16 too
-  (the reply after the permit never reaches the fake server within 100 ms).
+  pipeline alone.
+- Next release (r27), written and unit-tested, not yet on devices:
+  - Linux hosts share one capture and encoder per screen too (stream/group.rs). The first
+    viewer's screen-sharing session stays open until the pipeline ends; "new" never shares.
+  - Android audio (dropouts of 1-2 s): keeps packets up to 400 ms old instead of 160 ms, waits
+    40 ms for the output instead of resetting it, drops one packet on a decoder stall and restarts
+    only after three in a row, back-off capped at 250 ms.
+  - Android times the direct path against the relay like the desktop client (PathTimes, with
+    hosts listing `pathprobe`) and moves to the quicker one. Needs a live check away from home.
+  - Help left both stream menus (desktop: Settings > General > About; Android: Settings > About).
+  - The secpar-network relay test waits on the fake server's log instead of fixed sleeps.
+- Windows client draws with Direct3D 12 (wgpu) from r27; Linux keeps OpenGL. Decoded frames are
+  shared from the D3D11 decoder through NT handles and a shared fence, and the last three shown
+  frames are held. Verified on NIGG10 with a release build (2026-11-28): T480 at 1920x1080,
+  60 decoded and 60 drawn fps, "drawn from the GPU". `SECPAR_RENDERER=opengl` brings back
+  OpenGL; a PC with no hardware Direct3D 12 adapter uses OpenGL. Whether NIGG10's black flicker
+  is gone is for the owner to judge.
+- Friend card thumbnails made a new access request on every reconnect, and owners' apps
+  announced each as "Friend connected" (Bryan's CachyOS PC was flooded). Since 2026-11-28 the
+  account service (migration 0014, deployed to OMV) marks requests sent with `preview: true`
+  (view only); r27 apps send it for thumbnails and don't announce marked rows. Older apps still
+  send unmarked thumbnail requests until updated.
 
 ## Account service: self-hosted since 2026-11-21
 

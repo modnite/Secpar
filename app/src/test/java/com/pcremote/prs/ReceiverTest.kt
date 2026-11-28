@@ -126,6 +126,41 @@ class ReceiverTest {
     }
     private fun sentOf(typ: Int) = t.sent.mapNotNull { host.open(Crypt.PHONE_TO_HOST, it) }.filter { it.first.typ == typ }
 
+    private class PathTransport : Transport {
+        val sent = ArrayList<ByteArray>()
+        val other = ArrayList<ByteArray>()
+        var confirms = 0
+        var switches = 0
+        override fun send(b: ByteArray) { sent += b }
+        override fun receive(buf: ByteArray, timeoutMs: Int) = -1
+        override fun close() {}
+        override fun confirm() { confirms++ }
+        override fun otherPathReady() = true
+        override fun sendOther(b: ByteArray) { other += b }
+        override fun switchPath() { switches++ }
+    }
+
+    @Test fun aQuickerOtherPathTakesOverAndItsRepliesNeverMoveTheStream() {
+        val pt = PathTransport()
+        val rx = Receiver(pt, Crypt(key, 99), object : ReceiverListener { override fun onFrame(f: Frame) {} }, clock = { 0 })
+        rx.pathTest = true
+        var seq = 0
+        fun reply(flags: Int, echo: Long, now: Long) {
+            val pkt = host.seal(Crypt.HOST_TO_PHONE, Header(Prs.PROBE, flags = flags, seq = seq++), ByteBuffer.allocate(16).putLong(1).putLong(echo).array())
+            rx.onPacket(pkt, pkt.size, now)
+        }
+        var now = 1_000_000L
+        for (i in 0 until 6) {
+            reply(0, now - 90_000, now)               // current path: 90 ms
+            reply(Prs.PATH_TEST, now - 30_000, now)   // other path: 30 ms
+            rx.step(now)
+            now += 1_000_000
+        }
+        assertEquals("only normal replies confirm the peer", 6, pt.confirms)
+        assertTrue(pt.other.any { host.open(Crypt.PHONE_TO_HOST, it)?.first?.flags == Prs.PATH_TEST })
+        assertEquals(1, pt.switches)
+    }
+
     @Test fun punchingGapsBeforeVideoAreNotLoss() {
         r.step(0)
         // the host punched to other addresses: seqs 0..49 went elsewhere, one PROBE reached us

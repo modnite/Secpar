@@ -50,6 +50,7 @@ class Database {
     this.db.exec(readFileSync(new URL("../migrations/0011_knocks.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0012_friend_browse.sql", import.meta.url), "utf8"));
     this.db.exec(readFileSync(new URL("../migrations/0013_host_viewers.sql", import.meta.url), "utf8"));
+    this.db.exec(readFileSync(new URL("../migrations/0014_preview_requests.sql", import.meta.url), "utf8"));
   }
   prepare(sql: string) {
     return new Statement(this.db, sql);
@@ -250,6 +251,18 @@ describe("friend and guest boundaries", () => {
         })
       ).status,
     ).toBe(403);
+  });
+  it("marks view-only thumbnail requests so owners can tell them apart", async () => {
+    await friendship();
+    const host = await computer();
+    const ask = async (permissions: string[], preview?: boolean) =>
+      (await (await call("/v1/requests", "bob", "POST", { computer: host, permissions, preview })).json()).id as string;
+    const thumb = await ask(["view"], true);
+    const using = await ask(["view", "audio"], true);
+    const plain = await ask(["view"]);
+    const rows = (await (await call("/v1/requests", "alice")).json()) as { id: string; preview: number }[];
+    const flag = (id: string) => rows.find((r) => r.id === id)?.preview;
+    expect([flag(thumb), flag(using), flag(plain)]).toEqual([1, 0, 0]);
   });
   it("does not issue admin permissions or expired grants", async () => {
     await friendship();
