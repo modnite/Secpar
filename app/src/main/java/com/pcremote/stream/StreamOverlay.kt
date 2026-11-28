@@ -171,7 +171,6 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                 MenuRow.RESOLUTION -> StreamMenuRow(R.drawable.lucide_monitor, row.label, value = sizeLabel(state.sizeW, state.sizeH), arrow = true) { page = MenuPage.RESOLUTION }
                 MenuRow.SWITCH_DISPLAY -> StreamMenuRow(R.drawable.lucide_monitor, row.label, arrow = true) { page = MenuPage.DISPLAYS }
                 MenuRow.STREAM_STATS -> StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, row.label, arrow = true) { page = MenuPage.STATS }
-                MenuRow.MORE_KEYS -> StreamMenuRow(R.drawable.lucide_command, row.label, arrow = true) { page = MenuPage.KEYS }
                 MenuRow.HELP -> {
                     StreamMenuRow(R.drawable.lucide_circle_help, row.label) { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
                         android.net.Uri.parse(StreamMenuModel.HELP_URL))) }
@@ -195,28 +194,6 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
             StreamMenuRow(R.drawable.lucide_arrow_left, StreamMenuModel.backTitle(page)) { page = StreamMenuModel.backTarget(page) }
             MenuDivider()
             when (page) {
-                MenuPage.KEYS -> {
-                    StreamMenuRow(R.drawable.lucide_corner_down_left, "Escape") { a.keys(chord(listOf(VK_ESC))); close() }
-                    StreamMenuRow(R.drawable.lucide_panels_top_left, "Windows key") { a.shortcut(Shortcut.WIN); close() }
-                    StreamMenuRow(R.drawable.lucide_arrow_left_right, "Switch app", value = "Alt+Tab") { a.shortcut(Shortcut.ALT_TAB); close() }
-                    StreamMenuRow(R.drawable.lucide_copy, "Copy", value = "Ctrl+C") { a.shortcut(Shortcut.COPY); close() }
-                    StreamMenuRow(R.drawable.lucide_clipboard_paste, "Paste", value = "Ctrl+V") { a.shortcut(Shortcut.PASTE); close() }
-                    StreamMenuRow(R.drawable.lucide_panels_top_left, "Show desktop") { a.keys(chord(listOf(0x5B, 0x44))); close() }
-                    StreamMenuRow(R.drawable.lucide_monitor, "Task Manager") { a.keys(chord(listOf(0x11, 0x10, VK_ESC))); close() }
-                    StreamMenuRow(R.drawable.lucide_x, "Close window", value = "Alt+F4") { a.keys(chord(listOf(0x12, 0x73))); close() }
-                    StreamMenuRow(R.drawable.lucide_music_2, "Media keys", arrow = true) { page = MenuPage.MEDIA }
-                }
-                MenuPage.MEDIA -> {
-                    for ((icon, label, shortcut) in listOf(
-                        Triple(R.drawable.lucide_skip_back,"Previous",Shortcut.PREV),
-                        Triple(R.drawable.lucide_play,"Play / pause",Shortcut.PLAY_PAUSE),
-                        Triple(R.drawable.lucide_skip_forward,"Next",Shortcut.NEXT),
-                        Triple(R.drawable.lucide_volume_1,"Host volume down",Shortcut.VOL_DOWN),
-                        Triple(R.drawable.lucide_volume_2,"Host volume up",Shortcut.VOL_UP),
-                        Triple(R.drawable.lucide_volume_x,"Mute host",Shortcut.MUTE))) {
-                        StreamMenuRow(icon, label) { a.shortcut(shortcut) }
-                    }
-                }
                 MenuPage.RESOLUTION -> STREAM_SIZES.forEach { (w, h) -> StreamMenuRow(R.drawable.lucide_monitor, sizeLabel(w, h), checked = w == state.sizeW && h == state.sizeH) {
                     if (w != state.sizeW || h != state.sizeH) { state.sizeW = w; state.sizeH = h; a.selectSize(w, h) }
                     page = StreamMenuModel.pageAfterPick()

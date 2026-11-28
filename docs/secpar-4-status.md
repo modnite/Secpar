@@ -203,6 +203,18 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   esbuild watchers), outside Secpar. 4.2.0-r25: QSV reports whether it opened in low-power
   (VDENC) mode; a host skips a client codec the GPU can only run in its slow mode when a later
   one opens fast (HEVC on pre-Ice-Lake Intel), and logs "(no low-power mode on this GPU)".
+- r25 confirmed by the owner (2026-11-28): the T480 picks H.264 in low-power mode, ~10 ms per
+  720p 4:4:4 frame, 60 fps to one or two viewers. With three viewers each had its own encoder:
+  15-16 ms per frame and 40-50 fps. 4.2.0-r26 (Windows hosts): viewers of the same display share
+  one capture and one encoder when they decode its codec (and 4:4:4 if packed). The encoder runs
+  at the lowest bitrate and the largest step-down any viewer needs; a joining viewer gets frames
+  from the next key frame; each viewer's packets are paced out on its own thread. A viewer that
+  switches display leaves for that display's pipeline; size requests wait until a viewer has the
+  pipeline alone. Linux hosts still encode per viewer.
+- Open: Android and Chromecast audio drops out for 1-2 s at times (desktop clients don't). Android
+  discards audio older than 160 ms and restarts its decoder with a back-off of up to 1 s; the
+  desktop client only caps its buffer at 200 ms. Needs the Stream stats audio counters after a
+  dropout to tell which.
 - Known failing test, not caused by recent work: secpar-network
   `link::tests::relayed_peers_get_wrapped_replies_and_the_rate_gate` fails on NIGG10 at r16 too
   (the reply after the permit never reaches the fake server within 100 ms).

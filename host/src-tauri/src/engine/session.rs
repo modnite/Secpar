@@ -421,7 +421,6 @@ struct Video {
     fps: u32,
     /// The display being captured.
     shown: capture::Display,
-    rect: crate::input::Rect,
     /// Frames carry 4:4:4 packed: the encoder's frame is twice the picture's height.
     packed: bool,
 }
@@ -462,7 +461,7 @@ impl Video {
             if let Some(found)=slow {encoder=Some((found,packed));break 'tries;}
         }
         let (enc,packed)=encoder.ok_or_else(||err("no_encoder",&failure))?;
-        Ok(Video { dev, ctx, luid, cap, enc, base, fps, shown, rect: p.rect.clone(), packed })
+        Ok(Video { dev, ctx, luid, cap, enc, base, fps, shown, packed })
     }
 
     /// The picture the client shows: the encoder's frame without the packing.
@@ -496,15 +495,34 @@ impl Video {
         Convert::with_chroma(&self.dev, &self.ctx, input, self.picture(), self.packed).ok()
     }
 
-    fn shown(&self, notify: &Notify) {
-        *self.rect.lock().unwrap() = Some(self.shown.rect);
-        notify(ServerMsg::StreamDisplays { list: capture::displays(), current: self.shown.id.clone() });
+    fn info(&self) -> GroupInfo {
+        GroupInfo { shown: self.shown.id.clone(), codec: self.enc.codec(), packed: self.packed, fps: self.fps, base: self.base, picture: self.picture() }
     }
 
-    fn run(mut self, sh: &Shared, ready: &ReadyInfo, notify: &Notify, p: &Params) {
+    /// Points the viewer's input at the display and lists the displays, with the pointer's shape.
+    fn show_to(&self, m: &Member, shape: &Option<ServerMsg>) {
+        *m.p.rect.lock().unwrap() = Some(self.shown.rect);
+        (m.notify)(ServerMsg::StreamDisplays { list: capture::displays(), current: self.shown.id.clone() });
+        if let Some(s) = shape {
+            (m.notify)(s.clone());
+        }
+    }
+
+    /// A `stream.ready` when the viewer's picture changed (or `always`, after a display switch).
+    fn announce(&self, m: &mut Member, always: bool) {
+        let now = (self.enc.codec(), self.picture(), self.packed);
+        if always || m.announced != Some(now) {
+            m.ready.codec = now.0;
+            (m.notify)(m.ready.msg(now.1, now.2));
+            m.announced = Some(now);
+        }
+    }
+
+    fn run(mut self, group: &Group, mut members: Vec<Member>) {
         // A host on Wi-Fi: no background scans while it streams (12-29% loss seen on a T480).
         let _wlan = secpar_network::wlan::hold(Some(crate::log::line));
-        self.shown(notify);
+        // The host's encoder settings: the same in every viewer's parameters.
+        let settings = members[0].p.encoder.clone();
         let mut interval = stream_interval(self.fps, self.cap.refresh_rate());
         let mut work_budget = interval.min(Duration::from_millis(10));
         let mut pending = false;
@@ -518,66 +536,110 @@ impl Video {
         let mut last_send = Instant::now() - interval * 2;
         // Encoded units wait here for their send slot. Encoding never runs at the deadline.
         let mut prepared: std::collections::VecDeque<super::encode::Encoded> = std::collections::VecDeque::new();
-        let mut prepared_packets: Option<Vec<(Header,Vec<u8>)>> = None;
+        let mut prepared_packets: Option<Arc<Vec<(Header,Vec<u8>)>>> = None;
         let mut img: Option<Arc<capture::FrameTexture>> = None;
         let mut conv: Option<Convert> = None;
         let (mut frame_id, mut cap_us) = (0u32, 0u64);
-        let mut applied = *sh.target.lock().unwrap();
-        let mut last_cursor = None;
+        let mut applied = combined(&members);
         let (mut pointer_visible, mut hotspot) = (true, (0i32, 0i32));
-        let mut want = (p.w, p.h);
+        // The pointer's shape, for viewers that join later.
+        let mut shape: Option<ServerMsg> = None;
+        let mut want = (members[0].p.w, members[0].p.h);
         let mut lats: Vec<u64> = Vec::new();
         let mut fails = 0u32;
+        let mut key_all = false;
         let mut st = Pace::new();
-        while !sh.stopped() {
+        for m in &mut members {
+            self.announce(m, false);
+            self.show_to(m, &shape);
+        }
+        loop {
             st.maybe_log();
-            if let Some(g) = &p.gate {
-                // Checked before every frame: a friend never follows the owner onto the lock screen.
-                if crate::win::desk::locked_or_unknown() {
-                    g.close_because("locked");
-                }
-                if !g.view() {
+            let joined = std::mem::take(&mut *group.joining.lock().unwrap());
+            for mut m in joined {
+                self.announce(&mut m, false);
+                self.show_to(&m, &shape);
+                members.push(m);
+                crate::log::line(&format!("stream: a viewer joined the {} stream ({} watching)", self.shown.id, members.len()));
+            }
+            members.retain(Member::keep);
+            if members.is_empty() {
+                if group.close(false) {
                     break;
                 }
+                continue;
             }
-            let t = *sh.target.lock().unwrap();
-            let new_display = sh.switch.lock().unwrap().take().filter(|id| *id != self.shown.id);
-            let new_size = sh.resize.lock().unwrap().take().filter(|s| *s != want);
-            if new_display.is_some() || new_size.is_some() {
-                want = new_size.unwrap_or(want);
-                let changed_display = new_display.is_some();
-                // same codec (the decoder is set up for it), then the current notch below
-                let p = Params { display: new_display.unwrap_or_else(|| self.shown.id.clone()), w: want.0, h: want.1, codecs: vec![codec_name(self.enc.codec()).into()], ..p.clone() };
-                if let Ok(v) = Video::open(&p, t.kbps) {
-                    crate::log::line(&format!("stream: switched to {}", v.shown.id));
-                    self = v;
-                    interval = stream_interval(self.fps, self.cap.refresh_rate());
-                    work_budget = interval.min(Duration::from_millis(10));
-                    source_clock = false;
-                    prepared.clear();
-                    prepared_packets = None;
-                    (img, conv, pending, last_cursor) = (None, None, false, None);
-                    applied.notch = 0;
-                    sh.idr.store(true, Ordering::Relaxed);
-                    notify(ready.msg(self.picture(), self.packed));
-                    self.shown(notify);
-                    if changed_display {
-                        let [l, t, r, b] = self.shown.rect;
-                        // SAFETY: move only for an explicitly selected display, never a stream resize.
-                        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos((l + r) / 2, (t + b) / 2) };
+            for m in &mut members {
+                // A viewer starts on a key frame: the first one after its address is known.
+                if !m.started && !m.key_asked && m.sh.peer().is_some() {
+                    m.key_asked = true;
+                    key_all = true;
+                }
+            }
+            let t = combined(&members);
+            if members.len() == 1 {
+                let (new_display, new_size, mp) = {
+                    let m = &members[0];
+                    let d = m.sh.switch.lock().unwrap().take().filter(|id| *id != self.shown.id);
+                    let s = m.sh.resize.lock().unwrap().take().filter(|s| *s != want);
+                    (d, s, m.p.clone())
+                };
+                if new_display.is_some() || new_size.is_some() {
+                    want = new_size.unwrap_or(want);
+                    let changed_display = new_display.is_some();
+                    // same codec (the decoder is set up for it), then the current notch below
+                    let p = Params { display: new_display.unwrap_or_else(|| self.shown.id.clone()), w: want.0, h: want.1, codecs: vec![codec_name(self.enc.codec()).into()], ..mp };
+                    if let Ok(v) = Video::open(&p, t.kbps) {
+                        crate::log::line(&format!("stream: switched to {}", v.shown.id));
+                        self = v;
+                        interval = stream_interval(self.fps, self.cap.refresh_rate());
+                        work_budget = interval.min(Duration::from_millis(10));
+                        source_clock = false;
+                        prepared.clear();
+                        prepared_packets = None;
+                        (img, conv, pending, members[0].cursor) = (None, None, false, None);
+                        applied.notch = 0;
+                        key_all = true;
+                        *group.info.lock().unwrap() = self.info();
+                        self.announce(&mut members[0], true);
+                        self.show_to(&members[0], &shape);
+                        if changed_display {
+                            let [l, t, r, b] = self.shown.rect;
+                            // SAFETY: move only for an explicitly selected display, never a stream resize.
+                            let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos((l + r) / 2, (t + b) / 2) };
+                        }
+                    }
+                }
+            } else {
+                // A shared picture keeps its size until one viewer has it alone. A viewer moving
+                // to another display leaves for that display's pipeline.
+                let mut i = 0;
+                while i < members.len() {
+                    let id = members[i].sh.switch.lock().unwrap().take().filter(|id| *id != self.shown.id);
+                    match id {
+                        Some(id) => {
+                            let mut m = members.remove(i);
+                            m.p.display = id;
+                            (m.announced, m.started, m.key_asked, m.cursor) = (None, false, false, None);
+                            place(m);
+                        }
+                        None => i += 1,
                     }
                 }
             }
             if t.notch != applied.notch {
                 let size = notch_size(self.base.0, self.base.1, t.notch);
                 let frame = if self.packed { (size.0, size.1 * 2) } else { size };
-                match Encoder::selected(&self.dev, self.luid, self.enc.codec(), frame, self.fps, t.kbps, &p.encoder) {
+                match Encoder::selected(&self.dev, self.luid, self.enc.codec(), frame, self.fps, t.kbps, &settings) {
                     Ok(e) => {
                         self.enc = e;
                         prepared.clear();
                         prepared_packets = None;
                         conv = None;
-                        notify(ready.msg(size, self.packed));
+                        *group.info.lock().unwrap() = self.info();
+                        for m in &mut members {
+                            self.announce(m, true);
+                        }
                     }
                     Err(e) => {
                         crate::log::line(&format!("stream: no encoder at the new size: {}", e.message()));
@@ -603,9 +665,8 @@ impl Video {
                 let (pw, ph) = self.picture();
                 let inside = at.x >= l && at.x < r && at.y >= t && at.y < b;
                 let c = ((at.x - l) * pw as i32 / (r - l).max(1), (at.y - t) * ph as i32 / (b - t).max(1), inside && pointer_visible);
-                if last_cursor != Some(c) {
-                    last_cursor = Some(c);
-                    sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2));
+                for m in &mut members {
+                    m.pointer(c);
                 }
             }
             if let Some(f) = self.cap.next(Duration::ZERO) {
@@ -617,9 +678,8 @@ impl Video {
                         let (sw, sh_) = self.picture();
                         // Capture gives the shape's top-left corner; clients place the hot spot.
                         let c = ((p.x + hotspot.0) * sw as i32 / desk.0.max(1) as i32, (p.y + hotspot.1) * sh_ as i32 / desk.1.max(1) as i32, p.visible);
-                        if last_cursor != Some(c) {
-                            last_cursor = Some(c);
-                            sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2));
+                        for m in &mut members {
+                            m.pointer(c);
                         }
                     }
                 }
@@ -627,7 +687,11 @@ impl Video {
                     hotspot = (s.hx, s.hy);
                 }
                 if let Some(png) = f.shape.as_ref().and_then(|s| cursor::png(s).map(|p| (p, s.hx, s.hy))) {
-                    notify(ServerMsg::CursorShape { png: STANDARD.encode(&png.0), hx: png.1, hy: png.2 });
+                    let msg = ServerMsg::CursorShape { png: STANDARD.encode(&png.0), hx: png.1, hy: png.2 };
+                    for m in &members {
+                        (m.notify)(msg.clone());
+                    }
+                    shape = Some(msg);
                 }
                 if f.tex.is_some() {
                     st.captured += 1;
@@ -651,8 +715,9 @@ impl Video {
                 interval = stream_interval(self.fps, self.cap.refresh_rate());
                 work_budget = interval.min(Duration::from_millis(10));
                 source_clock = false;
-                sh.idr.store(true, Ordering::Relaxed);
+                key_all = true;
             }
+            let watched = members.iter().any(|m| m.sh.peer().is_some());
             // Sample the source slot, not an old capture encoded early and held
             // for a send timer. Faster capture rates keep only their newest image.
             let encode_due = next_due.checked_sub(work_budget).unwrap_or(next_due);
@@ -662,7 +727,7 @@ impl Video {
             // each slot turned about every other one into a repeat (30 fps from a 60 fps game).
             let unsent_fresh = pending && now_us().saturating_sub(cap_us) <= interval.as_micros() as u64;
             let current = !source_clock || unsent_fresh || source_in_slot(cap_us, now_us(), now, encode_due);
-            if pending && prepared.is_empty() && sh.peer().is_some() && now >= encode_due && current {
+            if pending && prepared.is_empty() && watched && now >= encode_due && current {
                 if let (Some(src), Some(size)) = (img.as_ref(), self.cap.size()) {
                     if conv.is_none() {
                         conv = self.converter(size);
@@ -671,7 +736,7 @@ impl Video {
                     if let Some(nv12) = conv.as_mut().and_then(|c| {let t0=Instant::now();let r=c.convert_frame(src).ok();st.convert.add(t0.elapsed());r}) {
                         secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
                         let timing = secpar_stream::timing::begin();
-                        let force = sh.idr.swap(false, Ordering::Relaxed);
+                        let force = take_key(&members, &mut key_all);
                         if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=false");}
                         let t0 = Instant::now();
                         let encoded = self.enc.encode(&nv12, cap_us, force);
@@ -684,17 +749,17 @@ impl Video {
                                 fails = 0;
                             }
                             Err(e) => {
-                                if !self.recover(&e, &mut fails, t.kbps, &p.encoder) {
+                                if !self.recover(&e, &mut fails, t.kbps, &settings) {
                                     break;
                                 }
-                                sh.idr.store(true, Ordering::Relaxed); // a new encoder starts with a key frame
+                                key_all = true; // a new encoder starts with a key frame
                             }
                         }
                     }
                 }
             }
             if prepared_packets.is_none() {
-                if let Some(e)=prepared.front() {prepared_packets=Some(encoded_packets(frame_id,e,self.enc.codec(),t.fec as usize));}
+                if let Some(e)=prepared.front() {prepared_packets=Some(Arc::new(encoded_packets(frame_id,e,self.enc.codec(),t.fec as usize)));}
             }
             let first_due=prepared_packets.as_deref().map(|packets| {
                 let (_,offset)=video_packet_schedule(packets);
@@ -721,7 +786,7 @@ impl Video {
                 continue;
             }
             if encode_now {
-                let (Some(src), Some(size)) = (img.as_ref().filter(|_| sh.peer().is_some()), self.cap.size()) else { continue };
+                let (Some(src), Some(size)) = (img.as_ref().filter(|_| watched), self.cap.size()) else { continue };
                 if conv.is_none() {
                     conv = self.converter(size);
                 }
@@ -729,7 +794,7 @@ impl Video {
                 let Some(nv12) = conv.as_mut().and_then(|c| {let t0=Instant::now();let r=c.convert_frame(src).ok();st.convert.add(t0.elapsed());r}) else { continue };
                 secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
                 let timing = secpar_stream::timing::begin();
-                let force = sh.idr.swap(false, Ordering::Relaxed);
+                let force = take_key(&members, &mut key_all);
                 if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=true");}
                 let stamp = if pending { cap_us } else { now_us() };
                 let t0 = Instant::now();
@@ -741,10 +806,10 @@ impl Video {
                         outs
                     }
                     Err(e) => {
-                        if !self.recover(&e, &mut fails, t.kbps, &p.encoder) {
+                        if !self.recover(&e, &mut fails, t.kbps, &settings) {
                             break;
                         }
-                        sh.idr.store(true, Ordering::Relaxed);
+                        key_all = true;
                         continue;
                     }
                 };
@@ -755,9 +820,11 @@ impl Video {
             let Some(e) = prepared.pop_front() else { continue };
             if e.key && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_output");}
             secpar_stream::timing::mark(secpar_stream::timing::Stage::Encoded);
-            let packets=prepared_packets.take().unwrap_or_else(||encoded_packets(frame_id,&e,self.enc.codec(),t.fec as usize));
+            let packets=prepared_packets.take().unwrap_or_else(||Arc::new(encoded_packets(frame_id,&e,self.enc.codec(),t.fec as usize)));
             let timing=secpar_stream::timing::begin();
-            sh.send_paced_at(&packets,frame_due);
+            for m in &mut members {
+                m.deliver(&packets, frame_due, e.key);
+            }
             st.sent += 1;
             st.repeats += repeat as u32;
             secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Send,timing);
@@ -778,8 +845,188 @@ impl Video {
             }
             frame_id = frame_id.wrapping_add(1);
         }
-        sh.stop.store(true, Ordering::Relaxed);
+        group.close(true);
+        for m in &members {
+            m.sh.stop.store(true, Ordering::Relaxed);
+        }
     }
+
+    /// Starts a pipeline for its first viewer and lets others join it.
+    fn lead(self, first: Member) {
+        let group = Arc::new(Group { info: Mutex::new(self.info()), joining: Mutex::default(), closed: AtomicBool::new(false) });
+        GROUPS.lock().unwrap().push(group.clone());
+        self.run(&group, vec![first]);
+    }
+}
+
+/// Packets of one frame, and when its sending should finish.
+type Outgoing = (Arc<Vec<(Header, Vec<u8>)>>, Instant);
+
+/// One viewer of a pipeline: its own socket, keys, address and messages, fed by the shared encoder.
+struct Member {
+    sh: Arc<Shared>,
+    p: Params,
+    notify: Notify,
+    ready: ReadyInfo,
+    /// To this viewer's sending thread, which paces the packets out.
+    out: std::sync::mpsc::SyncSender<Outgoing>,
+    /// What its last `stream.ready` said; None when it needs a new one.
+    announced: Option<(Codec, (u32, u32), bool)>,
+    /// Frames go out from the first key frame on: a viewer that joins mid-stream can't decode before it.
+    started: bool,
+    key_asked: bool,
+    cursor: Option<(i32, i32, bool)>,
+}
+
+impl Member {
+    /// Still watching. Checked before every frame: a friend never follows the owner onto the lock screen.
+    fn keep(&self) -> bool {
+        if self.sh.stopped() {
+            return false;
+        }
+        if let Some(g) = &self.p.gate {
+            if crate::win::desk::locked_or_unknown() {
+                g.close_because("locked");
+            }
+            if !g.view() {
+                self.sh.stop.store(true, Ordering::Relaxed);
+                return false;
+            }
+        }
+        true
+    }
+
+    fn pointer(&mut self, c: (i32, i32, bool)) {
+        if self.cursor != Some(c) && self.sh.send(hdr(Type::Cursor, 0), &cursor::packet(c.0, c.1, c.2)) {
+            self.cursor = Some(c);
+        }
+    }
+
+    fn deliver(&mut self, packets: &Arc<Vec<(Header, Vec<u8>)>>, due: Instant, key: bool) {
+        if self.sh.peer().is_none() || !(self.started || key) {
+            return;
+        }
+        self.started = true;
+        // Full only when its sending is a few frames behind; the client asks for what it missed.
+        let _ = self.out.try_send((packets.clone(), due));
+    }
+}
+
+/// What the shared encoder runs at: the lowest bitrate and size any viewer's link takes, and the
+/// most FEC any asks for.
+fn combined(members: &[Member]) -> Target {
+    let mut t = *members[0].sh.target.lock().unwrap();
+    for m in &members[1..] {
+        let o = *m.sh.target.lock().unwrap();
+        t.kbps = t.kbps.min(o.kbps);
+        t.notch = t.notch.max(o.notch);
+        t.fec = t.fec.max(o.fec);
+    }
+    t
+}
+
+/// A key frame when any viewer asked for one.
+fn take_key(members: &[Member], all: &mut bool) -> bool {
+    let mut key = std::mem::take(all);
+    for m in members {
+        key |= m.sh.idr.swap(false, Ordering::Relaxed);
+    }
+    key
+}
+
+/// Viewers of one display share its capture and one encoder: a T480's Quick Sync ran two 60 fps
+/// encodes but not three. Viewers joining wait in `joining` for the video thread.
+struct Group {
+    info: Mutex<GroupInfo>,
+    joining: Mutex<Vec<Member>>,
+    closed: AtomicBool,
+}
+
+#[derive(Clone)]
+struct GroupInfo {
+    shown: String,
+    codec: Codec,
+    packed: bool,
+    fps: u32,
+    base: (u32, u32),
+    picture: (u32, u32),
+}
+
+static GROUPS: Mutex<Vec<Arc<Group>>> = Mutex::new(Vec::new());
+
+impl GroupInfo {
+    /// A viewer can watch this pipeline: same display, a codec it decodes, 4:4:4 only if it shows it.
+    fn fits(&self, p: &Params, shown: Option<&str>) -> bool {
+        shown == Some(self.shown.as_str())
+            && p.codecs.iter().filter_map(|c| parse_codec(c)).any(|c| c == self.codec)
+            && (!self.packed || p.chroma444)
+    }
+}
+
+impl Group {
+    /// Hands the viewer back when the pipeline closed in the meantime.
+    fn add(&self, m: Member) -> Result<(), Member> {
+        let mut joining = self.joining.lock().unwrap();
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(m);
+        }
+        joining.push(m);
+        Ok(())
+    }
+
+    /// Takes the pipeline off the list. Without `force`, only while nobody is joining.
+    fn close(&self, force: bool) -> bool {
+        let mut groups = GROUPS.lock().unwrap();
+        let mut joining = self.joining.lock().unwrap();
+        if !force && !joining.is_empty() {
+            return false;
+        }
+        self.closed.store(true, Ordering::Relaxed);
+        groups.retain(|g| !std::ptr::eq(g.as_ref(), self));
+        for m in joining.drain(..) {
+            m.sh.stop.store(true, Ordering::Relaxed);
+        }
+        true
+    }
+}
+
+/// The display a stream of `display` captures (empty or unknown: the primary one).
+fn shown_for(display: &str) -> Option<String> {
+    let all = capture::displays();
+    all.iter().find(|d| !display.is_empty() && d.id == display).or_else(|| all.iter().find(|d| d.primary)).map(|d| d.id.clone())
+}
+
+/// The open pipeline a viewer with these parameters can join.
+fn find_group(p: &Params) -> Option<(Arc<Group>, GroupInfo)> {
+    let shown = shown_for(&p.display);
+    let groups = GROUPS.lock().unwrap();
+    groups.iter().find_map(|g| {
+        let info = g.info.lock().unwrap().clone();
+        (!g.closed.load(Ordering::Relaxed) && info.fits(p, shown.as_deref())).then(|| (g.clone(), info))
+    })
+}
+
+/// Puts a viewer into the pipeline already streaming its display, or starts one for it.
+fn place(m: Member) {
+    let m = match find_group(&m.p) {
+        Some((g, _)) => match g.add(m) {
+            Ok(()) => return,
+            Err(m) => m,
+        },
+        None => m,
+    };
+    std::thread::spawn(move || {
+        let _com = Com::init();
+        let _prio = Realtime::enter();
+        let kbps = m.sh.target.lock().unwrap().kbps;
+        match Video::open(&m.p, kbps) {
+            Ok(v) => v.lead(m),
+            Err(e) => {
+                crate::log::line(&format!("stream: no pipeline for {}: {e:?}", m.p.display));
+                m.sh.stop.store(true, Ordering::Relaxed);
+            }
+        }
+    });
 }
 
 /// Ten seconds of the video thread in one log line: where a host short of frames loses them
@@ -898,43 +1145,69 @@ impl StreamSession {
         shared._stream_slot = Some(permit);
         let sh = Arc::new(shared);
 
-        // The video thread opens its pipeline, reports the codec and size it got, then waits for
-        // the full `stream.ready` (it repeats it on resolution changes).
+        // A display already streaming to another viewer: join its pipeline. Otherwise a video
+        // thread opens one, reports the codec and size it got, then waits for its first viewer.
+        let join = find_group(&p);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<ReadyInfo>(1);
-        let (vsh, vp, vn) = (sh.clone(), p.clone(), notify.clone());
-        let video = std::thread::spawn(move || {
-            let _com = Com::init();
-            let _prio = Realtime::enter();
-            let kbps = vsh.target.lock().unwrap().kbps;
-            match Video::open(&vp, kbps) {
-                Ok(v) => {
-                    let _ = tx.send(Ok((v.enc.codec(), v.fps, v.base, v.packed)));
-                    if let Ok(ready) = ready_rx.recv() {
-                        v.run(&vsh, &ready, &vn, &vp);
+        let (first_tx, first_rx) = std::sync::mpsc::sync_channel::<Member>(1);
+        if join.is_none() {
+            let vp = p.clone();
+            let kbps = sh.target.lock().unwrap().kbps;
+            std::thread::spawn(move || {
+                let _com = Com::init();
+                let _prio = Realtime::enter();
+                match Video::open(&vp, kbps) {
+                    Ok(v) => {
+                        let _ = tx.send(Ok(v.info()));
+                        if let Ok(m) = first_rx.recv() {
+                            v.lead(m);
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
                     }
                 }
-                Err(e) => {
-                    let _ = tx.send(Err(e));
-                }
-            }
-        });
+            });
+        }
         // While the encoder opens: this socket's public address, for the phone to punch towards.
         let reflexive = (!bind.is_loopback()).then(|| crate::remote::stun::public_addr(&sh.sock)).flatten();
-        let (codec, fps, base, packed) = match rx.recv() {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(err("capture_failed", "video pipeline crashed")),
+        let info = match &join {
+            Some((_, info)) => info.clone(),
+            None => match rx.recv() {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Err(err("capture_failed", "video pipeline crashed")),
+            },
         };
         let lan = crate::commands::rank_ips(crate::win::sys::adapters().0);
         let cands = host_cands(&lan, port, p.public, reflexive);
-        let ready = ReadyInfo { codec, fps, port, session, key: STANDARD.encode(key), cands };
-        crate::log::line(&format!("stream: ready {codec:?} {}x{} on {port}, host cands {:?}, phone cands {:?}", base.0, base.1, ready.cands, p.cands));
-        let _ = ready_tx.send(ready.clone());
+        let ready = ReadyInfo { codec: info.codec, fps: info.fps, port, session, key: STANDARD.encode(key), cands };
+        let (w, h) = info.picture;
+        let shared = if join.is_some() { " (shared encoder)" } else { "" };
+        crate::log::line(&format!("stream: ready {:?} {w}x{h} on {port}{shared}, host cands {:?}, phone cands {:?}", info.codec, ready.cands, p.cands));
+        // Its own thread paces this viewer's packets out, so a slow one never holds up the others.
+        let (out, out_rx) = std::sync::mpsc::sync_channel::<Outgoing>(3);
+        let member = Member { sh: sh.clone(), p: p.clone(), notify: notify.clone(), ready: ready.clone(), out, announced: Some((info.codec, info.picture, info.packed)), started: false, key_asked: false, cursor: None };
+        match join {
+            Some((g, _)) => {
+                if let Err(m) = g.add(member) {
+                    place(m);
+                }
+            }
+            None => {
+                let _ = first_tx.send(member);
+            }
+        }
         sh.punch(p.cands.iter().copied());
         // step-down notches follow the size actually streamed
-        let mut br = Bitrate::new(p.max_kbps, notches_below(base.1).len() as u8);
-        let mut threads = vec![video];
+        let mut br = Bitrate::new(p.max_kbps, notches_below(info.base.1).len() as u8);
+        let ssh = sh.clone();
+        let sender = std::thread::spawn(move || {
+            while let Ok((packets, due)) = out_rx.recv() {
+                ssh.send_paced_at(&packets, due);
+            }
+        });
+        let mut threads = vec![sender];
         let csh = sh.clone();
         threads.push(std::thread::spawn(move || control(&csh, &mut input, &mut br, TIMEOUT)));
         if p.audio && p.gate.as_ref().is_none_or(|g| g.has("audio")) {
@@ -952,7 +1225,7 @@ impl StreamSession {
                 });
             }));
         }
-        Ok((ready.msg(base, packed), StreamSession { sh, threads, rect: p.rect.clone() }))
+        Ok((ready.msg(info.picture, info.packed), StreamSession { sh, threads, rect: p.rect.clone() }))
     }
 
     /// A phone candidate from `stream.cand`: punch towards it too, restarting the window.
