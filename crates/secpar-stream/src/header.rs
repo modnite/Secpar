@@ -14,6 +14,8 @@ pub enum Type {
     Cursor = 7,
     Probe = 8,
     Bye = 9,
+    /// Client asks for lost video packets again ([`crate::nack`]).
+    Nack = 10,
 }
 
 impl Type {
@@ -28,6 +30,7 @@ impl Type {
             7 => Type::Cursor,
             8 => Type::Probe,
             9 => Type::Bye,
+            10 => Type::Nack,
             _ => return None,
         })
     }

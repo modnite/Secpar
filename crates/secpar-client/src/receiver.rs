@@ -7,8 +7,12 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 const MAX_SHARDS: usize = 4096;
-const MAX_PENDING: usize = 4;
-const FRAME_TIMEOUT: Duration = Duration::from_millis(60);
+/// Incomplete frames waiting for their missing packets.
+const MAX_PENDING: usize = 12;
+/// Waiting for a frame's packets before asking for them again: reordering on Wi-Fi.
+const NACK_WAIT: Duration = Duration::from_millis(3);
+/// Asks per frame: the first NACK, then one more after about a round trip.
+const MAX_NACKS: u8 = 2;
 
 pub struct VideoFrame {
     pub id: u32,
@@ -20,30 +24,90 @@ struct Pending {
     p: usize,
     shards: Vec<Option<Vec<u8>>>,
     first: Instant,
+    nacks: u8,
+    nacked_at: Option<Instant>,
 }
 
-#[derive(Default)]
+impl Pending {
+    /// Missing fragments of the FEC blocks that can't be rebuilt yet.
+    fn missing(&self) -> Vec<u16> {
+        let mut out = vec![];
+        let mut at = 0;
+        for (kb, mb) in fec::layout(self.k, self.p) {
+            let block = &self.shards[at..at + kb + mb];
+            if block.iter().filter(|s| s.is_some()).count() < kb {
+                out.extend(block.iter().enumerate().filter(|(_, s)| s.is_none()).map(|(i, _)| (at + i) as u16));
+            }
+            at += kb + mb;
+        }
+        out
+    }
+}
+
+fn oldest_first(a: &u32, b: &u32) -> std::cmp::Ordering {
+    if a == b {
+        std::cmp::Ordering::Equal
+    } else if newer(*a, *b) {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Less
+    }
+}
+
+/// Frames from video packets, in order. A frame FEC can't rebuild is asked for again
+/// ([`Assembler::nacks`], `Type::Nack`) and later frames wait behind it; only when the repair
+/// window passes is it dropped, and then nothing but a keyframe is shown until one arrives.
 pub struct Assembler {
     pending: HashMap<u32, Pending>,
+    /// Complete frames waiting for an older incomplete one.
+    held: Vec<VideoFrame>,
+    /// Frames ready to hand out, oldest first.
+    ready: std::collections::VecDeque<VideoFrame>,
+    /// The newest frame handed out or dropped: packets of older frames are late.
     last: Option<u32>,
+    /// The newest frame any packet belonged to: an older incomplete frame has a gap.
+    newest: Option<u32>,
     need_key: bool,
     pub dropped: u64,
+    /// Round-trip time to the host, for when to ask again and when to give up.
+    pub rtt: Duration,
+}
+impl Default for Assembler {
+    fn default() -> Self {
+        Self {
+            pending: HashMap::new(),
+            held: vec![],
+            ready: Default::default(),
+            last: None,
+            newest: None,
+            need_key: false,
+            dropped: 0,
+            rtt: Duration::from_millis(50),
+        }
+    }
 }
 fn newer(a: u32, b: u32) -> bool {
     (a.wrapping_sub(b) as i32) > 0
 }
 impl Assembler {
+    /// How long a frame may wait for lost packets: two round trips and a margin.
+    fn window(&self) -> Duration {
+        (self.rtt * 2 + Duration::from_millis(40)).clamp(Duration::from_millis(80), Duration::from_millis(300))
+    }
     pub fn tick(&mut self, now: Instant) {
-        let stale: Vec<_> = self
+        let window = self.window();
+        let mut stale: Vec<_> = self
             .pending
             .iter()
-            .filter(|(_, f)| now.saturating_duration_since(f.first) > FRAME_TIMEOUT)
+            .filter(|(_, f)| now.saturating_duration_since(f.first) > window)
             .map(|(id, _)| *id)
             .collect();
+        stale.sort_by(oldest_first);
         for id in stale {
             self.pending.remove(&id);
             self.drop_frame(id);
         }
+        self.release();
     }
     fn drop_frame(&mut self, id: u32) {
         if self.last.is_none_or(|last| newer(id, last)) {
@@ -55,6 +119,54 @@ impl Assembler {
     pub fn needs_keyframe(&self) -> bool {
         self.need_key
     }
+    /// The next frame waiting to be handed out (after [`Assembler::push`] or [`Assembler::tick`]).
+    pub fn pop(&mut self) -> Option<VideoFrame> {
+        self.ready.pop_front()
+    }
+    /// Lost packets to ask for again now: (frame id, fragment indices).
+    pub fn nacks(&mut self, now: Instant) -> Vec<(u32, Vec<u16>)> {
+        let again = (self.rtt + self.rtt / 2).max(Duration::from_millis(20));
+        let newest = self.newest;
+        let mut out = vec![];
+        for (id, f) in self.pending.iter_mut() {
+            let age = now.saturating_duration_since(f.first);
+            let gap = newest.is_some_and(|n| newer(n, *id)) || age > Duration::from_millis(20);
+            let due = match f.nacked_at {
+                None => gap && age >= NACK_WAIT,
+                Some(at) => f.nacks < MAX_NACKS && now.saturating_duration_since(at) >= again,
+            };
+            if !due {
+                continue;
+            }
+            let missing = f.missing();
+            if missing.is_empty() {
+                continue;
+            }
+            f.nacks += 1;
+            f.nacked_at = Some(now);
+            out.push((*id, missing));
+        }
+        out
+    }
+    /// Moves complete frames that no older incomplete frame blocks into `ready`, in order.
+    fn release(&mut self) {
+        self.held.sort_by(|a, b| oldest_first(&a.id, &b.id));
+        while let Some(first) = self.held.first() {
+            if self.pending.keys().any(|id| newer(first.id, *id)) {
+                break;
+            }
+            let f = self.held.remove(0);
+            if self.last.is_some_and(|last| !newer(f.id, last)) {
+                continue; // an older drop already moved past it
+            }
+            self.last = Some(f.id);
+            if self.need_key && !f.header.keyframe {
+                continue;
+            }
+            self.need_key = false;
+            self.ready.push_back(f);
+        }
+    }
     pub fn push(&mut self, h: Header, data: Vec<u8>, now: Instant) -> Option<VideoFrame> {
         self.tick(now);
         if !matches!(h.typ, Type::Video | Type::Fec)
@@ -64,21 +176,28 @@ impl Assembler {
             || h.count as usize > MAX_SHARDS
             || h.frag >= h.count
             || self.last.is_some_and(|last| !newer(h.frame_id, last))
+            || self.held.iter().any(|f| f.id == h.frame_id)
         {
-            return None;
+            return self.pop();
         }
         let (k, p) = (h.k as usize, h.flags as usize);
         let layout = fec::layout(k, p);
         let count: usize = layout.iter().map(|(k, m)| k + m).sum();
         if count != h.count as usize {
-            return None;
+            return self.pop();
+        }
+        if self.newest.is_none_or(|n| newer(h.frame_id, n)) {
+            self.newest = Some(h.frame_id);
         }
         if !self.pending.contains_key(&h.frame_id) && self.pending.len() >= MAX_PENDING {
-            let id = *self.pending.iter().min_by_key(|(_, f)| f.first)?.0;
-            self.pending.remove(&id);
-            self.drop_frame(id);
+            let oldest = self.pending.keys().copied().min_by(oldest_first);
+            if let Some(id) = oldest {
+                self.pending.remove(&id);
+                self.drop_frame(id);
+                self.release();
+            }
             if self.last.is_some_and(|last| !newer(h.frame_id, last)) {
-                return None;
+                return self.pop();
             }
         }
         let f = self.pending.entry(h.frame_id).or_insert_with(|| Pending {
@@ -86,48 +205,27 @@ impl Assembler {
             p,
             shards: vec![None; count],
             first: now,
+            nacks: 0,
+            nacked_at: None,
         });
         if f.k != k || f.p != p || f.shards[h.frag as usize].is_some() {
-            return None;
+            return self.pop();
         }
         f.shards[h.frag as usize] = Some(data);
         let mut at = 0;
         for (kb, mb) in layout {
-            if f.shards[at..at + kb + mb]
-                .iter()
-                .filter(|s| s.is_some())
-                .count()
-                < kb
-            {
-                return None;
+            if f.shards[at..at + kb + mb].iter().filter(|s| s.is_some()).count() < kb {
+                return self.pop();
             }
             at += kb + mb;
         }
         let f = self.pending.remove(&h.frame_id)?;
-        let older: Vec<_> = self
-            .pending
-            .keys()
-            .filter(|id| newer(h.frame_id, **id))
-            .copied()
-            .collect();
-        for id in older {
-            self.pending.remove(&id);
-            self.drop_frame(id);
+        match frame::assemble(k, p, f.shards) {
+            Some((header, data)) => self.held.push(VideoFrame { id: h.frame_id, header, data }),
+            None => self.drop_frame(h.frame_id),
         }
-        self.last = Some(h.frame_id);
-        let Some((header, data)) = frame::assemble(k, p, f.shards) else {
-            self.drop_frame(h.frame_id);
-            return None;
-        };
-        if self.need_key && !header.keyframe {
-            return None;
-        }
-        self.need_key = false;
-        Some(VideoFrame {
-            id: h.frame_id,
-            header,
-            data,
-        })
+        self.release();
+        self.pop()
     }
 }
 
@@ -252,7 +350,7 @@ mod tests {
             a.push(h, b, now);
             assert!(a.pending.len() <= MAX_PENDING);
         }
-        a.tick(now + Duration::from_millis(61));
+        a.tick(now + Duration::from_millis(301));
         assert!(a.pending.is_empty());
         assert!(a.needs_keyframe());
         for (h, b) in packets(21, false) {
@@ -263,6 +361,39 @@ mod tests {
             got |= a.push(h, b, now).is_some();
         }
         assert!(got);
+        assert!(!a.needs_keyframe());
+    }
+    #[test]
+    fn lost_packets_are_asked_for_and_later_frames_wait_in_order() {
+        let mut a = Assembler::default();
+        let now = Instant::now();
+        let mut first = packets(1, true);
+        // Frame 1 loses more than FEC can rebuild: every data packet of its first block.
+        let lost: Vec<_> = first.iter().take_while(|(h, _)| h.typ == Type::Video).map(|(h, b)| (*h, b.clone())).collect();
+        first.retain(|(h, _)| !lost.iter().any(|(l, _)| l.frag == h.frag));
+        for (h, b) in first {
+            assert!(a.push(h, b, now).is_none());
+        }
+        // Frame 2 arrives whole and waits behind frame 1.
+        for (h, b) in packets(2, false) {
+            assert!(a.push(h, b, now).is_none(), "frame 2 must wait for frame 1");
+        }
+        let asked = a.nacks(now + Duration::from_millis(5));
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, 1);
+        assert!(lost.iter().all(|(h, _)| asked[0].1.contains(&h.frag)));
+        assert!(a.nacks(now + Duration::from_millis(6)).is_empty(), "not again before a round trip");
+        // The resent packets complete frame 1; frame 2 follows it.
+        let mut got = vec![];
+        for (h, b) in lost {
+            if let Some(f) = a.push(h, b, now + Duration::from_millis(30)) {
+                got.push(f.id);
+            }
+        }
+        while let Some(f) = a.pop() {
+            got.push(f.id);
+        }
+        assert_eq!(got, vec![1, 2]);
         assert!(!a.needs_keyframe());
     }
     #[test]
