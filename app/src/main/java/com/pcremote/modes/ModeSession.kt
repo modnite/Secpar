@@ -77,6 +77,21 @@ fun KeepScreenOn() {
     }
 }
 
+/** Keeps Wi-Fi in its low-latency mode while a stream is on screen: without it the phone's Wi-Fi
+ *  dozes and scans between packets, and the stream loses bursts of them. */
+@Composable
+fun LowLatencyWifi() {
+    val context = LocalContext.current.applicationContext
+    DisposableEffect(context) {
+        val wifi = context.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+        @Suppress("DEPRECATION")
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        val lock = runCatching { wifi?.createWifiLock(mode, "secpar:stream")?.apply { setReferenceCounted(false); acquire() } }.getOrNull()
+        onDispose { runCatching { if (lock?.isHeld == true) lock.release() } }
+    }
+}
+
 /** Shared chrome for every mode: back, PC name, live status, power, unlock, and a connection banner. */
 @Composable
 fun ModeScaffold(

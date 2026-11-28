@@ -462,6 +462,8 @@ impl Video {
     }
 
     fn run(mut self, sh: &Shared, ready: &ReadyInfo, notify: &Notify, p: &Params) {
+        // A host on Wi-Fi: no background scans while it streams (12-29% loss seen on a T480).
+        let _wlan = secpar_network::wlan::hold(Some(crate::log::line));
         self.shown(notify);
         let mut interval = stream_interval(self.fps, self.cap.refresh_rate());
         let mut work_budget = interval.min(Duration::from_millis(10));
