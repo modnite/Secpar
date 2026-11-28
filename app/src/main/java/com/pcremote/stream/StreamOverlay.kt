@@ -150,7 +150,7 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
     val first = remember(page) { FirstRow(FocusRequester()) }
     val keys = LocalInputModeManager.current.inputMode == InputMode.Keyboard
     LaunchedEffect(page, keys) { if (keys) { withFrameNanos { }; runCatching { first.requester.requestFocus() } } }
-    if (page == MenuPage.AUDIO) LaunchedEffect(Unit) {
+    if (page == MenuPage.STATS) LaunchedEffect(Unit) {
         while (true) { audioDetails = a.audioDetails(); delay(1000) }
     }
     CompositionLocalProvider(LocalFirstRow provides first) {
@@ -160,6 +160,9 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
         .verticalScroll(rememberScrollState()).padding(MenuTokens.PANEL_PADDING.dp)) {
         if (page == MenuPage.MAIN) {
             for (row in StreamMenuModel.mainRows(state.canPip, state.displays.size, state.audioOn)) when (row) {
+                MenuRow.MUTE -> StreamMenuRow(R.drawable.lucide_volume_x, row.label, checked = state.muted) {
+                    state.muted = !state.muted; a.setMuted(state.muted)
+                }
                 MenuRow.KEYBOARD -> StreamMenuRow(R.drawable.lucide_keyboard, row.label, checked = state.keyboardOpen) { a.keyboard(); close() }
                 MenuRow.TRACKPAD -> StreamMenuRow(R.drawable.lucide_mouse, row.label, checked = state.trackpad) {
                     state.trackpad = !state.trackpad; a.setTrackpad(state.trackpad); close()
@@ -167,14 +170,7 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                 MenuRow.PICTURE_IN_PICTURE -> StreamMenuRow(R.drawable.lucide_picture_in_picture_2, row.label) { close(); a.pictureInPicture() }
                 MenuRow.RESOLUTION -> StreamMenuRow(R.drawable.lucide_monitor, row.label, value = sizeLabel(state.sizeW, state.sizeH), arrow = true) { page = MenuPage.RESOLUTION }
                 MenuRow.SWITCH_DISPLAY -> StreamMenuRow(R.drawable.lucide_monitor, row.label, arrow = true) { page = MenuPage.DISPLAYS }
-                MenuRow.SHARE_CLIPBOARD -> StreamMenuRow(R.drawable.lucide_clipboard, row.label, checked = state.shareClipboard) {
-                    state.shareClipboard = !state.shareClipboard; a.setShareClipboard(state.shareClipboard)
-                }
-                MenuRow.STREAM_STATS -> StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, row.label, checked = state.showPerf) { state.showPerf = !state.showPerf; close() }
-                MenuRow.MUTE -> StreamMenuRow(R.drawable.lucide_volume_x, row.label, checked = state.muted) {
-                    state.muted = !state.muted; a.setMuted(state.muted)
-                }
-                MenuRow.AUDIO -> StreamMenuRow(R.drawable.lucide_volume_2, row.label, arrow = true) { page = MenuPage.AUDIO }
+                MenuRow.STREAM_STATS -> StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, row.label, arrow = true) { page = MenuPage.STATS }
                 MenuRow.MORE_KEYS -> StreamMenuRow(R.drawable.lucide_command, row.label, arrow = true) { page = MenuPage.KEYS }
                 MenuRow.HELP -> {
                     StreamMenuRow(R.drawable.lucide_circle_help, row.label) { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
@@ -228,7 +224,10 @@ private fun EdgePanel(state: ToolbarState, a: ToolbarActions, modifier: Modifier
                 MenuPage.DISPLAYS -> state.displays.forEach { display -> StreamMenuRow(R.drawable.lucide_monitor, display.name, checked = display.id == state.display) {
                     state.display = display.id; a.selectDisplay(display.id); page = StreamMenuModel.pageAfterPick()
                 } }
-                MenuPage.AUDIO -> {
+                MenuPage.STATS -> {
+                    StreamMenuRow(R.drawable.lucide_chart_no_axes_column_increasing, StreamMenuModel.SHOW_STATS_BAR, checked = state.showPerf) { state.showPerf = !state.showPerf }
+                    Text(StreamMenuModel.AUDIO_HEADING, color = MenuColors.muted, fontSize = 12.sp,
+                        modifier = Modifier.fillMaxWidth().padding(start = MenuTokens.ICON_X.dp, end = MenuTokens.ICON_X.dp, top = 6.dp))
                     val body = StreamMenuModel.audioBody(state.audioOn, audioDetails)
                     if (body.isNotEmpty()) Text(body, color = if (state.audioOn) MenuColors.text else MenuColors.muted, fontSize = 12.sp,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = MenuTokens.ICON_X.dp, vertical = 8.dp))

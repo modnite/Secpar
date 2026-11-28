@@ -101,19 +101,15 @@ impl App {
                     ui.set_width(250.);ui.spacing_mut().item_spacing.y=0.;
                     if self.menu_page==0 {
                         if row(ui,if self.fs.on {Icon::Windowed}else{Icon::Window},if self.fs.on {"Window"}else{"Fullscreen"},&self.client.escape.chord(keys::Escape::Fullscreen),false,false,false).clicked(){self.set_fullscreen(ctx,!self.fs.on);}
-                        if row(ui,Icon::Decoder,"Decoder","",true,false,false).clicked(){self.menu_page=1;}
-                        if row(ui,Icon::Display,"Resolution",&resolution_label(self.options.width,self.options.height),true,false,false).clicked(){self.menu_page=4;}
-                        if self.displays.len()>1 && row(ui,Icon::Display,"Switch display","",true,false,false).clicked(){self.menu_page=2;}
-                        if row(ui,Icon::Clipboard,"Share clipboard","",false,self.client.clipboard,false).clicked(){
-                            self.client.clipboard=!self.client.clipboard;self.client.save();self.options.clipboard=self.client.clipboard;
-                            self.clipboard=self.client.clipboard.then(secpar_clipboard::Bridge::start);self.send(Command::ClipboardSharing(self.client.clipboard));
-                        }
-                        if row(ui,Icon::Stats,"Stream stats","",false,self.show_stream_stats,false).clicked(){self.show_stream_stats=!self.show_stream_stats;self.stream_menu_open=false;}
                         if self.client.audio {
                             let muted=crate::audio::MUTED.load(std::sync::atomic::Ordering::Relaxed);
                             if row(ui,Icon::Mute,"Mute audio","",false,muted,false).clicked(){crate::audio::MUTED.store(!muted,std::sync::atomic::Ordering::Relaxed);}
                         }
-                        if row(ui,Icon::Audio,"Audio","",true,false,false).clicked(){self.menu_page=3;}
+                        if row(ui,Icon::Decoder,"Decoder","",true,false,false).clicked(){self.menu_page=1;}
+                        if row(ui,Icon::Display,"Resolution",&resolution_label(self.options.width,self.options.height),true,false,false).clicked(){self.menu_page=4;}
+                        if self.displays.len()>1 && row(ui,Icon::Display,"Switch display","",true,false,false).clicked(){self.menu_page=2;}
+                        // Clipboard sharing lives in Settings; audio details are on the stats page.
+                        if row(ui,Icon::Stats,"Stream stats","",true,false,false).clicked(){self.menu_page=3;}
                         if row(ui,Icon::Help,"Help","",false,false,false).clicked(){let _=open::that("https://secpar.win/help/#stream-menu");}
                         divider(ui);
                         if row(ui,Icon::Exit,"Disconnect",&self.client.escape.chord(keys::Escape::Disconnect),false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
@@ -123,7 +119,7 @@ impl App {
                         });
                     } else {
                         let page=self.menu_page;
-                        let title=match page {1=>"Decoder",2=>"Displays",4=>"Resolution",_=>"Audio"};
+                        let title=match page {1=>"Decoder",2=>"Displays",4=>"Resolution",_=>"Stream stats"};
                         if row(ui,Icon::Back,title,"",false,false,false).clicked(){self.menu_page=0;}
                         divider(ui);
                         if page==1 {
@@ -161,12 +157,20 @@ impl App {
                             });
                             if let Some(id)=selected {self.display=id.clone();self.send(Command::Display(id));self.menu_page=0;}
                         } else {
-                            egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-130.).max(80.)).show(ui,|ui|{
-                                ui.add_space(8.);
-                                if let Some(note)=&self.notice {ui.label(egui::RichText::new(note).size(12.).color(RED));}
-                                if let Some(error)=&self.audio_error {ui.label(error);}
-                                if self.audio.is_none() && self.audio_error.is_none() {ui.label(egui::RichText::new(AUDIO_OFF).size(12.).color(MUTED));}
-                                if let Some(audio)=&self.audio {let details=audio.details();ui.label(egui::RichText::new(&details).size(12.).color(TEXT));if row(ui,Icon::Clipboard,"Copy details","",false,false,false).clicked(){ui.ctx().copy_text(details);}}
+                            if row(ui,Icon::Stats,"Show stats bar","",false,self.show_stream_stats,false).clicked(){self.show_stream_stats=!self.show_stream_stats;}
+                            ui.add_space(6.);
+                            // Text on the footer's left edge; the rows keep the panel's.
+                            egui::Frame::new().inner_margin(egui::Margin{left:FOOTER_LEFT as i8,..Default::default()}).show(ui,|ui|ui.label(egui::RichText::new("Audio").size(12.).color(MUTED)));
+                            egui::ScrollArea::vertical().max_height((ctx.content_rect().height()-170.).max(80.)).show(ui,|ui|{
+                                ui.add_space(4.);
+                                let details=self.audio.as_ref().map(|a|a.details());
+                                egui::Frame::new().inner_margin(egui::Margin{left:FOOTER_LEFT as i8,..Default::default()}).show(ui,|ui|{
+                                    if let Some(note)=&self.notice {ui.label(egui::RichText::new(note).size(12.).color(RED));}
+                                    if let Some(error)=&self.audio_error {ui.label(error);}
+                                    if self.audio.is_none() && self.audio_error.is_none() {ui.label(egui::RichText::new(AUDIO_OFF).size(12.).color(MUTED));}
+                                    if let Some(details)=&details {ui.label(egui::RichText::new(details).size(12.).color(TEXT));}
+                                });
+                                if let Some(details)=details {if row(ui,Icon::Clipboard,"Copy details","",false,false,false).clicked(){ui.ctx().copy_text(details);}}
                                 if self.client.audio && row(ui,Icon::Audio,"Reopen output","",false,false,false).clicked(){self.open_audio();}
                             });
                         }

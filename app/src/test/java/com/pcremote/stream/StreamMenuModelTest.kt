@@ -10,8 +10,8 @@ import org.junit.Test
 class StreamMenuModelTest {
     @Test fun `main page order with every optional row`() {
         assertEquals(
-            listOf("Keyboard", "Trackpad", "Picture in picture", "Resolution", "Switch display", "Share clipboard",
-                "Stream stats", "Mute audio", "Audio", "More keys", "Help", "Disconnect"),
+            listOf("Mute audio", "Keyboard", "Trackpad", "Picture in picture", "Resolution", "Switch display",
+                "Stream stats", "More keys", "Help", "Disconnect"),
             StreamMenuModel.mainRows(canPip = true, displayCount = 2).map { it.label })
     }
 
@@ -24,11 +24,8 @@ class StreamMenuModelTest {
         assertFalse(MenuRow.SWITCH_DISPLAY in StreamMenuModel.mainRows(false, 0))
     }
 
-    @Test fun `share clipboard sits before stream stats and audio after it`() {
-        val rows = StreamMenuModel.mainRows(true, 3)
-        assertEquals(rows.indexOf(MenuRow.STREAM_STATS) - 1, rows.indexOf(MenuRow.SHARE_CLIPBOARD))
-        assertEquals(rows.indexOf(MenuRow.STREAM_STATS) + 1, rows.indexOf(MenuRow.MUTE))
-        assertEquals(rows.indexOf(MenuRow.MUTE) + 1, rows.indexOf(MenuRow.AUDIO))
+    @Test fun `mute comes first and only with audio on`() {
+        assertEquals(MenuRow.MUTE, StreamMenuModel.mainRows(true, 3).first())
         assertFalse(MenuRow.MUTE in StreamMenuModel.mainRows(true, 3, audioOn = false))
     }
 
@@ -36,13 +33,13 @@ class StreamMenuModelTest {
         assertEquals("More keys", StreamMenuModel.backTitle(MenuPage.KEYS))
         assertEquals("Switch display", StreamMenuModel.backTitle(MenuPage.DISPLAYS))
         assertEquals("Resolution", StreamMenuModel.backTitle(MenuPage.RESOLUTION))
-        assertEquals("Audio", StreamMenuModel.backTitle(MenuPage.AUDIO))
+        assertEquals("Stream stats", StreamMenuModel.backTitle(MenuPage.STATS))
         assertEquals("Media keys", StreamMenuModel.backTitle(MenuPage.MEDIA))
     }
 
     @Test fun `back goes up one level and a pick returns to the main page`() {
         assertEquals(MenuPage.KEYS, StreamMenuModel.backTarget(MenuPage.MEDIA))
-        for (p in listOf(MenuPage.KEYS, MenuPage.DISPLAYS, MenuPage.RESOLUTION, MenuPage.AUDIO))
+        for (p in listOf(MenuPage.KEYS, MenuPage.DISPLAYS, MenuPage.RESOLUTION, MenuPage.STATS))
             assertEquals(MenuPage.MAIN, StreamMenuModel.backTarget(p))
         assertEquals(MenuPage.MAIN, StreamMenuModel.pageAfterPick())
     }

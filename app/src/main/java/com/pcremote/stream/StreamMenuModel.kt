@@ -1,19 +1,17 @@
 package com.pcremote.stream
 
 /** Pages of the stream menu. */
-enum class MenuPage { MAIN, KEYS, MEDIA, DISPLAYS, RESOLUTION, AUDIO }
+enum class MenuPage { MAIN, KEYS, MEDIA, DISPLAYS, RESOLUTION, STATS }
 
 /** Rows of the main page, in the order they are shown. */
 enum class MenuRow(val label: String) {
+    MUTE("Mute audio"),
     KEYBOARD("Keyboard"),
     TRACKPAD("Trackpad"),
     PICTURE_IN_PICTURE("Picture in picture"),
     RESOLUTION("Resolution"),
     SWITCH_DISPLAY("Switch display"),
-    SHARE_CLIPBOARD("Share clipboard"),
     STREAM_STATS("Stream stats"),
-    MUTE("Mute audio"),
-    AUDIO("Audio"),
     MORE_KEYS("More keys"),
     HELP("Help"),
     DISCONNECT("Disconnect"),
@@ -22,22 +20,24 @@ enum class MenuRow(val label: String) {
 object StreamMenuModel {
     const val DISCONNECT_HINT = "Ctrl+Alt+Q"
     const val AUDIO_OFF = "Host audio is off in settings"
+    const val SHOW_STATS_BAR = "Show stats bar"
+    const val AUDIO_HEADING = "Audio"
     const val AUDIO_COPY_DETAILS = "Copy details"
     const val AUDIO_REOPEN = "Reopen output"
     const val HELP_URL = "https://secpar.win/help/#stream-menu"
     const val WAITING_FOR_STATS = "Waiting for stream stats"
 
-    /** The main page: Picture in picture only where the device has it, Switch display only with several displays. */
+    /** The main page: Mute first (as on desktop, under its window toggle), Picture in picture only where the
+     *  device has it, Switch display only with several displays. Clipboard sharing lives in Settings and the
+     *  audio details on the Stream stats page. */
     fun mainRows(canPip: Boolean, displayCount: Int, audioOn: Boolean = true): List<MenuRow> = buildList {
+        if (audioOn) add(MenuRow.MUTE)
         add(MenuRow.KEYBOARD)
         add(MenuRow.TRACKPAD)
         if (canPip) add(MenuRow.PICTURE_IN_PICTURE)
         add(MenuRow.RESOLUTION)
         if (displayCount > 1) add(MenuRow.SWITCH_DISPLAY)
-        add(MenuRow.SHARE_CLIPBOARD)
         add(MenuRow.STREAM_STATS)
-        if (audioOn) add(MenuRow.MUTE)
-        add(MenuRow.AUDIO)
         add(MenuRow.MORE_KEYS)
         add(MenuRow.HELP)
         add(MenuRow.DISCONNECT)
@@ -50,7 +50,7 @@ object StreamMenuModel {
         MenuPage.MEDIA -> "Media keys"
         MenuPage.DISPLAYS -> MenuRow.SWITCH_DISPLAY.label
         MenuPage.RESOLUTION -> MenuRow.RESOLUTION.label
-        MenuPage.AUDIO -> MenuRow.AUDIO.label
+        MenuPage.STATS -> MenuRow.STREAM_STATS.label
     }
 
     /** Where Back goes. */
@@ -67,6 +67,6 @@ object StreamMenuModel {
     fun panelTop(stripShown: Boolean): Int =
         if (stripShown) com.pcremote.ui.theme.MenuTokens.PANEL_Y_WITH_STRIP else com.pcremote.ui.theme.MenuTokens.PANEL_Y
 
-    /** Text of the Audio page body; empty when the details come from the player. */
+    /** Text of the audio section on the Stream stats page; empty when the details come from the player. */
     fun audioBody(audioOn: Boolean, details: String): String = if (audioOn) details else AUDIO_OFF
 }
