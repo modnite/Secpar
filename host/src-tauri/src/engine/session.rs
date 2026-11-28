@@ -323,6 +323,12 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
         }
         last_rx = Instant::now();
         match h.typ {
+            Type::Probe if p.len() >= 16 && h.flags & secpar_stream::header::PATH_TEST != 0 => {
+                // A client timing another path: answer there, the stream stays put.
+                let mut r = hdr(Type::Probe, 0);
+                r.flags = secpar_stream::header::PATH_TEST;
+                sh.send_to(from, r, &probe(u64::from_be_bytes(p[..8].try_into().unwrap())));
+            }
             Type::Probe if p.len() >= 16 && probe_seq.is_none_or(|s| h.seq > s) => {
                 probe_seq = Some(h.seq);
                 let prev = sh.peer.lock().unwrap().replace(from);
@@ -517,7 +523,9 @@ impl Video {
         let mut want = (p.w, p.h);
         let mut lats: Vec<u64> = Vec::new();
         let mut fails = 0u32;
+        let mut st = Pace::new();
         while !sh.stopped() {
+            st.maybe_log();
             if let Some(g) = &p.gate {
                 // Checked before every frame: a friend never follows the owner onto the lock screen.
                 if crate::win::desk::locked_or_unknown() {
@@ -617,6 +625,7 @@ impl Video {
                     notify(ServerMsg::CursorShape { png: STANDARD.encode(&png.0), hx: png.1, hy: png.2 });
                 }
                 if f.tex.is_some() {
+                    st.captured += 1;
                     img = f.tex.clone();
                     cap_us = f.capture_us;
                     pending = true;
@@ -654,12 +663,15 @@ impl Video {
                         conv = self.converter(size);
                     }
                     let timing = secpar_stream::timing::begin();
-                    if let Some(nv12) = conv.as_mut().and_then(|c| c.convert_frame(src).ok()) {
+                    if let Some(nv12) = conv.as_mut().and_then(|c| {let t0=Instant::now();let r=c.convert_frame(src).ok();st.convert.add(t0.elapsed());r}) {
                         secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
                         let timing = secpar_stream::timing::begin();
                         let force = sh.idr.swap(false, Ordering::Relaxed);
                         if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=false");}
-                        match self.enc.encode(&nv12, cap_us, force) {
+                        let t0 = Instant::now();
+                        let encoded = self.enc.encode(&nv12, cap_us, force);
+                        st.encode.add(t0.elapsed());
+                        match encoded {
                             Ok(outs) => {
                                 secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Encode, timing);
                                 prepared.extend(outs);
@@ -709,13 +721,16 @@ impl Video {
                     conv = self.converter(size);
                 }
                 let timing = secpar_stream::timing::begin();
-                let Some(nv12) = conv.as_mut().and_then(|c| c.convert_frame(src).ok()) else { continue };
+                let Some(nv12) = conv.as_mut().and_then(|c| {let t0=Instant::now();let r=c.convert_frame(src).ok();st.convert.add(t0.elapsed());r}) else { continue };
                 secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Convert, timing);
                 let timing = secpar_stream::timing::begin();
                 let force = sh.idr.swap(false, Ordering::Relaxed);
                 if force && secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.key_encode repeat=true");}
                 let stamp = if pending { cap_us } else { now_us() };
-                let outs = match self.enc.encode(&nv12, stamp, force) {
+                let t0 = Instant::now();
+                let encoded = self.enc.encode(&nv12, stamp, force);
+                st.encode.add(t0.elapsed());
+                let outs = match encoded {
                     Ok(outs) => {
                         fails = 0;
                         outs
@@ -738,6 +753,8 @@ impl Video {
             let packets=prepared_packets.take().unwrap_or_else(||encoded_packets(frame_id,&e,self.enc.codec(),t.fec as usize));
             let timing=secpar_stream::timing::begin();
             sh.send_paced_at(&packets,frame_due);
+            st.sent += 1;
+            st.repeats += repeat as u32;
             secpar_stream::timing::elapsed(secpar_stream::timing::Stage::Send,timing);
             secpar_stream::timing::mark(secpar_stream::timing::Stage::Sent);
             last_send = Instant::now();
@@ -757,6 +774,53 @@ impl Video {
             frame_id = frame_id.wrapping_add(1);
         }
         sh.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Ten seconds of the video thread in one log line: where a host short of frames loses them
+/// (capture, conversion, encoding), without the frame-timing build.
+struct Pace {
+    since: Instant,
+    captured: u32,
+    sent: u32,
+    repeats: u32,
+    convert: Spread,
+    encode: Spread,
+}
+
+#[derive(Default)]
+struct Spread {
+    n: u32,
+    total: Duration,
+    max: Duration,
+}
+
+impl Spread {
+    fn add(&mut self, d: Duration) {
+        self.n += 1;
+        self.total += d;
+        self.max = self.max.max(d);
+    }
+    fn text(&self) -> String {
+        let avg = if self.n == 0 { 0. } else { self.total.as_secs_f64() * 1000. / self.n as f64 };
+        format!("{avg:.1} ms avg, {:.1} max", self.max.as_secs_f64() * 1000.)
+    }
+}
+
+impl Pace {
+    fn new() -> Self {
+        Pace { since: Instant::now(), captured: 0, sent: 0, repeats: 0, convert: Spread::default(), encode: Spread::default() }
+    }
+    fn maybe_log(&mut self) {
+        let secs = self.since.elapsed().as_secs_f64();
+        if secs < 10. {
+            return;
+        }
+        crate::log::line(&format!(
+            "stream: per second {:.0} captured, {:.0} sent ({:.0} repeats); convert {}; encode {}",
+            self.captured as f64 / secs, self.sent as f64 / secs, self.repeats as f64 / secs, self.convert.text(), self.encode.text()
+        ));
+        *self = Pace::new();
     }
 }
 
