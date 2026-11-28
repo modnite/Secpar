@@ -97,6 +97,9 @@ fn concurrent_hardware_streams_deliver_independent_video() {
     assert!(second_packets>0,"Second session received no video");
     assert!(third_packets>0,"Third session received no video");
     assert!(replacement_packets>0,"Replacement session received no video");
+    // The last pipeline closes on its own thread just after its last viewer leaves.
+    let closing=Instant::now();
+    while SharedCapture::active_source_count()>0 && closing.elapsed()<Duration::from_secs(2) {std::thread::sleep(Duration::from_millis(10));}
     assert_eq!(SharedCapture::active_source_count(),0,"Capture stops after the last viewer leaves");
     eprintln!("Independent video packets received: {first_packets}, {second_packets}, {third_packets}; replacement {replacement_packets}");
 }
