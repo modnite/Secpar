@@ -69,6 +69,14 @@ fn pick_adapter() -> Option<(IDXGIAdapter1, String)> {
     }
 }
 
+/// PCI vendor and device of the adapter the decoder uses, so the window draws on the same one.
+pub fn adapter_ids() -> Option<(u32, u32)> {
+    let (adapter, _) = pick_adapter()?;
+    // SAFETY: plain DXGI query.
+    let desc = unsafe { adapter.GetDesc1() }.ok()?;
+    Some((desc.VendorId, desc.DeviceId))
+}
+
 /// Names of the hardware adapters, for diagnostics.
 #[cfg(test)]
 pub fn adapter_names() -> Vec<String> {
@@ -396,7 +404,7 @@ impl Hardware {
             if self.gpu_out && crate::gpu::interop_usable() {
                 let (surface, area) = ((desc.Width, desc.Height), (x, y, w, h));
                 if self.splitter.as_ref().is_none_or(|s| !s.fits(surface, area)) {
-                    self.splitter = super::dxgl::Splitter::new(&self.dev, surface, area).ok();
+                    self.splitter = super::dxgl::Splitter::new(&self.dev, surface, area, crate::gpu::direct3d()).ok();
                     if self.splitter.is_none() {
                         eprintln!("video_decoder gpu_frames=unavailable");
                         self.gpu_out = false;

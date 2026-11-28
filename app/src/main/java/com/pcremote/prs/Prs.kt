@@ -16,6 +16,8 @@ object Prs {
     const val IDR = 6; const val CURSOR = 7; const val PROBE = 8; const val BYE = 9
     /** Client asks for lost video packets again: frame id (u32), then fragment indices (u16 each). */
     const val NACK = 10
+    /** PROBE flag: a timing probe on the other path; hosts listing `pathprobe` answer it without moving the stream. */
+    const val PATH_TEST = 1
 
     /** `(kb, mb)` per FEC block for a frame of `k` data shards at FEC percentage `p`. */
     fun layout(k: Int, p: Int): List<Pair<Int, Int>> {

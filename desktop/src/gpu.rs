@@ -1,5 +1,5 @@
-//! Draws NV12 pictures with a small shader inside eframe's own OpenGL context, so
-//! colour conversion and scaling run on the graphics card. No extra dependency.
+//! Draws NV12 pictures with a small shader, so colour conversion and scaling run on the graphics
+//! card: with Direct3D 12 on Windows (gpu/d3d.rs), with eframe's OpenGL context elsewhere.
 use crate::picture::Picture;
 use eframe::{
     egui,
@@ -10,6 +10,18 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub type Handle = Arc<Mutex<Shared>>;
+
+#[cfg(windows)]
+mod d3d;
+#[cfg(windows)]
+pub use d3d::choose as choose_renderer;
+
+/// The window draws with Direct3D 12, so decoded frames are shared with it rather than with OpenGL.
+static DIRECT3D: AtomicBool = AtomicBool::new(false);
+
+pub fn direct3d() -> bool {
+    DIRECT3D.load(Ordering::Relaxed)
+}
 
 /// The shader works in this window.
 static SHADER: AtomicBool = AtomicBool::new(false);
@@ -26,6 +38,10 @@ pub struct Shared {
     pending: Option<Picture>,
     gl: Option<Resources>,
     failed: bool,
+    #[cfg(windows)]
+    format: Option<eframe::wgpu::TextureFormat>,
+    #[cfg(windows)]
+    d3d: Option<d3d::Resources>,
 }
 
 struct Resources {
@@ -45,7 +61,12 @@ struct Resources {
 }
 
 /// None when the context is too old for the shader; the caller then converts on the CPU.
-pub fn new(gl: &Arc<glow::Context>) -> Option<Handle> {
+pub fn new(cc: &eframe::CreationContext) -> Option<Handle> {
+    #[cfg(windows)]
+    if let Some(render) = &cc.wgpu_render_state {
+        return Some(d3d::new(render));
+    }
+    let gl = cc.gl.as_ref()?;
     let ok = ShaderVersion::get(gl).is_new_shader_interface();
     SHADER.store(ok, Ordering::Relaxed);
     ok.then(Handle::default)
@@ -60,6 +81,10 @@ pub fn failed(handle: &Handle) -> bool {
 }
 
 pub fn callback(handle: Handle, rect: egui::Rect) -> egui::PaintCallback {
+    #[cfg(windows)]
+    if direct3d() {
+        return eframe::egui_wgpu::Callback::new_paint_callback(rect, d3d::Draw(handle));
+    }
     egui::PaintCallback {
         rect,
         callback: Arc::new(egui_glow::CallbackFn::new(move |_info, painter| {

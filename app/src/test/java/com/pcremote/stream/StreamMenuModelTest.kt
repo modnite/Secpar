@@ -11,7 +11,7 @@ class StreamMenuModelTest {
     @Test fun `main page order with every optional row`() {
         assertEquals(
             listOf("Mute audio", "Keyboard", "Trackpad", "Picture in picture", "Resolution", "Switch display",
-                "Stream stats", "Help", "Disconnect"),
+                "Stream stats", "Disconnect"),
             StreamMenuModel.mainRows(canPip = true, displayCount = 2).map { it.label })
     }
 

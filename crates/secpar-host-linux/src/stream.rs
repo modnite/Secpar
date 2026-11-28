@@ -30,6 +30,8 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+mod group;
+
 /// REPORT plaintext: (lossPermille, rttMs), as the Windows host reads it.
 /// (loss ‰, RTT ms, frame queueing delay ms: bytes 12-13, zero from clients before 4.2.0-r22).
 fn parse_report(p: &[u8]) -> Option<(u16, u16, u16)> {
@@ -253,31 +255,41 @@ impl Stream {
         guard: secpar_host_core::limits::StreamPermit,
     ) -> Result<(Self, ServerMsg), String> {
         let (displays, current_display) = (options.displays.clone(), options.display.clone());
-        let p = portal.clone();
         // Starts below the client's cap and follows its reports, like the Windows host: a fixed rate
         // above the path's upload queues up in the router and the picture falls seconds behind.
         let bitrate = Bitrate::new(options.kbps, 0);
-        let video_options = VideoOptions {
-            width: options.width,
-            height: options.height,
-            fps: options.fps,
-            kbps: bitrate.target().kbps,
-            codecs: options.codecs,
-            encoder: options.encoder,
-            preset: options.preset,
-            chroma444: options.chroma444,
+        // A screen already streaming to another viewer: join its capture and encoder.
+        let join = group::find(&options.display, &options.codecs, options.chroma444);
+        let (capture, info) = match &join {
+            Some((_, info)) => (None, info.clone()),
+            None => {
+                let p = portal.clone();
+                let video_options = VideoOptions {
+                    width: options.width,
+                    height: options.height,
+                    fps: options.fps,
+                    kbps: bitrate.target().kbps,
+                    codecs: options.codecs.clone(),
+                    encoder: options.encoder.clone(),
+                    preset: options.preset.clone(),
+                    chroma444: options.chroma444,
+                };
+                let capture = tokio::task::spawn_blocking(move || Capture::start(p, video_options))
+                    .await
+                    .map_err(|_| "Video initialization failed")??;
+                let codec_name = capture.codec().to_string();
+                let codec = match codec_name.as_str() {
+                    "h264" => Codec::H264,
+                    "hevc" => Codec::Hevc,
+                    _ => return Err("Unsupported negotiated codec".into()),
+                };
+                let info = group::Info { codec, codec_name, size: capture.size(), fps: capture.fps(), packed: capture.packed() };
+                (Some(capture), info)
+            }
         };
-        let mut capture = tokio::task::spawn_blocking(move || Capture::start(p, video_options))
-            .await
-            .map_err(|_| "Video initialization failed")??;
-        let (width, height) = capture.size();
-        let fps = capture.fps();
-        let codec_name = capture.codec().to_string();
-        let codec = match codec_name.as_str() {
-            "h264" => Codec::H264,
-            "hevc" => Codec::Hevc,
-            _ => return Err("Unsupported negotiated codec".into()),
-        };
+        let (width, height) = info.size;
+        let fps = info.fps;
+        let codec_name = info.codec_name.clone();
         let socket = UdpSocket::bind("0.0.0.0:0").map_err(|_| "Could not open streaming socket")?;
         socket
             .set_read_timeout(Some(Duration::from_millis(25)))
@@ -435,7 +447,7 @@ impl Stream {
         });
         // `stream.ready` as sent now and again whenever the size changes mid-stream
         let ready_template = ServerMsg::StreamReady {
-            chroma: capture.packed().then(|| "444".into()),
+            chroma: info.packed.then(|| "444".into()),
             codec: codec_name.clone(),
             w: width,
             h: height,
@@ -453,89 +465,39 @@ impl Stream {
             ),
         };
         let resize = Arc::new(Mutex::new(None::<(u32, u32)>));
-        let (video_resize, video_out, video_ready) = (resize.clone(), out.clone(), ready_template.clone());
-        let video_picture = picture.clone();
-        let video_shared = shared.clone();
-        let video_gate = options.gate.clone();
+        // Its own thread paces this viewer's packets out, so a slow one never holds up the others.
+        let (send, packets_rx) = std::sync::mpsc::sync_channel::<group::Packets>(3);
+        let sender_shared = shared.clone();
         std::thread::spawn(move || {
-            let _guard = guard;
-            let failed = video_out.clone();
-            let ended = video_shared.clone();
-            // A panic in here must end this stream and say why. It would otherwise end only this thread and leave the
-            // session open with a picture that never moves.
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let mut id = 0u32;
-                let mut kbps = video_shared.kbps.load(Ordering::Relaxed);
-                while !video_shared.stop.load(Ordering::Relaxed) {
-                    if video_gate.as_ref().is_some_and(|g| !g.view()) {
-                        break;
-                    }
-                    if video_shared.peer.lock().unwrap().is_none() {
-                        std::thread::sleep(Duration::from_millis(5));
-                        continue;
-                    }
-                    if let Some(wanted) = video_resize.lock().unwrap().take() {
-                        // the encoder renegotiates on the new size and opens with a keyframe
-                        if let (Some((w, h)), ServerMsg::StreamReady { codec, fps, port, session, key, cands, .. }) = (capture.set_size(wanted), &video_ready) {
-                            eprintln!("secpar: stream is now {w}x{h} (asked for {}x{})", wanted.0, wanted.1);
-                            video_picture.store(pack_size(w, h), Ordering::Relaxed);
-                            video_out.send(ServerMsg::StreamReady { chroma: capture.packed().then(|| "444".into()), codec: codec.clone(), w, h, fps: *fps, port: *port, session: *session, key: key.clone(), cands: cands.clone() });
-                            video_shared.idr.store(true, Ordering::Relaxed);
-                        }
-                    }
-                    let wanted = video_shared.kbps.load(Ordering::Relaxed);
-                    if wanted != kbps {
-                        kbps = wanted;
-                        capture.set_bitrate(kbps);
-                        eprintln!("secpar: bitrate {kbps} kbps");
-                    }
-                    if video_shared.idr.swap(false, Ordering::Relaxed) {
-                        capture.request_keyframe();
-                    }
-                    let frame = match capture.next_frame(Duration::from_millis(100)) {
-                        Ok(Some(f)) => f,
-                        Ok(None) => continue,
-                        Err(error) => return Some(error),
-                    };
-                    let fh = FrameHeader {
-                        len: frame.data.len() as u32,
-                        capture_us: frame.capture_us,
-                        keyframe: frame.key,
-                        codec,
-                    };
-                    if video_gate.as_ref().is_some_and(|g| !g.view() || crate::lock::locked_or_unknown()) {
-                        if let Some(g) = &video_gate {
-                            g.close_because("locked");
-                        }
-                        break;
-                    }
-                    let packets = packetize(id, &fh, &frame.data, 15);
-                    let count = packets.len().div_ceil(4).max(1);
-                    let start = Instant::now();
-                    for (index, chunk) in packets.chunks(count).enumerate() {
-                        if let Some(wait) = (start + Duration::from_millis(index as u64))
-                            .checked_duration_since(Instant::now())
-                        {
-                            std::thread::sleep(wait)
-                        }
-                        for (h, p) in chunk {
-                            video_shared.send(*h, p)
-                        }
-                    }
-                    id = id.wrapping_add(1);
-                }
-                None
-            }));
-            let why = match outcome {
-                Ok(error) => error,
-                Err(_) => Some("Desktop capture stopped unexpectedly.".to_string()),
-            };
-            if let Some(why) = why {
-                failed.send(ServerMsg::error("capture_failed", &why, Some("stream.start")));
+            while let Ok(packets) = packets_rx.recv() {
+                group::pace(&sender_shared, &packets);
             }
-            ended.stop.store(true, Ordering::Relaxed);
-            ended.send(header(Type::Bye, 0), &[]);
         });
+        let viewer = group::Viewer {
+            shared: shared.clone(),
+            out: out.clone(),
+            ready: ready_template.clone(),
+            gate: options.gate.clone(),
+            picture: picture.clone(),
+            resize: resize.clone(),
+            send,
+            announced: ((width, height), info.packed),
+            started: false,
+            key_asked: false,
+            _permit: guard,
+        };
+        match (join, capture) {
+            (Some((g, _)), _) => {
+                eprintln!("secpar: joining the {} stream already running (shared encoder)", options.display);
+                if let Err(v) = g.add(viewer) {
+                    // It closed in the meantime: this stream can't start without its own capture.
+                    v.shared.stop.store(true, Ordering::Relaxed);
+                    return Err("The screen's stream ended while joining; connect again".into());
+                }
+            }
+            (None, Some(capture)) => group::lead(capture, options.display.clone(), info, portal.clone(), viewer),
+            (None, None) => unreachable!("a capture opens when there is no pipeline to join"),
+        }
         if options.audio {
             let audio_shared = shared.clone();
             let audio_out = out.clone();
@@ -622,6 +584,10 @@ impl Drop for Stream {
         self.shared.send(header(Type::Bye, 0), &[]);
         if let Some(m) = self.mapped.take() {
             std::thread::spawn(move || reach::release(&m));
+        }
+        // The screen-sharing session that feeds others' shared stream stays until that stream ends.
+        if group::keeps_portal(&self.portal) {
+            return;
         }
         let p = self.portal.clone();
         tokio::spawn(async move {

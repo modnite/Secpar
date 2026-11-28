@@ -117,7 +117,6 @@ impl App {
                         if self.displays.len()>1 && row(ui,Icon::Display,"Switch display","",true,false,false).clicked(){self.menu_page=2;}
                         // Clipboard sharing lives in Settings; audio details are on the stats page.
                         if row(ui,Icon::Stats,"Stream stats","",true,false,false).clicked(){self.menu_page=3;}
-                        if row(ui,Icon::Help,"Help","",false,false,false).clicked(){let _=open::that("https://secpar.win/help/#stream-menu");}
                         divider(ui);
                         if row(ui,Icon::Exit,"Disconnect",&self.client.escape.chord(keys::Escape::Disconnect),false,false,true).clicked(){self.capture(ctx,false);self.send(Command::Stop);self.stream_menu_open=false;}
                         ui.add_space(5.);ui.horizontal(|ui|{

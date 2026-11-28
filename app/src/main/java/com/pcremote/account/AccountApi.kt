@@ -183,7 +183,8 @@ interface AccountService {
     suspend fun requests(): List<ConnectionRequest> = emptyList()
     suspend fun answer(answer: Answer, id: String) {}
     suspend fun friendComputers(): List<FriendComputer> = emptyList()
-    suspend fun requestAccess(computer: String, permissions: List<String>): AccessRequest = throw AccountException(AccountError.UNAVAILABLE)
+    /** [preview]: a view-only request for a card thumbnail, which the owner's apps don't announce. */
+    suspend fun requestAccess(computer: String, permissions: List<String>, preview: Boolean = false): AccessRequest = throw AccountException(AccountError.UNAVAILABLE)
     suspend fun accessStatus(id: String): AccessRequest = throw AccountException(AccountError.UNAVAILABLE)
     suspend fun claimAccess(id: String): GuestGrant = throw AccountException(AccountError.UNAVAILABLE)
     suspend fun cancelAccess(id: String) {}
@@ -344,12 +345,13 @@ class AccountApi(sessionToken: String? = null, private val transport: AccountTra
         }.getOrNull() }
     }
 
-    override suspend fun requestAccess(computer: String, permissions: List<String>): AccessRequest {
+    override suspend fun requestAccess(computer: String, permissions: List<String>, preview: Boolean): AccessRequest {
         pathId(computer)
         argument(permissions.isNotEmpty() && permissions.all { it in PERMISSIONS } && permissions.toSet().size == permissions.size)
         val body = buildJsonObject {
             put("computer", computer)
             put("permissions", JsonArray(permissions.map { JsonPrimitive(it) }))
+            if (preview) put("preview", true)
         }
         val o = call("POST", "/v1/requests", body).objectValue()
         val state = o.text("state").also { valid(it == "pending" || it == "approved") }

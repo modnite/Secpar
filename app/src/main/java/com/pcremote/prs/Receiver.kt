@@ -12,6 +12,12 @@ interface Transport {
     fun receive(buf: ByteArray, timeoutMs: Int): Int
     /** The packet just received authenticated: its source is the peer. */
     fun confirm() {}
+    /** The other path to the peer (direct or our relay) can carry a test probe. */
+    fun otherPathReady(): Boolean = false
+    /** One packet on the other path. */
+    fun sendOther(b: ByteArray) {}
+    /** Moves sending to the other path; arrivals on the old one don't move it back for a moment. */
+    fun switchPath() {}
     fun backlog(): Int = 0
     fun droppedPackets(): Int = 0
     fun close()
@@ -80,6 +86,11 @@ class Receiver(
     private var invalidPackets = 0
     private var processPeakUs = 0L
     @Volatile private var running = true
+    /** The host answers path-test probes (`pathprobe`): time the other path and move to it when quicker. */
+    @Volatile var pathTest = false
+    private val paths = PathTimes()
+    private var pathTestAtUs = 0L
+    private var switchedAtUs = Long.MIN_VALUE / 2
 
     fun run() {
         val buf = ByteArray(2048)
@@ -133,6 +144,14 @@ class Receiver(
 
     internal fun onPacket(buf: ByteArray, len: Int, nowUs: Long) {
         val (h, plain) = crypt.open(Crypt.HOST_TO_PHONE, buf, len) ?: run { invalidPackets++; return }
+        // A path-test reply came on the other path: timed, but the stream stays where it is.
+        if (h.typ == Prs.PROBE && (h.flags and Prs.PATH_TEST) != 0) {
+            if (plain.size >= 16) {
+                val echo = ByteBuffer.wrap(plain).getLong(8)
+                if (echo != 0L && nowUs - echo in 0..10_000_000) paths.other(((nowUs - echo) / 1000).toInt())
+            }
+            return
+        }
         transport.confirm()
         // Loss counts from the first video packet: before that the host punches to several
         // addresses, and those PROBEs' sequence numbers never reach us (they'd look like loss).
@@ -163,6 +182,7 @@ class Receiver(
                 val echo = b.getLong(8)
                 if (echo != 0L && nowUs - echo in 0..10_000_000) {
                     rttUs = nowUs - echo
+                    paths.current((rttUs / 1000).toInt())
                     assembler.rttUs = rttUs
                     // A lifetime minimum freezes the clock estimate after an
                     // unusually fast probe. Host/phone clock drift and changed
@@ -188,6 +208,20 @@ class Receiver(
             send(Header(Prs.PROBE), ByteBuffer.allocate(16).putLong(nowUs).putLong(peerT).array())
         }
         if (nowUs - lastReportUs >= 100_000) { lastReportUs = nowUs; report() }
+        // Every second, a probe on the other path; after a switch, ten seconds before testing again.
+        if (pathTest && nowUs - pathTestAtUs >= 1_000_000 && nowUs - switchedAtUs >= 10_000_000 && transport.otherPathReady()) {
+            pathTestAtUs = nowUs
+            val body = ByteBuffer.allocate(16).putLong(nowUs).putLong(peerT).array()
+            synchronized(sendLock) { transport.sendOther(crypt.seal(Crypt.PHONE_TO_HOST, Header(Prs.PROBE, flags = Prs.PATH_TEST, seq = seq++), body)) }
+            if (paths.otherFaster()) {
+                transport.switchPath()
+                switchedAtUs = nowUs
+                paths.clear()
+                // A normal probe on the new path moves the host's stream there.
+                lastProbeUs = nowUs
+                send(Header(Prs.PROBE), ByteBuffer.allocate(16).putLong(nowUs).putLong(peerT).array())
+            }
+        }
         if (nowUs - lastStatsUs >= 500_000) {
             val secs = (nowUs - lastStatsUs) / 1e6
             _stats.value = Stats((rttUs / 1000).toInt(), lossPermille / 10f, (statBytes * 8 / 1000 / secs).toInt(),

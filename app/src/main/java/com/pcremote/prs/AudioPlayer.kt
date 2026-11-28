@@ -31,6 +31,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
     @Volatile internal var lastQueuedAgeUs = 0L; private set
     private var statsAt = System.nanoTime()
     private var inputWaits = 0
+    private var inputStalls = 0
     private var inputAgeUs = 0L
     private var decodedAgeUs = 0L
     private val timeline = PcmTimeline()
@@ -155,13 +156,19 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         drain(c, t, 0)
         val deadline = System.nanoTime() + 100_000_000
         var inIdx = c.dequeueInputBuffer(5_000)
-        while (inIdx < 0 && !dead) {
+        while (inIdx < 0 && !dead && System.nanoTime() < deadline) {
             inputWaits++
             drain(c, t, 1_000)
-            check(System.nanoTime() < deadline) { "Audio decoder stopped accepting packets" }
             inIdx = c.dequeueInputBuffer(5_000)
         }
         if (dead) return
+        // A decoder busy for 100 ms loses this packet (Opus covers the gap); only one that stays
+        // stuck is restarted. Restarting at once, with its back-off, silenced a second or more.
+        if (inIdx < 0) {
+            check(++inputStalls < 3) { "Audio decoder stopped accepting packets" }
+            return
+        }
+        inputStalls = 0
         c.getInputBuffer(inIdx)!!.apply { clear(); put(opus) }
         c.queueInputBuffer(inIdx, 0, opus.size, packet.captureUs, 0)
         timeline.queued(packet.captureUs)
@@ -207,7 +214,9 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
                 } else if (fading) PcmFade.bridge(pcm, info.size)
                 fading = false
                 val before = writer.writtenFrames
-                val deadlineUs = captureUs?.plus(AudioPlayout.MAX_PACKET_AGE_US) ?: (nowUs + AudioPlayout.MAX_PACKET_AGE_US)
+                // Waits a short while for room in the output, however late the packet arrived: a
+                // deadline from its capture time wrote nothing for a late packet and reset the output.
+                val deadlineUs = nowUs + WRITE_WAIT_US
                 writer.write(pcm, info.size, { !dead && System.nanoTime() / 1000 <= deadlineUs }, { Thread.sleep(1) }) { data, offset, size ->
                     t.write(data, offset, size)
                 }
@@ -267,7 +276,7 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         if (dead) return
         audioFailures++
         failureStreak = (failureStreak + 1).coerceAtMost(6)
-        val retryMs = (50L shl (failureStreak - 1)).coerceAtMost(1000)
+        val retryMs = (50L shl (failureStreak - 1)).coerceAtMost(250)
         retryAfterNs = System.nanoTime() + retryMs * 1_000_000
         healthySinceNs = 0
         Log.w(TAG, "audio restart retryMs=$retryMs failures=$audioFailures", failure)
@@ -287,6 +296,8 @@ class AudioPlayer(private val captureToLocalUs: (Long) -> Long? = { it }) {
         private const val AAUDIO_BUFFER_FRAMES = RATE / 10
         /** Above this a low-latency output drops a packet: about 30 to 40 ms stays queued. */
         private const val TRIM_ABOVE_FRAMES = RATE * 40 / 1000
+        /** How long a write waits for room in the output. */
+        private const val WRITE_WAIT_US = 40_000L
 
         /** Keep the platform's allocation minimum; prime 30 ms before playback. */
         fun bufferBytes(min: Int) = maxOf(min, 30 * BYTES_PER_MS) // the minimum wins over the 60 ms cap: a smaller track stutters

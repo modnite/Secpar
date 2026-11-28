@@ -490,9 +490,12 @@ export async function handle(
       if (!allowed.length) deny(403, "input_not_allowed");
       const id = crypto.randomUUID();
       const auto = policy.connect === "always";
+      // A card thumbnail: owners' apps don't announce it as someone using the computer. Only a
+      // view-only request can be one.
+      const preview = b.preview === true && allowed.every((p) => p === "view") ? 1 : 0;
       await q(
         env,
-        "INSERT INTO connection_requests(id,computer,owner,guest,requested,approved,state,expires) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO connection_requests(id,computer,owner,guest,requested,approved,state,expires,preview) VALUES(?,?,?,?,?,?,?,?,?)",
         id,
         computer,
         host.owner,
@@ -501,6 +504,7 @@ export async function handle(
         auto ? JSON.stringify(allowed) : null,
         auto ? "approved" : "pending",
         seconds() + 300,
+        preview,
       ).run();
       return response(
         { id, state: auto ? "approved" : "pending", expires_in: 300, permissions: allowed },

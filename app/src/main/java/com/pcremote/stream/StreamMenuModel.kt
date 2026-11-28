@@ -12,7 +12,6 @@ enum class MenuRow(val label: String) {
     RESOLUTION("Resolution"),
     SWITCH_DISPLAY("Switch display"),
     STREAM_STATS("Stream stats"),
-    HELP("Help"),
     DISCONNECT("Disconnect"),
 }
 
@@ -23,7 +22,6 @@ object StreamMenuModel {
     const val AUDIO_HEADING = "Audio"
     const val AUDIO_COPY_DETAILS = "Copy details"
     const val AUDIO_REOPEN = "Reopen output"
-    const val HELP_URL = "https://secpar.win/help/#stream-menu"
     const val WAITING_FOR_STATS = "Waiting for stream stats"
 
     /** The main page: Mute first (as on desktop, under its window toggle), Picture in picture only where the
@@ -37,7 +35,6 @@ object StreamMenuModel {
         add(MenuRow.RESOLUTION)
         if (displayCount > 1) add(MenuRow.SWITCH_DISPLAY)
         add(MenuRow.STREAM_STATS)
-        add(MenuRow.HELP)
         add(MenuRow.DISCONNECT)
     }
 

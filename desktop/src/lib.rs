@@ -144,7 +144,8 @@ pub fn run() -> eframe::Result {
         height: rgba.height(),
         rgba: rgba.into_raw(),
     };
-    let options = eframe::NativeOptions {
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Secpar")
             .with_visible(!std::env::args().any(|arg| arg == "--hidden"))
@@ -155,6 +156,8 @@ pub fn run() -> eframe::Result {
             .with_icon(Arc::new(icon)),
         ..Default::default()
     };
+    #[cfg(windows)]
+    gpu::choose_renderer(&mut options);
     eframe::run_native("Secpar", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }
 fn new_files(ctx: egui::Context, dir: &str) -> files::Panel {
@@ -397,7 +400,7 @@ impl App {
             // A review run can show the connection notice with a sample message.
             connection_error: if cfg!(feature = "ui-review") { std::env::var("SECPAR_REVIEW_ERROR").ok() } else { None },
             texture: None,
-            gpu: cc.gl.as_ref().and_then(gpu::new),
+            gpu: gpu::new(cc),
             gpu_live: false,
             brand,
             mark,

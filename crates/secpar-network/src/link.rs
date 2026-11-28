@@ -476,9 +476,16 @@ mod tests {
         // replies to that peer go to the server, as ChannelData (bound by the permit) or a Send indication
         let before = server.log().len();
         link.permit_in_background(&sock, peer);
-        std::thread::sleep(Duration::from_millis(300));
+        // Waits for the server's log instead of fixed sleeps: a busy PC (NIGG10) missed 100 ms.
+        let wait_for = |what: &dyn Fn(&str) -> bool| {
+            let t0 = Instant::now();
+            while !server.log()[before..].iter().any(|l| what(l)) && t0.elapsed() < Duration::from_secs(5) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait_for(&|l| l.starts_with("bind"));
         assert!(link.transmit(&sock, peer, b"reply"));
-        std::thread::sleep(Duration::from_millis(100));
+        wait_for(&|l| l.starts_with("channeldata 4000") || l == "send");
         let log = server.log();
         assert!(log[before..].iter().any(|l| l.starts_with("channeldata 4000") || l == "send"), "{log:?}");
 

@@ -362,7 +362,7 @@ class AccountController(
             val started = elapsed()
             var route: String? = null
             try {
-                val first = service.requestAccess(c.id, listOf("view"))
+                val first = service.requestAccess(c.id, listOf("view"), preview = true)
                 if (first.approved) {
                     route = open(service.claimAccess(first.id), c, first.permissions.toSet(), first.id)
                     val conn = com.pcremote.guest.GuestSessions.find(route)?.conn

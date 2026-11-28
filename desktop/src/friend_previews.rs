@@ -65,8 +65,7 @@ async fn watch(api: Api, computer: FriendComputer, events: mpsc::Sender<Event>, 
 
 /// One preview session. True when this computer should be left alone for a while.
 async fn session(api: &Api, computer: &FriendComputer, events: &mpsc::Sender<Event>, ctx: &egui::Context) -> bool {
-    let view = vec!["view".to_string()];
-    let Ok((id, state, _, kept)) = api.request_access(&computer.id, &view).await else { return false };
+    let Ok((id, state, _, kept)) = api.request_preview(&computer.id).await else { return false };
     if state != "approved" {
         return true;
     }

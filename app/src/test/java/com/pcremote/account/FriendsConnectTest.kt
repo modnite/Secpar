@@ -288,7 +288,7 @@ class FriendsConnectTest {
         override suspend fun cancelOwnerPair(requestId: String) {}
         override suspend fun logout() {}
         override suspend fun friendComputers() = listOf(friendComputer)
-        override suspend fun requestAccess(computer: String, permissions: List<String>): AccessRequest {
+        override suspend fun requestAccess(computer: String, permissions: List<String>, preview: Boolean): AccessRequest {
             requestError?.let { throw AccountException(it) }
             asked = permissions
             return answers.first()
