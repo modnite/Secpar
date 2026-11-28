@@ -17,6 +17,10 @@ pub const LOSS_CUT_ABOVE: u32 = 6_000;
 const STEP_DOWN_AFTER: Duration = Duration::from_secs(3);
 /// A notch back up once the link has been clean this long with room above the floor.
 const STEP_UP_AFTER: Duration = Duration::from_secs(4);
+/// Extra delay of video frames (ms above the smallest seen recently, measured by the client from
+/// capture to first packet) that means a queue is filling: two reports in a row cut the bitrate
+/// before the queue overflows into loss or a long delay.
+pub const QUEUE_LINE_MS: u16 = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Target {
@@ -37,6 +41,8 @@ pub struct Bitrate {
     srtt: f64,
     /// Consecutive reports with the smoothed RTT above the congestion line.
     high_rtt: u8,
+    /// Consecutive reports with the client's frame queueing delay above [`QUEUE_LINE_MS`].
+    high_queue: u8,
     last_cut: Option<Duration>,
     good_since: Option<Duration>,
     floor_since: Option<Duration>,
@@ -55,6 +61,7 @@ impl Bitrate {
             min_rtt: u16::MAX,
             srtt: 0.0,
             high_rtt: 0,
+            high_queue: 0,
             last_cut: None,
             good_since: None,
             floor_since: None,
@@ -72,7 +79,14 @@ impl Bitrate {
 
     /// Feeds one REPORT (`now` is any monotonic time); returns the new target when it changed.
     pub fn on_report(&mut self, now: Duration, loss_permille: u16, rtt_ms: u16) -> Option<Target> {
+        self.on_report_queue(now, loss_permille, rtt_ms, 0)
+    }
+
+    /// [`Bitrate::on_report`] with the client's frame queueing delay (ms; 0 from clients that
+    /// don't measure it).
+    pub fn on_report_queue(&mut self, now: Duration, loss_permille: u16, rtt_ms: u16, queue_ms: u16) -> Option<Target> {
         let before = self.t;
+        self.high_queue = if queue_ms >= QUEUE_LINE_MS { self.high_queue.saturating_add(1) } else { 0 };
         if rtt_ms > 0 {
             self.min_rtt = self.min_rtt.min(rtt_ms);
             self.srtt = if self.srtt == 0.0 { rtt_ms as f64 } else { self.srtt + (rtt_ms as f64 - self.srtt) / 8.0 };
@@ -86,7 +100,7 @@ impl Bitrate {
         // the path (a 50 ms relay path jitters more than a 3 ms LAN).
         let line = self.min_rtt as f64 + 30f64.max(self.min_rtt as f64 / 2.0);
         self.high_rtt = if self.min_rtt != u16::MAX && self.srtt > line { self.high_rtt.saturating_add(1) } else { 0 };
-        let congested = self.high_rtt >= 3;
+        let congested = self.high_rtt >= 3 || self.high_queue >= 2;
         let can_cut = self.last_cut.is_none_or(|t| now.saturating_sub(t) >= CUT_EVERY);
 
         if self.loss.len() == 3 && avg_loss > 20 && can_cut {
@@ -101,7 +115,7 @@ impl Bitrate {
             self.t.fec = self.t.fec.max(fec);
         } else if congested && can_cut {
             self.cut(now, 0.85);
-        } else if loss_permille < 5 && !congested {
+        } else if loss_permille < 5 && !congested && queue_ms < QUEUE_LINE_MS {
             let since = *self.good_since.get_or_insert(now);
             if now.saturating_sub(since) >= RAISE_AFTER {
                 self.t.kbps = ((self.t.kbps as f64 * 1.10) as u32).min(self.max);
@@ -217,6 +231,27 @@ mod tests {
         }
         assert_eq!(b.target().kbps, 10200);
         assert!(cut_at.unwrap() >= 400, "needs the smoothed RTT high for 300 ms");
+    }
+
+    #[test]
+    fn frame_queueing_cuts_before_rtt_or_loss_do() {
+        let mut b = Bitrate::new(20000, 3);
+        let mut t = 0;
+        for _ in 0..30 {
+            t += 100;
+            b.on_report_queue(ms(t), 0, 10, 2);
+        }
+        let start = b.target().kbps;
+        assert_eq!(b.on_report_queue(ms(t + 100), 0, 10, 40), None, "one report is a spike");
+        let cut = b.on_report_queue(ms(t + 200), 0, 10, 40).expect("two reports of queueing cut");
+        assert!(cut.kbps < start && cut.kbps >= start * 8 / 10, "{} from {start}", cut.kbps);
+        assert_eq!(b.on_report_queue(ms(t + 300), 0, 10, 40), None, "cuts are spaced");
+        // single spikes between clean reports never cut; they only hold the rate where it is
+        let mut c = Bitrate::new(20000, 3);
+        for i in 1..=40u64 {
+            c.on_report_queue(ms(i * 100), 0, 10, if i % 2 == 0 { 40 } else { 3 });
+        }
+        assert_eq!(c.target().kbps, START_KBPS);
     }
 
     #[test]

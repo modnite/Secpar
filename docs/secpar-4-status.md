@@ -174,6 +174,12 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   frame's packet shows the gap (re-NACK once after ~RTT), hold later complete frames behind the
   incomplete one, and give up after a repair window (then need_key as before). Old hosts drop the
   unknown type, so old and new mix safely.
+- 4.2.0-r22 (item 2): clients measure frame queueing delay (capture to first packet, minus the
+  smallest gap of the last 5-10 s; `QueueDelay` in secpar-client/receiver.rs and Android
+  prs/QueueDelay.kt) and send it in REPORT bytes 12-13. `Bitrate::on_report_queue`: two reports
+  at or above 25 ms count as congestion (cut x0.85, as for queueing RTT) and a report above the line
+  holds off raises. Hosts log it in the bitrate line. Stream menu labels elide and its scroll bar
+  sits beside the rows (the Displays page overflowed in a 375x400 window on the X250 host).
 
 ## Account service: self-hosted since 2026-11-21
 

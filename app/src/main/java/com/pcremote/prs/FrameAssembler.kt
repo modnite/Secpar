@@ -1,7 +1,7 @@
 package com.pcremote.prs
 
 /** A complete encoded video frame, ready for the decoder. */
-class Frame(val id: Int, val header: FrameHeader, val data: ByteArray, val receivedUs: Long)
+class Frame(val id: Int, val header: FrameHeader, val data: ByteArray, val receivedUs: Long, val firstUs: Long = receivedUs)
 
 /**
  * Collects VIDEO/FEC shards into frames, in order. A frame FEC can't rebuild is asked for again
@@ -79,7 +79,7 @@ class FrameAssembler(
         if (f.ready()) {
             pending.remove(h.frameId)
             val built = Frames.assemble(f.k, f.p, f.shards)
-            if (built == null) giveUp(h.frameId, nowUs) else held += Frame(h.frameId, built.first, built.second, nowUs)
+            if (built == null) giveUp(h.frameId, nowUs) else held += Frame(h.frameId, built.first, built.second, nowUs, f.firstUs)
             release(nowUs)
         }
         nack(nowUs)

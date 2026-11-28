@@ -59,8 +59,11 @@ fn oldest_first(a: &u32, b: &u32) -> std::cmp::Ordering {
 /// window passes is it dropped, and then nothing but a keyframe is shown until one arrives.
 pub struct Assembler {
     pending: HashMap<u32, Pending>,
-    /// Complete frames waiting for an older incomplete one.
-    held: Vec<VideoFrame>,
+    /// Complete frames waiting for an older incomplete one, with their first packet's arrival.
+    held: Vec<(VideoFrame, Instant)>,
+    /// (capture time on the host, µs; first packet's arrival) of each frame handed out, for the
+    /// client's queueing-delay measurement. Drained by the session.
+    pub arrivals: Vec<(u64, Instant)>,
     /// Frames ready to hand out, oldest first.
     ready: std::collections::VecDeque<VideoFrame>,
     /// The newest frame handed out or dropped: packets of older frames are late.
@@ -77,6 +80,7 @@ impl Default for Assembler {
         Self {
             pending: HashMap::new(),
             held: vec![],
+            arrivals: vec![],
             ready: Default::default(),
             last: None,
             newest: None,
@@ -150,12 +154,15 @@ impl Assembler {
     }
     /// Moves complete frames that no older incomplete frame blocks into `ready`, in order.
     fn release(&mut self) {
-        self.held.sort_by(|a, b| oldest_first(&a.id, &b.id));
-        while let Some(first) = self.held.first() {
+        self.held.sort_by(|a, b| oldest_first(&a.0.id, &b.0.id));
+        while let Some((first, _)) = self.held.first() {
             if self.pending.keys().any(|id| newer(first.id, *id)) {
                 break;
             }
-            let f = self.held.remove(0);
+            let (f, arrived) = self.held.remove(0);
+            if self.arrivals.len() < 1024 {
+                self.arrivals.push((f.header.capture_us, arrived));
+            }
             if self.last.is_some_and(|last| !newer(f.id, last)) {
                 continue; // an older drop already moved past it
             }
@@ -176,7 +183,7 @@ impl Assembler {
             || h.count as usize > MAX_SHARDS
             || h.frag >= h.count
             || self.last.is_some_and(|last| !newer(h.frame_id, last))
-            || self.held.iter().any(|f| f.id == h.frame_id)
+            || self.held.iter().any(|(f, _)| f.id == h.frame_id)
         {
             return self.pop();
         }
@@ -221,11 +228,69 @@ impl Assembler {
         }
         let f = self.pending.remove(&h.frame_id)?;
         match frame::assemble(k, p, f.shards) {
-            Some((header, data)) => self.held.push(VideoFrame { id: h.frame_id, header, data }),
+            Some((header, data)) => self.held.push((VideoFrame { id: h.frame_id, header, data }, f.first)),
             None => self.drop_frame(h.frame_id),
         }
         self.release();
         self.pop()
+    }
+}
+
+/// How much later than usual video frames arrive: capture (host clock) to first packet (client
+/// clock), minus the smallest such gap of the last 5-10 s. The clocks' offset cancels out; a
+/// rising value is a queue filling somewhere on the path, before it overflows into loss.
+pub struct QueueDelay {
+    start: Instant,
+    /// Smallest gap in the previous and the current 5 s bucket, µs.
+    base: [Option<i64>; 2],
+    bucket_at: Instant,
+    sum: i64,
+    n: i64,
+}
+impl QueueDelay {
+    pub fn new(start: Instant) -> Self {
+        Self { start, base: [None, None], bucket_at: start, sum: 0, n: 0 }
+    }
+    pub fn add(&mut self, capture_us: u64, arrived: Instant) {
+        if capture_us == 0 {
+            return;
+        }
+        let gap = arrived.saturating_duration_since(self.start).as_micros() as i64 - capture_us as i64;
+        if arrived.saturating_duration_since(self.bucket_at) >= Duration::from_secs(5) {
+            self.base = [self.base[1], None];
+            self.bucket_at = arrived;
+        }
+        self.base[1] = Some(self.base[1].map_or(gap, |b| b.min(gap)));
+        let base = self.base.iter().flatten().copied().min().unwrap_or(gap);
+        self.sum += gap - base;
+        self.n += 1;
+    }
+    /// The average since the last call, ms (0 without frames).
+    pub fn take_ms(&mut self) -> u16 {
+        let ms = if self.n == 0 { 0 } else { self.sum / self.n / 1000 };
+        (self.sum, self.n) = (0, 0);
+        ms.clamp(0, u16::MAX as i64) as u16
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+    #[test]
+    fn a_growing_queue_shows_and_a_steady_offset_does_not() {
+        let start = Instant::now();
+        let mut q = QueueDelay::new(start);
+        // host clock 7 s ahead, 3 ms path, a frame every 16 ms
+        for i in 0..60u64 {
+            q.add(7_000_000 + i * 16_000, start + Duration::from_micros(i * 16_000 + 3_000));
+        }
+        assert_eq!(q.take_ms(), 0);
+        // the path starts queueing: each frame 2 ms later than the one before
+        for i in 60..80u64 {
+            q.add(7_000_000 + i * 16_000, start + Duration::from_micros(i * 16_000 + 3_000 + (i - 59) * 2_000));
+        }
+        assert!(q.take_ms() >= 15);
+        assert_eq!(q.take_ms(), 0, "reset after each report");
     }
 }
 

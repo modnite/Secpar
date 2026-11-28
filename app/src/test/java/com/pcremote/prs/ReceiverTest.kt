@@ -233,3 +233,15 @@ class ReceiverTest {
     }
 
 }
+
+class QueueDelayTest {
+    @Test fun growingQueueShowsAndSteadyOffsetDoesNot() {
+        val q = QueueDelay()
+        // host clock 7 s ahead, 3 ms path, a frame every 16 ms
+        for (i in 0 until 60) q.add(7_000_000L + i * 16_000L, i * 16_000L + 3_000L)
+        assertEquals(0, q.takeMs())
+        for (i in 60 until 80) q.add(7_000_000L + i * 16_000L, i * 16_000L + 3_000L + (i - 59) * 2_000L)
+        assertTrue(q.takeMs() >= 15)
+        assertEquals("reset after each report", 0, q.takeMs())
+    }
+}

@@ -270,8 +270,9 @@ fn source_in_slot(capture_us:u64, clock_us:u64, now:Instant, slot:Instant) -> bo
 }
 
 /// REPORT plaintext: (lossPermille, rttMs).
-fn parse_report(p: &[u8]) -> Option<(u16, u16)> {
-    (p.len() >= 16).then(|| (u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[10], p[11]])))
+/// (loss ‰, RTT ms, frame queueing delay ms: bytes 12-13, zero from clients before 4.2.0-r22).
+fn parse_report(p: &[u8]) -> Option<(u16, u16, u16)> {
+    (p.len() >= 16).then(|| (u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[10], p[11]]), u16::from_be_bytes([p[12], p[13]])))
 }
 
 fn probe(echo: u64) -> [u8; 16] {
@@ -344,10 +345,10 @@ pub fn control(sh: &Shared, input: &mut dyn FnMut(ClientMsg), br: &mut Bitrate, 
                 evs.into_iter().for_each(&mut *input)
             }
             Type::Report => {
-                if let Some((loss, rtt)) = parse_report(&p) {
-                    if let Some(t) = br.on_report(start.elapsed(), loss, rtt) {
+                if let Some((loss, rtt, queue)) = parse_report(&p) {
+                    if let Some(t) = br.on_report_queue(start.elapsed(), loss, rtt, queue) {
                         if t.notch != sh.target.lock().unwrap().notch || t.kbps * 4 < sh.target.lock().unwrap().kbps * 3 {
-                            crate::log::line(&format!("bitrate: {} kbps, fec {}%, notch {} (loss {loss}‰, rtt {rtt} ms)", t.kbps, t.fec, t.notch));
+                            crate::log::line(&format!("bitrate: {} kbps, fec {}%, notch {} (loss {loss}‰, rtt {rtt} ms, queue {queue} ms)", t.kbps, t.fec, t.notch));
                         }
                         *sh.target.lock().unwrap() = t;
                     }
