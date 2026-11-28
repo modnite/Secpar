@@ -47,9 +47,15 @@ fn version(tag: &str) -> Option<Version> {
         revision,
     ))
 }
+/// Installed from the Arch package (under /usr, not an AppImage): updates come as that package and
+/// pacman installs them.
+fn packaged() -> bool {
+    cfg!(target_os = "linux") && std::env::var_os("APPIMAGE").is_none() && std::env::current_exe().is_ok_and(|p| p.starts_with("/usr/"))
+}
 fn asset_name() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => Some("Secpar-Windows-x64-setup.exe"),
+        ("linux", "x86_64") if packaged() => Some("Secpar-Linux-x64.pkg.tar.zst"),
         // Reserved for unified packages, never select the old client-only archives.
         ("linux", "x86_64") => Some("Secpar-Linux-x64.AppImage"),
         ("macos", "x86_64") => Some("Secpar-macOS-x64.pkg"),
@@ -176,6 +182,8 @@ async fn download(r: Release) -> Result<PathBuf, String> {
         "exe"
     } else if cfg!(target_os = "macos") {
         "pkg"
+    } else if packaged() {
+        "pkg.tar.zst"
     } else {
         "AppImage"
     };
@@ -217,6 +225,19 @@ fn launch_installer(path: &std::path::Path) -> Result<(), String> {
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(|_| "Could not prepare the update")?;
+        if packaged() {
+            // Once this process has ended: pacman installs the package after the system password
+            // prompt, and Secpar opens again, the old version if the prompt was cancelled.
+            const SCRIPT: &str = "n=0; while kill -0 \"$1\" 2>/dev/null; do n=$((n+1)); [ \"$n\" -lt 200 ] || exit 1; sleep 0.1; done
+pkexec /usr/bin/pacman -U --noconfirm \"$2\"
+exec /usr/bin/secpar-desktop --restarted";
+            std::process::Command::new("/bin/sh")
+                .args(["-c", SCRIPT, "secpar-update", &std::process::id().to_string()])
+                .arg(path)
+                .spawn()
+                .map_err(|_| "Could not start the update")?;
+            return Ok(());
+        }
         std::process::Command::new(path).args(["--install", "--replace", &std::process::id().to_string()])
             .spawn().map_err(|_| "Could not start the update")?;
         Ok(())
@@ -457,7 +478,8 @@ impl Panel {
                                     // would only hide it in the tray, so end the process.
                                     #[cfg(target_os = "linux")]
                                     crate::tray::quit(ctx);
-                                    if cfg!(target_os = "linux") { "Installing update. Secpar will reopen.".into() }
+                                    if packaged() { "Installing update. Enter your password when asked; Secpar will reopen.".into() }
+                                    else if cfg!(target_os = "linux") { "Installing update. Secpar will reopen.".into() }
                                     else { "Installer opened. Approve its system prompt to continue.".into() }
                                 },
                                 Err(_) => "Could not open installer. Try again.".into(),

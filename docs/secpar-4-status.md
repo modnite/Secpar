@@ -238,6 +238,13 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   KWallet to unlock. Next release, not yet on devices: secrets are read once per run (Windows
   Credential Manager), and Linux keeps them in `~/.local/share/secpar/secrets.json` (0600, folder
   0700) and never uses KWallet or GNOME Keyring. Linux devices sign in again once after updating.
+- Arch Linux package (owner's request, 2026-11-28): `desktop/packaging/archpkg.py` runs after the
+  AppImage in `build-linux-release.sh` and makes `Secpar-Linux-x64.pkg.tar.zst` (makepkg as
+  nobody, same binary, system libraries; depends taken from ldd plus the GStreamer plugin sets).
+  Installed in a clean archlinux container: dependencies resolve, all libraries load, pipewiresrc,
+  pulsesrc, x264enc and openh264enc present (va and nvcodec register only with matching GPUs).
+  An install under /usr updates from that package: it quits, `pkexec pacman -U`, and reopens.
+  Not yet installed on a real Arch desktop.
 
 ## Account service: self-hosted since 2026-11-21
 
