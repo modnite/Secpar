@@ -56,6 +56,23 @@ class FrameAssemblerTest {
         assertEquals(1, frames.size)
     }
 
+    @Test fun aFrameThatNeverArrivedHoldsBackLaterOnesUntilAKeyframe() {
+        fun whole(id: Int, key: Boolean, at: Long) = packetize(id, key, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, at) }
+        whole(1, true, 0)
+        // Frame 2 sends nothing; frame 3 waits for it a moment, then is held back.
+        whole(3, false, 1_000)
+        assertEquals("frame 3 waits for frame 2", listOf(1), frames.map { it.id })
+        a.tick(35_000)
+        assertEquals("frame 3 would decode into smears", listOf(1), frames.map { it.id })
+        assertEquals(1, idrs); assertEquals(1, a.dropped)
+        whole(4, true, 40_000)
+        assertEquals(listOf(1, 4), frames.map { it.id })
+        // A late frame that does arrive within the wait is handed out in order.
+        whole(6, false, 50_000)
+        whole(5, false, 60_000)
+        assertEquals(listOf(1, 4, 5, 6), frames.map { it.id })
+    }
+
     @Test fun laterFrameWaitsForResentShards() {
         packetize(1, true, ByteArray(100)).forEach { (h, d) -> a.onShard(h, d, 0) }
         val f2 = packetize(2, false, ByteArray(3000))
@@ -107,7 +124,8 @@ class FrameAssemblerTest {
 
 class ReceiverTest {
     private class FakeTransport : Transport {
-        val sent = ArrayList<ByteArray>()
+        // The receiver's thread adds while the test reads.
+        val sent: MutableList<ByteArray> = java.util.Collections.synchronizedList(ArrayList())
         override fun send(b: ByteArray) { sent += b }
         override fun receive(buf: ByteArray, timeoutMs: Int) = -1
         override fun close() {}
@@ -124,7 +142,7 @@ class ReceiverTest {
         val pkt = host.seal(Crypt.HOST_TO_PHONE, h.copy(seq = seq), plain)
         r.onPacket(pkt, pkt.size, now)
     }
-    private fun sentOf(typ: Int) = t.sent.mapNotNull { host.open(Crypt.PHONE_TO_HOST, it) }.filter { it.first.typ == typ }
+    private fun sentOf(typ: Int) = synchronized(t.sent) { t.sent.toList() }.mapNotNull { host.open(Crypt.PHONE_TO_HOST, it) }.filter { it.first.typ == typ }
 
     private class PathTransport : Transport {
         val sent = ArrayList<ByteArray>()

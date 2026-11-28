@@ -115,6 +115,15 @@ class FrameAssembler(
         while (held.isNotEmpty()) {
             val first = held[0]
             if (pending.keys.any { first.id - it > 0 }) break
+            // A frame between the last one handed out and this one sent no packet at all: lost whole
+            // (a small frame is one or two packets), or skipped by a host whose sending to this
+            // device fell behind. This one would decode against a picture never received and smear
+            // until the next keyframe. Wait a moment for it, then count it lost.
+            if (started && first.id - lastDone > 1) {
+                if (!needKey && !first.header.keyframe && nowUs - first.firstUs < GAP_WAIT_US) break
+                dropped += first.id - lastDone - 1
+                needKey = true
+            }
             held.removeAt(0)
             if (started && first.id - lastDone <= 0) continue // an older drop already moved past it
             lastDone = first.id; started = true
@@ -138,6 +147,8 @@ class FrameAssembler(
 
     private companion object {
         const val MAX_PENDING = 12
+        /** How long a frame waits for one before it that sent no packet at all. */
+        const val GAP_WAIT_US = 30_000L
         /** Waiting for a frame's shards before asking again: reordering on Wi-Fi. */
         const val NACK_WAIT_US = 3_000L
         const val MAX_NACKS = 2
