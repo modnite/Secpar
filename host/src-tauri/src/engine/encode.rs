@@ -41,11 +41,18 @@ impl Encoder {
             "ffmpeg-nvenc"|"ffmpeg-amf"|"ffmpeg-qsv"=>Backend::Ffmpeg(ffmpeg::Encoder::new(dev,codec,size,fps,kbps,&choice[7..],quality)?),
             _=>return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32),format!("Encoder '{choice}' is unavailable in this build or on this GPU"))),
         };
-        crate::log::line(&format!("stream: encoder {choice} {}x{} {codec:?}",size.0,size.1));
+        let slow={#[cfg(feature="ffmpeg")] {matches!(&backend,Backend::Ffmpeg(e) if !e.fast())} #[cfg(not(feature="ffmpeg"))] {false}};
+        crate::log::line(&format!("stream: encoder {choice} {}x{} {codec:?}{}",size.0,size.1,if slow {" (no low-power mode on this GPU)"} else {""}));
         if secpar_stream::timing::enabled() {eprintln!("frame_timing stage=host.encoder backend={choice} preset={}",settings.preset);}
         Ok(Self{backend,codec,size})
     }
     pub fn codec(&self)->Codec {self.codec}
+    /// The GPU encodes this in its fast fixed-function mode (false: Quick Sync without low power).
+    pub fn fast(&self)->bool {
+        #[cfg(feature="ffmpeg")]
+        if let Backend::Ffmpeg(e)=&self.backend {return e.fast()}
+        true
+    }
     pub fn set_bitrate(&self,kbps:u32)->windows::core::Result<()> {match &self.backend {Backend::Nvenc(e)=>e.set_bitrate(kbps),#[cfg(not(feature="ffmpeg"))] Backend::MediaFoundation(e)=>e.set_bitrate(kbps),#[cfg(feature="ffmpeg")] Backend::Ffmpeg(e)=>e.set_bitrate(kbps)}}
     pub fn bitrate(&self)->Option<u32> {match &self.backend {Backend::Nvenc(e)=>Some(e.bitrate()),#[cfg(not(feature="ffmpeg"))] Backend::MediaFoundation(e)=>e.bitrate(),#[cfg(feature="ffmpeg")] Backend::Ffmpeg(e)=>Some(e.bitrate())}}
     pub fn encode(&mut self,tex:&ID3D11Texture2D,capture_us:u64,force_idr:bool)->windows::core::Result<Vec<Encoded>> {

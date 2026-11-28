@@ -449,12 +449,17 @@ impl Video {
         let tries: &[bool] = if p.chroma444 && can_pack(base) { &[true, false] } else { &[false] };
         'tries: for &packed in tries {
             let frame = if packed { (base.0, base.1 * 2) } else { base };
+            // The client's first codec that opens, unless the GPU can only run it in its slow mode
+            // and a later one runs in its fast mode (HEVC on older Intel GPUs: about 30 fps).
+            let mut slow=None;
             for codec in p.codecs.iter().filter_map(|c|parse_codec(c)) {
                 match Encoder::selected(&dev,luid,codec,frame,fps,kbps,&p.encoder) {
-                    Ok(found)=>{encoder=Some((found,packed));break 'tries;}
+                    Ok(found) if found.fast()=>{encoder=Some((found,packed));break 'tries;}
+                    Ok(found)=>{if slow.is_none(){slow=Some(found);}}
                     Err(error)=>failure=error.message(),
                 }
             }
+            if let Some(found)=slow {encoder=Some((found,packed));break 'tries;}
         }
         let (enc,packed)=encoder.ok_or_else(||err("no_encoder",&failure))?;
         Ok(Video { dev, ctx, luid, cap, enc, base, fps, shown, rect: p.rect.clone(), packed })

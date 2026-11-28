@@ -28,6 +28,8 @@ struct Encoder {
     AVFrame* frame = nullptr;
     AVFrame* mapped = nullptr;
     bool qsv = false;
+    /// QSV opened in low-power (fixed-function VDENC) mode, its fast path.
+    bool low_power = false;
     bool relaxed_rate_control = false;
     unsigned fps = 0;
     ~Encoder() { av_frame_free(&mapped); av_frame_free(&frame); av_packet_free(&packet); avcodec_free_context(&codec); av_buffer_unref(&device); }
@@ -103,6 +105,7 @@ struct Encoder {
             set("preset", quality == 2 ? "slow" : quality == 1 ? "medium" : "veryfast");
             set("forced_idr","1"); set("async_depth","1"); set("low_delay_brc","1");
             set("low_power",fallback ? "0" : "1");
+            low_power = !fallback;
             if (format == 0) {
                 set("vcm","1"); set("recovery_point_sei","0");
                 set("pic_timing_sei","0"); set("max_dec_frame_buffering","1");
@@ -200,5 +203,7 @@ int secpar_avcodec_bitrate(void* ptr, unsigned kbps) noexcept {
     return 0;
 }
 void secpar_avcodec_error(int status, char* text, unsigned size) noexcept { av_strerror(status,text,size); }
+/// False only for QSV that had to open without low-power mode (much slower on older Intel GPUs).
+bool secpar_avcodec_fast(void* ptr) noexcept { auto* enc=static_cast<Encoder*>(ptr); return !enc->qsv || enc->low_power; }
 void secpar_avcodec_close(void* ptr) noexcept { delete static_cast<Encoder*>(ptr); }
 }
