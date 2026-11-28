@@ -1,6 +1,6 @@
 [package]
 name = "secpar-desktop"
-version = "4.2.0-r27"
+version = "4.2.0-r28"
 edition = "2021"
 license = "GPL-3.0"
 publish = false
@@ -23,7 +23,6 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no
 open = "5"
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3.34", features = ["sink"] }
@@ -60,6 +59,10 @@ opt-level = 3
 
 [build-dependencies]
 tauri-winres = "0.3.6"
+
+# Linux keeps its secrets in a file (vault.rs), never KWallet or GNOME Keyring.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
 
 [target.'cfg(windows)'.dependencies]
 # The hosting service and server run from this same executable (--service, --server).

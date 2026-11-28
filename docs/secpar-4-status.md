@@ -232,6 +232,12 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
   account service (migration 0014, deployed to OMV) marks requests sent with `preview: true`
   (view only); r27 apps send it for thumbnails and don't announce marked rows. Older apps still
   send unmarked thumbnail requests until updated.
+- Bryan's living-room-pc (CachyOS, KDE): Chromium never loaded http(s) pages while it could reach
+  the session bus. Likely cause: Chromium waiting on KWallet for its cookie key, behind an unlock
+  prompt. Secpar read the keyring once a second per owned computer, and each locked read asks
+  KWallet to unlock. Next release, not yet on devices: secrets are read once per run (Windows
+  Credential Manager), and Linux keeps them in `~/.local/share/secpar/secrets.json` (0600, folder
+  0700) and never uses KWallet or GNOME Keyring. Linux devices sign in again once after updating.
 
 ## Account service: self-hosted since 2026-11-21
 
