@@ -165,6 +165,15 @@ engines. The third-party engines embedded in 4.0.0 were removed in 4.0.9.
 - Next, owner asked (2026-11-27), from the Pulsar comparison: (1) NACK retransmission and recovery
   from an earlier frame instead of a full keyframe; (2) delay-based bitrate cuts before loss;
   (3) pick the faster of direct and relay, NAT-PMP port mapping; (4) Direct3D drawing on Windows.
+- NACK (item 1), 4.2.0-r21; unit-tested on both clients, not yet measured on a lossy link. Design: today `Assembler` (secpar-client/receiver.rs, Android
+  prs/FrameAssembler.kt) drops a frame FEC can't rebuild after 60 ms or when a newer frame
+  completes, sets need_key, and then discards every frame until a keyframe. New `Type::Nack = 10`
+  (client to host): frame_id u32, then u16 frag indices. Hosts keep the sealed packets of the last
+  ~300 ms of frames and resend the asked ones unchanged (no replay check in Crypt::open; the
+  assembler ignores duplicates). Clients NACK the missing frags of short FEC blocks once a newer
+  frame's packet shows the gap (re-NACK once after ~RTT), hold later complete frames behind the
+  incomplete one, and give up after a repair window (then need_key as before). Old hosts drop the
+  unknown type, so old and new mix safely.
 
 ## Account service: self-hosted since 2026-11-21
 
