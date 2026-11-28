@@ -1,5 +1,6 @@
 //! Platform-independent STUN discovery and TURN relay, shared by hosts and clients.
 pub mod link;
+pub mod natpmp;
 pub mod reach;
 pub mod stun;
 pub mod turn;

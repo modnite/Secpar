@@ -112,16 +112,83 @@ impl Router for Igd {
     }
 }
 
-/// Discovers the router and applies the setting.
+/// The router through NAT-PMP, for routers without UPnP. Its mappings expire, so each one is
+/// renewed every hour until it is removed or replaced.
+pub struct Pmp(secpar_network::natpmp::Router);
+
+/// Bumped by every NAT-PMP map or unmap: a renewal thread stops once it is no longer the newest.
+static PMP_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const PMP_LIFETIME: u32 = 7200;
+
+impl Pmp {
+    pub async fn discover() -> Option<Self> {
+        tokio::task::spawn_blocking(secpar_network::natpmp::Router::discover).await.ok().flatten().map(Pmp)
+    }
+}
+
+fn pmp_proto(p: Proto) -> secpar_network::natpmp::Proto {
+    match p {
+        Proto::Tcp => secpar_network::natpmp::Proto::Tcp,
+        Proto::Udp => secpar_network::natpmp::Proto::Udp,
+    }
+}
+
+impl Router for Pmp {
+    fn map(&self, proto: Proto, port: u16, _local: SocketAddrV4) -> BoxFut<Result<(), String>> {
+        let r = self.0;
+        Box::pin(async move {
+            let external = tokio::task::spawn_blocking(move || r.map(pmp_proto(proto), port, port, PMP_LIFETIME)).await.map_err(|e| e.to_string())??;
+            if external != port {
+                let _ = tokio::task::spawn_blocking(move || r.map(pmp_proto(proto), port, external, 0)).await;
+                return Err(format!("the router offered port {external} instead of {port}"));
+            }
+            let generation = PMP_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(3600));
+                if PMP_GENERATION.load(std::sync::atomic::Ordering::SeqCst) > generation + 1 {
+                    return; // replaced or removed
+                }
+                let _ = r.map(pmp_proto(proto), port, port, PMP_LIFETIME);
+            });
+            Ok(())
+        })
+    }
+
+    fn unmap(&self, proto: Proto, port: u16) -> BoxFut<Result<(), String>> {
+        let r = self.0;
+        PMP_GENERATION.fetch_add(2, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move { tokio::task::spawn_blocking(move || r.map(pmp_proto(proto), port, port, 0).map(|_| ())).await.map_err(|e| e.to_string())? })
+    }
+
+    fn external_ip(&self) -> BoxFut<Option<IpAddr>> {
+        let r = self.0;
+        Box::pin(async move { tokio::task::spawn_blocking(move || r.external_ip()).await.ok().flatten().map(IpAddr::V4) })
+    }
+
+    fn local_ip(&self) -> Option<Ipv4Addr> {
+        self.0.local_ip()
+    }
+}
+
+/// Discovers the router (UPnP, else NAT-PMP) and applies the setting.
 pub async fn apply_now(enabled: bool) -> NetStatus {
     if !enabled {
         // Nothing to discover when off unless a mapping may exist; try once, quietly.
         return match Igd::discover().await {
             Ok(r) => apply(false, Ok(&r)).await,
-            Err(_) => NetStatus::default(),
+            Err(_) => match Pmp::discover().await {
+                Some(r) => apply(false, Ok(&r)).await,
+                None => NetStatus::default(),
+            },
         };
     }
     let r = Igd::discover().await;
+    if r.is_err() {
+        if let Some(p) = Pmp::discover().await {
+            crate::log::line("net: no UPnP router; mapping through NAT-PMP");
+            return apply(true, Ok(&p)).await;
+        }
+    }
     apply(true, r.as_ref().map_err(Clone::clone)).await
 }
 

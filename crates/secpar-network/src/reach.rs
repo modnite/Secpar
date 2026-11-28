@@ -1,10 +1,11 @@
 //! Finds out how the internet can reach a stream socket: its STUN-reflexive address and a
-//! router (UPnP) mapping of the same UDP port. Both run at once; used by hosts that bind a
+//! router mapping of the same UDP port (UPnP, else NAT-PMP). Both run at once; used by hosts that bind a
 //! fresh port per stream (the Windows host maps its fixed port ahead of time instead).
 
 use crate::stun;
-use crate::upnp::{self, Gateway, Mapped, Proto};
-use std::net::{SocketAddr, UdpSocket};
+use crate::natpmp;
+use crate::upnp::{self, Gateway, Proto};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -19,6 +20,23 @@ pub struct Reach {
     /// The router now forwards this UDP port here; the public IP is in `mapped.public`.
     pub mapped: Option<Mapped>,
 }
+
+/// A router mapping of the stream port, and how it was made (for [`release`]).
+#[derive(Debug, Clone)]
+pub struct Mapped {
+    pub port: u16,
+    pub public: Option<IpAddr>,
+    via: Via,
+}
+
+#[derive(Debug, Clone)]
+enum Via {
+    Upnp(Gateway),
+    NatPmp(natpmp::Router),
+}
+
+/// A NAT-PMP mapping lasts this long; a stream that outlives it falls back to punching and relays.
+const PMP_LIFETIME: u32 = 4 * 3600;
 
 enum Cached {
     Found(Gateway),
@@ -45,19 +63,31 @@ fn gateway() -> Result<Gateway, String> {
 /// answer from it). `port` is the port `sock` is bound to; the router maps the same external port.
 /// `upnp_on` false skips the router mapping.
 pub fn gather(sock: &UdpSocket, port: u16, upnp_on: bool) -> Reach {
-    let mapping = upnp_on.then(|| std::thread::spawn(move || gateway().and_then(|g| upnp::map_udp_on(g, port))));
-    let reflexive = stun::public_addr(sock);
-    let mapped = mapping.and_then(|h| h.join().ok()).and_then(|r| match r {
-        Ok(m) => Some(m),
-        Err(e) => {
-            log::debug!("upnp: {e}");
-            None
-        }
+    let mapping = upnp_on.then(|| {
+        std::thread::spawn(move || match gateway().and_then(|g| upnp::map_udp_on(g, port)) {
+            Ok(m) => Some(Mapped { port: m.port, public: m.public, via: Via::Upnp(m.gateway) }),
+            Err(e) => {
+                log::debug!("upnp: {e}");
+                // No UPnP: the router may still speak NAT-PMP.
+                let r = natpmp::Router::discover()?;
+                let external = r.map(natpmp::Proto::Udp, port, port, PMP_LIFETIME).ok()?;
+                (external == port).then(|| Mapped { port, public: r.external_ip().map(IpAddr::V4), via: Via::NatPmp(r) })
+            }
+        })
     });
+    let reflexive = stun::public_addr(sock);
+    let mapped = mapping.and_then(|h| h.join().ok()).flatten();
     Reach { reflexive, mapped }
 }
 
 /// Removes the mapping made by [`gather`] (best effort, blocking).
 pub fn release(m: &Mapped) {
-    let _ = m.gateway.unmap(Proto::Udp, m.port);
+    match &m.via {
+        Via::Upnp(g) => {
+            let _ = g.unmap(Proto::Udp, m.port);
+        }
+        Via::NatPmp(r) => {
+            let _ = r.map(natpmp::Proto::Udp, m.port, m.port, 0);
+        }
+    }
 }
